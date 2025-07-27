@@ -1,0 +1,150 @@
+ROAMPAL AI - CULTURAL ADAPTATION DISCLAIMER
+
+Last Updated: January 2025
+
+IMPORTANT: PLEASE READ THIS DISCLAIMER CAREFULLY
+
+This disclaimer specifically addresses Roampal AI's cultural adaptation and sensitivity features. By using these features, you acknowledge and agree to the following:
+
+1. EXPERIMENTAL NATURE
+
+1.1 Educational Purpose
+- Cultural adaptation features are provided for educational and assistance purposes only
+- These features are experimental and may not be 100% accurate
+- The system makes best efforts to detect and adapt to cultural contexts
+- Results should not be considered definitive or authoritative
+
+1.2 No Guarantee of Accuracy
+- Cultural detection algorithms may make incorrect assumptions
+- Language detection may not work perfectly for all dialects or mixed languages
+- Religious context identification is based on patterns and may be inaccurate
+- Regional adaptation features are approximations, not exact cultural representations
+
+2. USER RESPONSIBILITY
+
+2.1 Independent Verification
+- Users should independently verify cultural appropriateness of any AI responses
+- Do not rely solely on the system's cultural adaptation for important decisions
+- Cultural sensitivity should be verified through human expertise when necessary
+- Users are responsible for ensuring cultural appropriateness in their use cases
+
+2.2 Cultural Expertise
+- The system is not a substitute for human cultural expertise
+- For professional or commercial applications, consult with cultural experts
+- Academic or research use should include appropriate disclaimers
+- Business applications should include human review of cultural adaptations
+
+3. LIMITATIONS AND RISKS
+
+3.1 Potential Inaccuracies
+- Cultural stereotypes may be inadvertently reinforced
+- Religious contexts may be misinterpreted
+- Regional differences may be oversimplified
+- Communication style adaptations may not match local preferences
+
+3.2 Bias and Sensitivity
+- The system may reflect biases present in training data
+- Cultural assumptions may not apply to all individuals within a group
+- Sensitivity levels may not match local cultural norms
+- Adaptation features may not account for individual variations
+
+4. OPT-OUT AND CONTROL
+
+4.1 User Control
+- Users can opt-out of cultural adaptation features entirely
+- Cultural detection can be disabled or overridden
+- Users can provide feedback to correct cultural assumptions
+- Custom cultural settings can be configured
+
+4.2 Feedback Mechanisms
+- Users are encouraged to report cultural inaccuracies
+- Feedback helps improve the system's cultural understanding
+- Cultural corrections are incorporated into system learning
+- Users can request specific cultural adaptations
+
+5. LEGAL AND ETHICAL CONSIDERATIONS
+
+5.1 No Discrimination
+- The system is designed to promote cultural understanding, not discrimination
+- Cultural adaptation features should not be used to exclude or discriminate
+- Users must comply with anti-discrimination laws and regulations
+- Cultural profiling should not be used for harmful purposes
+
+5.2 Respect and Sensitivity
+- Users should respect cultural differences and sensitivities
+- The system should not be used to mock or belittle cultural practices
+- Cultural adaptation should promote understanding, not appropriation
+- Users should be mindful of cultural appropriation concerns
+
+6. SPECIFIC DISCLAIMERS
+
+6.1 Religious Context
+- Religious context detection is for understanding, not endorsement
+- The system does not promote or favor any particular religion
+- Religious adaptations should respect diverse beliefs and practices
+- Users should be sensitive to religious diversity and secular perspectives
+
+6.2 Language and Communication
+- Language detection may not work for all dialects or mixed languages
+- Communication style adaptations are general guidelines, not rules
+- Cultural communication norms vary widely within regions
+- Users should adapt communication based on specific contexts
+
+6.3 Regional and Geographic
+- Regional adaptations are based on general patterns, not universal truths
+- Geographic cultural assumptions may not apply to all individuals
+- Urban/rural differences may not be adequately captured
+- Migration and cultural mixing may not be fully represented
+
+7. LIABILITY LIMITATIONS
+
+7.1 No Liability for Cultural Issues
+- Roampal AI is not liable for cultural misunderstandings or offenses
+- Users are responsible for cultural appropriateness of their use
+- The system does not guarantee cultural sensitivity or accuracy
+- Cultural adaptation features are provided "as-is"
+
+7.2 Indemnification
+- Users agree to indemnify Roampal AI for cultural-related claims
+- Users are responsible for cultural compliance in their applications
+- The system is not liable for cultural discrimination or bias claims
+- Users must ensure their use complies with cultural sensitivity laws
+
+8. BEST PRACTICES
+
+8.1 Responsible Use
+- Test cultural adaptations with diverse user groups
+- Include human review for sensitive applications
+- Provide clear disclaimers about cultural features
+- Be transparent about cultural adaptation capabilities
+
+8.2 Continuous Improvement
+- Report cultural inaccuracies for system improvement
+- Provide feedback on cultural sensitivity issues
+- Suggest improvements for cultural adaptation features
+- Participate in cultural sensitivity testing when possible
+
+9. CONTACT AND SUPPORT
+
+9.1 Cultural Feedback
+For cultural adaptation feedback or concerns:
+Email: 0xroampal@gmail.com
+Subject: Cultural Adaptation Feedback
+
+9.2 Cultural Expertise
+For questions about cultural adaptation features:
+Email: 0xroampal@gmail.com
+Subject: Cultural Adaptation Support
+
+10. ACKNOWLEDGMENT
+
+By using Roampal AI's cultural adaptation features, you acknowledge that:
+- You have read and understood this disclaimer
+- You accept the limitations and risks described
+- You will use cultural features responsibly
+- You will not hold Roampal AI liable for cultural issues
+- You will verify cultural appropriateness independently
+
+---
+
+This disclaimer is part of the overall Terms of Service and Privacy Policy for Roampal AI. Continued use of cultural adaptation features constitutes acceptance of these terms. 

@@ -1,0 +1,159 @@
+ROAMPAL AI - TERMS OF SERVICE
+
+Last Updated: January 2025
+
+1. ACCEPTANCE OF TERMS
+
+By accessing, downloading, installing, or using Roampal AI ("the System"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, do not use the System.
+
+2. SYSTEM DESCRIPTION
+
+Roampal AI is an artificial intelligence system that provides:
+- Cultural adaptation and sensitivity features
+- Lifetime learning and memory capabilities
+- Multi-shard/persona management
+- Natural language processing and conversation
+- Content processing and analysis tools
+
+3. USER RESPONSIBILITIES
+
+3.1 Content Ownership and Rights
+- You are solely responsible for all content you upload, input, or provide to the System
+- You must have all necessary rights, licenses, and permissions for any content you provide
+- You represent that your content does not infringe on any third-party intellectual property rights
+- You retain ownership of your content, but grant the System permission to process it for functionality
+
+3.2 Acceptable Use
+You agree not to use the System to:
+- Upload copyrighted material without permission
+- Process illegal, harmful, or malicious content
+- Violate any applicable laws or regulations
+- Attempt to reverse engineer or compromise the System
+- Use the System for unauthorized commercial purposes
+
+3.3 Data Accuracy
+- You are responsible for the accuracy and appropriateness of content you provide
+- The System processes content as-is and does not verify content legality or accuracy
+- Cultural adaptation features are based on your input and may not be 100% accurate
+
+4. SYSTEM LIMITATIONS AND DISCLAIMERS
+
+4.1 No Guarantees
+- The System is provided "as-is" without warranties of any kind
+- Cultural adaptation features are for assistance only and may not be completely accurate
+- Memory and learning features may not work as expected in all situations
+- The System may contain bugs, errors, or limitations
+
+4.2 Cultural Adaptation
+- Cultural detection and adaptation features are experimental and educational
+- The System may make incorrect assumptions about cultural context
+- Users should verify cultural appropriateness independently
+- Cultural adaptation is not a substitute for human cultural expertise
+
+4.3 AI Limitations
+- The System may generate incorrect, inappropriate, or biased responses
+- AI-generated content should be reviewed before use
+- The System does not guarantee factual accuracy
+- Users should not rely solely on AI-generated content for critical decisions
+
+5. PRIVACY AND DATA
+
+5.1 Data Collection
+The System may collect and process:
+- Conversation history and user inputs
+- Cultural adaptation data and preferences
+- System usage patterns and performance data
+- Technical information for system improvement
+
+5.2 Data Usage
+- Data is used to provide and improve System functionality
+- Cultural adaptation data helps personalize user experience
+- Conversation data enables memory and learning features
+- Data may be used for system optimization and bug fixes
+
+5.3 Data Retention
+- Data is retained as long as necessary for System functionality
+- Users may request data deletion (see Privacy Policy)
+- Some data may be retained for legal or security purposes
+
+6. INTELLECTUAL PROPERTY
+
+6.1 System Ownership
+- Roampal AI software and technology are owned by Logan Teague
+- All rights, title, and interest in the System remain with the owner
+- Users receive a limited license to use the System under these Terms
+
+6.2 User Content
+- Users retain ownership of their content
+- Users grant the System permission to process their content
+- The System does not claim ownership of user-provided content
+
+6.3 Third-Party Content
+- Users are responsible for any third-party content they provide
+- The System does not include copyrighted books or materials
+- Users must ensure they have rights to any content they upload
+
+7. LIMITATION OF LIABILITY
+
+7.1 General Limitation
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL ROAMPAL AI OR ITS OWNERS BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES.
+
+7.2 Specific Limitations
+- No liability for cultural adaptation inaccuracies
+- No liability for AI-generated content
+- No liability for data loss or corruption
+- No liability for system downtime or errors
+- No liability for user-provided content issues
+
+7.3 Maximum Liability
+The total liability of Roampal AI shall not exceed the amount paid by the user for the System.
+
+8. INDEMNIFICATION
+
+You agree to indemnify and hold harmless Roampal AI and its owners from any claims, damages, or expenses arising from:
+- Your use of the System
+- Your violation of these Terms
+- Your provision of content to the System
+- Any third-party claims related to your use
+
+9. TERMINATION
+
+9.1 Termination by User
+You may stop using the System at any time.
+
+9.2 Termination by System
+Roampal AI may terminate or suspend access for:
+- Violation of these Terms
+- Illegal or harmful use
+- Non-payment (if applicable)
+- System discontinuation
+
+9.3 Effect of Termination
+Upon termination:
+- Your access to the System will cease
+- Your data may be deleted (see Privacy Policy)
+- These Terms will no longer apply
+
+10. GOVERNING LAW
+
+These Terms are governed by the laws of the jurisdiction where Roampal AI operates, without regard to conflict of law principles.
+
+11. CHANGES TO TERMS
+
+Roampal AI may modify these Terms at any time. Continued use of the System after changes constitutes acceptance of the new Terms.
+
+12. CONTACT INFORMATION
+
+For questions about these Terms, contact: 0xroampal@gmail.com
+
+13. SEVERABILITY
+
+If any provision of these Terms is found to be unenforceable, the remaining provisions will remain in full force and effect.
+
+14. ENTIRE AGREEMENT
+
+These Terms constitute the entire agreement between you and Roampal AI regarding the System.
+
+---
+
+By using Roampal AI, you acknowledge that you have read, understood, and agree to these Terms of Service. 

@@ -1,0 +1,272 @@
+ROAMPAL AI - USER RIGHTS AND CONTROLS
+
+Last Updated: January 2025
+
+This document explains your rights and how to control your data and system features in Roampal AI.
+
+1. YOUR RIGHTS
+
+1.1 Data Rights
+You have the right to:
+- Access all personal data we have about you
+- Correct inaccurate or incomplete information
+- Request deletion of your data
+- Export your data in a portable format
+- Restrict how we process your data
+- Object to certain types of data processing
+
+1.2 Cultural Adaptation Rights
+You have the right to:
+- Opt-out of cultural adaptation features entirely
+- Correct cultural assumptions made by the system
+- Customize cultural sensitivity settings
+- Provide feedback on cultural detection accuracy
+- Request specific cultural adaptations
+
+1.3 System Control Rights
+You have the right to:
+- Control what data is collected and processed
+- Choose which features to enable or disable
+- Set privacy and security preferences
+- Control communication preferences
+- Request system modifications or improvements
+
+2. HOW TO EXERCISE YOUR RIGHTS
+
+2.1 Data Access and Control
+To access, correct, or delete your data:
+Email: 0xroampal@gmail.com
+Subject: Data Rights Request
+Include: Your specific request and any relevant details
+
+2.2 Cultural Adaptation Controls
+To control cultural features:
+- Use system settings to disable cultural adaptation
+- Provide feedback through the system interface
+- Contact support for advanced customization
+- Request cultural sensitivity adjustments
+
+2.3 System Preferences
+To modify system behavior:
+- Access settings through the system interface
+- Configure privacy and security options
+- Set communication preferences
+- Customize feature availability
+
+3. DATA CONTROL OPTIONS
+
+3.1 What Data We Collect
+We may collect:
+- Conversation history and inputs
+- Cultural adaptation preferences
+- User profile information
+- System usage patterns
+- Technical information for system improvement
+
+3.2 How to Control Data Collection
+You can:
+- Disable certain data collection features
+- Choose what information to share
+- Set data retention preferences
+- Control data sharing with third parties
+- Opt-out of analytics and improvement data
+
+3.3 Data Deletion Options
+You can request deletion of:
+- All personal data
+- Specific types of data
+- Historical conversation data
+- Cultural adaptation data
+- User profile information
+
+4. CULTURAL ADAPTATION CONTROLS
+
+4.1 Opt-Out Options
+You can:
+- Disable cultural detection entirely
+- Turn off specific cultural features
+- Choose which cultural aspects to adapt
+- Set cultural sensitivity levels
+- Control religious context detection
+
+4.2 Customization Options
+You can:
+- Set your preferred cultural group
+- Specify your religious context
+- Choose your communication style
+- Set regional preferences
+- Customize sensitivity levels
+
+4.3 Feedback Mechanisms
+You can:
+- Report cultural inaccuracies
+- Suggest cultural improvements
+- Provide cultural context corrections
+- Request cultural feature additions
+- Share cultural sensitivity concerns
+
+5. PRIVACY AND SECURITY CONTROLS
+
+5.1 Privacy Settings
+You can control:
+- Data collection preferences
+- Data sharing permissions
+- Communication preferences
+- Analytics participation
+- Third-party integrations
+
+5.2 Security Options
+You can:
+- Set authentication preferences
+- Control data encryption
+- Manage access permissions
+- Set session timeouts
+- Configure backup preferences
+
+5.3 Communication Controls
+You can:
+- Choose communication methods
+- Set notification preferences
+- Control marketing communications
+- Manage support communications
+- Set language preferences
+
+6. SYSTEM FEATURE CONTROLS
+
+6.1 Memory and Learning
+You can:
+- Enable or disable memory features
+- Control what information is remembered
+- Set memory retention preferences
+- Choose learning parameters
+- Control memory sharing between sessions
+
+6.2 Content Processing
+You can:
+- Control what content is processed
+- Set content analysis preferences
+- Choose processing depth
+- Control content storage
+- Set content sharing permissions
+
+6.3 AI Response Controls
+You can:
+- Set response style preferences
+- Control response length and detail
+- Choose response tone and approach
+- Set safety and appropriateness filters
+- Control creative vs. factual responses
+
+7. THIRD-PARTY INTEGRATIONS
+
+7.1 External Services
+You can control:
+- Which third-party services are used
+- Data sharing with external services
+- Integration permissions
+- Service-specific settings
+- Data flow between services
+
+7.2 API and Developer Access
+You can:
+- Control API access permissions
+- Set rate limiting preferences
+- Choose data access levels
+- Control developer integrations
+- Set security requirements
+
+8. COMPLIANCE AND LEGAL RIGHTS
+
+8.1 GDPR Rights (EU Users)
+You have additional rights under GDPR:
+- Right to data portability
+- Right to erasure ("right to be forgotten")
+- Right to restrict processing
+- Right to object to processing
+- Right to lodge complaints with supervisory authorities
+
+8.2 CCPA Rights (California Users)
+You have additional rights under CCPA:
+- Right to know what personal information is collected
+- Right to know how personal information is used
+- Right to know with whom personal information is shared
+- Right to opt-out of the sale of personal information
+- Right to equal service and price
+
+8.3 Other Regional Rights
+Depending on your location, you may have additional rights:
+- Local data protection laws
+- Regional privacy regulations
+- Industry-specific requirements
+- Consumer protection laws
+
+9. HOW TO CONTACT US
+
+9.1 General Inquiries
+For general questions about your rights:
+Email: 0xroampal@gmail.com
+Subject: User Rights Inquiry
+
+9.2 Data Requests
+For data access, correction, or deletion:
+Email: 0xroampal@gmail.com
+Subject: Data Rights Request
+
+9.3 Privacy Concerns
+For privacy-related issues:
+Email: 0xroampal@gmail.com
+Subject: Privacy Concern
+
+9.4 Cultural Adaptation
+For cultural feature controls:
+Email: 0xroampal@gmail.com
+Subject: Cultural Adaptation Control
+
+10. RESPONSE TIMELINES
+
+10.1 Standard Requests
+- General inquiries: Within 5 business days
+- Data access requests: Within 30 days
+- Correction requests: Within 30 days
+- Deletion requests: Within 30 days
+
+10.2 Urgent Requests
+- Security concerns: Within 24 hours
+- Legal compliance: Within 48 hours
+- Critical issues: Within 72 hours
+
+11. APPEALS AND COMPLAINTS
+
+11.1 Internal Appeals
+If you disagree with our response:
+- Request a review within 30 days
+- Provide additional information
+- Request escalation to management
+- Seek alternative resolution
+
+11.2 External Complaints
+You may lodge complaints with:
+- Data protection authorities
+- Consumer protection agencies
+- Industry regulators
+- Legal authorities
+
+12. UPDATES TO RIGHTS
+
+12.1 Policy Changes
+We may update this document to:
+- Reflect new legal requirements
+- Add new user rights
+- Improve clarity and accessibility
+- Address user feedback
+
+12.2 Notification
+We will notify you of significant changes through:
+- System notifications
+- Email communications
+- Website updates
+- Direct communication
+
+---
+
+This document is part of our commitment to transparency and user control. We are committed to respecting and protecting your rights while providing a valuable and safe AI experience. 

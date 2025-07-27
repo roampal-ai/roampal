@@ -1,0 +1,206 @@
+ROAMPAL AI - AI LIMITATIONS AND CAPABILITIES DISCLAIMER
+
+Last Updated: January 2025
+
+IMPORTANT: PLEASE READ THIS DISCLAIMER CAREFULLY
+
+This disclaimer addresses the capabilities, limitations, and proper use of Roampal AI's artificial intelligence features. By using the system, you acknowledge and agree to the following:
+
+1. AI SYSTEM OVERVIEW
+
+1.1 What Roampal AI Is
+- An artificial intelligence system with cultural adaptation capabilities
+- A tool for conversation, learning, and content processing
+- A system that learns and adapts over time based on interactions
+- A framework for creating personalized AI experiences
+
+1.2 What Roampal AI Is Not
+- A human being or replacement for human expertise
+- A source of guaranteed factual information
+- A substitute for professional advice (legal, medical, financial, etc.)
+- A system that can make decisions on your behalf
+
+2. INHERENT AI LIMITATIONS
+
+2.1 Accuracy and Reliability
+- AI responses may contain errors, inaccuracies, or outdated information
+- The system may generate plausible-sounding but incorrect information
+- Factual claims should be independently verified
+- The system does not guarantee the accuracy of any information provided
+
+2.2 Context and Understanding
+- AI may misunderstand context or user intent
+- Responses may not always be relevant to the specific situation
+- The system may miss subtle nuances or cultural implications
+- Complex or ambiguous queries may result in inappropriate responses
+
+2.3 Bias and Fairness
+- AI systems may reflect biases present in training data
+- Responses may not be equally appropriate for all users or situations
+- The system may inadvertently perpetuate stereotypes or biases
+- Cultural, gender, racial, or other biases may be present in responses
+
+3. MEMORY AND LEARNING FEATURES
+
+3.1 Memory Limitations
+- Memory features are experimental and may not work perfectly
+- Information may be forgotten or recalled incorrectly
+- Memory consolidation may not always be accurate
+- Long-term memory may degrade or become unreliable over time
+
+3.2 Learning Capabilities
+- Learning is based on patterns and may not reflect true understanding
+- The system may learn incorrect associations or patterns
+- Learning may be influenced by user biases or preferences
+- The system cannot learn in the same way humans do
+
+4. CULTURAL ADAPTATION FEATURES
+
+4.1 Cultural Detection
+- Cultural detection is based on patterns and may be inaccurate
+- The system may make incorrect assumptions about cultural context
+- Cultural adaptations may not be appropriate for all individuals
+- Regional or subcultural variations may not be captured
+
+4.2 Sensitivity and Appropriateness
+- Cultural sensitivity features may not work perfectly
+- Responses may inadvertently offend or be inappropriate
+- The system may not understand local cultural nuances
+- Cultural adaptations should be verified by human experts
+
+5. CONTENT PROCESSING AND ANALYSIS
+
+5.1 Content Understanding
+- The system may misinterpret or misunderstand content
+- Complex documents may not be fully comprehended
+- Technical or specialized content may be processed incorrectly
+- Context may be lost or misinterpreted during processing
+
+5.2 Content Generation
+- Generated content may be inappropriate, inaccurate, or biased
+- Creative content may not meet quality or appropriateness standards
+- The system may generate content that violates guidelines or laws
+- Users should review all generated content before use
+
+6. SAFETY AND SECURITY
+
+6.1 Information Security
+- AI systems may inadvertently reveal sensitive information
+- The system may not properly protect confidential data
+- Users should not share sensitive information with the AI
+- Security measures may not be foolproof
+
+6.2 Harmful Content
+- The system may generate harmful, inappropriate, or dangerous content
+- Users should not rely on the AI for safety-critical decisions
+- The system may not recognize all forms of harmful content
+- Users are responsible for the content they generate or share
+
+7. PROFESSIONAL AND LEGAL USE
+
+7.1 No Professional Advice
+- The system does not provide legal, medical, financial, or professional advice
+- Users should consult qualified professionals for important decisions
+- AI responses should not be used as the sole basis for decisions
+- Professional applications require human oversight and verification
+
+7.2 Legal Compliance
+- Users are responsible for ensuring legal compliance
+- The system may not be aware of all applicable laws and regulations
+- AI-generated content may violate copyright, privacy, or other laws
+- Users must verify legal compliance independently
+
+8. ETHICAL CONSIDERATIONS
+
+8.1 Responsible Use
+- Users should use the system responsibly and ethically
+- The system should not be used for harmful or malicious purposes
+- Users should respect the rights and dignity of others
+- Ethical considerations should guide all use of the system
+
+8.2 Transparency
+- Users should be transparent about AI use when appropriate
+- AI-generated content should be clearly identified when necessary
+- Users should not misrepresent AI responses as human-generated
+- Transparency promotes trust and responsible use
+
+9. SYSTEM RELIABILITY
+
+9.1 Availability
+- The system may be unavailable due to technical issues
+- Maintenance, updates, or outages may affect availability
+- Users should not rely on the system for critical functions
+- Backup plans should be in place for important tasks
+
+9.2 Performance
+- System performance may vary based on load, complexity, or other factors
+- Response times may be slow or unpredictable
+- Quality may degrade during high usage periods
+- Users should have realistic expectations about performance
+
+10. USER RESPONSIBILITIES
+
+10.1 Verification and Review
+- Users should verify all AI-generated information
+- Content should be reviewed for accuracy and appropriateness
+- Users are responsible for the final quality of their work
+- Independent verification is essential for important matters
+
+10.2 Appropriate Use
+- Users should use the system for appropriate purposes
+- The system should not be used to harm others or violate rights
+- Users should respect system limitations and capabilities
+- Responsible use promotes positive outcomes
+
+11. LIABILITY LIMITATIONS
+
+11.1 No Warranty
+- The system is provided "as-is" without warranties
+- No guarantee of accuracy, reliability, or fitness for purpose
+- Users assume all risks of using the system
+- The system is not liable for damages or losses
+
+11.2 User Indemnification
+- Users agree to indemnify the system for their use
+- Users are responsible for consequences of their actions
+- The system is not liable for user decisions or actions
+- Users must accept responsibility for their use
+
+12. CONTINUOUS IMPROVEMENT
+
+12.1 System Evolution
+- The system will continue to improve and evolve
+- New features and capabilities will be added over time
+- Limitations may be reduced but not eliminated
+- Users should stay informed about system updates
+
+12.2 Feedback and Reporting
+- Users are encouraged to provide feedback on issues
+- Reporting problems helps improve the system
+- Users should report harmful or inappropriate content
+- Feedback contributes to system safety and quality
+
+13. CONTACT AND SUPPORT
+
+13.1 Technical Support
+For technical issues or questions:
+Email: 0xroampal@gmail.com
+Subject: AI System Support
+
+13.2 Safety and Ethics
+For safety concerns or ethical issues:
+Email: 0xroampal@gmail.com
+Subject: AI Safety/Ethics
+
+14. ACKNOWLEDGMENT
+
+By using Roampal AI, you acknowledge that:
+- You have read and understood this disclaimer
+- You accept the limitations and risks described
+- You will use the system responsibly and ethically
+- You will verify information and content independently
+- You will not hold the system liable for your use or decisions
+
+---
+
+This disclaimer is part of the overall Terms of Service and Privacy Policy for Roampal AI. Continued use of the system constitutes acceptance of these terms. 

@@ -1,0 +1,208 @@
+ROAMPAL AI - PRIVACY POLICY
+
+Last Updated: January 2025
+
+1. INTRODUCTION
+
+This Privacy Policy explains how Roampal AI ("we," "our," or "us") collects, uses, and protects your personal information when you use our artificial intelligence system. We are committed to protecting your privacy and ensuring transparency about our data practices.
+
+2. INFORMATION WE COLLECT
+
+2.1 Information You Provide
+- Conversation history and user inputs
+- Cultural background and preferences
+- User profile information (goals, values, interests)
+- Content you upload or input into the system
+- Feedback and ratings you provide
+
+2.2 Information Collected Automatically
+- System usage patterns and interaction data
+- Cultural adaptation preferences and settings
+- Technical information (device type, browser, IP address)
+- Performance and error data for system improvement
+- Session information and user behavior patterns
+
+2.3 Cultural Adaptation Data
+- Detected language preferences
+- Cultural group identification
+- Religious context information
+- Communication style preferences
+- Regional adaptation settings
+
+3. HOW WE USE YOUR INFORMATION
+
+3.1 Primary Uses
+- Provide and improve AI conversation capabilities
+- Enable cultural adaptation and sensitivity features
+- Support lifetime learning and memory functions
+- Personalize user experience and responses
+- Maintain system functionality and performance
+
+3.2 System Improvement
+- Analyze usage patterns to improve features
+- Identify and fix bugs or technical issues
+- Optimize cultural adaptation algorithms
+- Enhance AI response quality and accuracy
+- Develop new features and capabilities
+
+3.3 Legal and Security
+- Comply with applicable laws and regulations
+- Protect against fraud, abuse, or security threats
+- Respond to legal requests or court orders
+- Maintain system security and integrity
+
+4. DATA SHARING AND DISCLOSURE
+
+4.1 We Do Not Sell Your Data
+We do not sell, rent, or trade your personal information to third parties.
+
+4.2 Limited Sharing
+We may share your information only in these circumstances:
+- With your explicit consent
+- To comply with legal obligations
+- To protect our rights, property, or safety
+- With service providers who assist in system operation (under strict confidentiality agreements)
+
+4.3 Aggregated Data
+We may share anonymized, aggregated data that does not identify individual users for research or improvement purposes.
+
+5. DATA RETENTION
+
+5.1 Retention Period
+- Conversation data: Retained for system functionality and learning
+- Cultural adaptation data: Retained for personalization features
+- User profile information: Retained until account deletion
+- Technical logs: Retained for 30-90 days for system maintenance
+
+5.2 Data Deletion
+- You may request deletion of your data at any time
+- Deletion requests will be processed within 30 days
+- Some data may be retained for legal or security purposes
+- Backup data may be retained for a limited period
+
+6. YOUR RIGHTS AND CHOICES
+
+6.1 Access and Control
+You have the right to:
+- Access your personal information
+- Correct inaccurate information
+- Request deletion of your data
+- Export your data in a portable format
+- Opt-out of certain data collection
+
+6.2 Cultural Adaptation Controls
+- Opt-out of cultural adaptation features
+- Correct cultural assumptions made by the system
+- Provide feedback on cultural detection accuracy
+- Customize cultural sensitivity settings
+
+6.3 Communication Preferences
+- Control how we communicate with you
+- Opt-out of non-essential communications
+- Choose your preferred communication methods
+
+7. DATA SECURITY
+
+7.1 Security Measures
+We implement appropriate technical and organizational measures to protect your data:
+- Encryption of data in transit and at rest
+- Access controls and authentication
+- Regular security assessments
+- Employee training on data protection
+
+7.2 Data Breach Response
+In the event of a data breach, we will:
+- Notify affected users within 72 hours
+- Take immediate steps to contain the breach
+- Cooperate with relevant authorities
+- Provide guidance on protective measures
+
+8. INTERNATIONAL DATA TRANSFERS
+
+8.1 Data Location
+Your data may be processed in countries other than your own. We ensure appropriate safeguards are in place for international transfers.
+
+8.2 GDPR Compliance
+For users in the European Union:
+- We process data based on legitimate interests and consent
+- You have additional rights under GDPR
+- You may lodge complaints with supervisory authorities
+- We have appointed a Data Protection Officer (contact: 0xroampal@gmail.com)
+
+9. CHILDREN'S PRIVACY
+
+9.1 Age Restrictions
+The System is not intended for children under 13 years of age. We do not knowingly collect personal information from children under 13.
+
+9.2 Parental Rights
+If you are a parent and believe your child has provided personal information, contact us immediately to request deletion.
+
+10. COOKIES AND TRACKING
+
+10.1 Cookie Usage
+We may use cookies and similar technologies to:
+- Maintain session information
+- Remember user preferences
+- Analyze system usage
+- Improve user experience
+
+10.2 Cookie Control
+You can control cookie settings through your browser preferences. Disabling cookies may affect system functionality.
+
+11. THIRD-PARTY SERVICES
+
+11.1 External Services
+The System may integrate with third-party services for:
+- AI model processing
+- Cultural data analysis
+- System monitoring and analytics
+
+11.2 Third-Party Privacy
+Third-party services have their own privacy policies. We encourage you to review them.
+
+12. CHANGES TO THIS POLICY
+
+12.1 Policy Updates
+We may update this Privacy Policy from time to time. We will notify you of significant changes through:
+- System notifications
+- Email communications
+- Website updates
+
+12.2 Continued Use
+Continued use of the System after policy changes constitutes acceptance of the updated policy.
+
+13. CONTACT INFORMATION
+
+13.1 Privacy Inquiries
+For privacy-related questions or concerns:
+Email: 0xroampal@gmail.com
+Subject: Privacy Policy Inquiry
+
+13.2 Data Protection Officer
+For GDPR-related inquiries:
+Email: 0xroampal@gmail.com
+Subject: Data Protection Officer
+
+14. COMPLAINTS AND DISPUTES
+
+14.1 Resolution Process
+We are committed to resolving privacy concerns promptly and fairly.
+
+14.2 Supervisory Authorities
+You may lodge complaints with relevant data protection authorities in your jurisdiction.
+
+15. CALIFORNIA PRIVACY RIGHTS
+
+For California residents:
+- You have additional rights under the California Consumer Privacy Act (CCPA)
+- You may request disclosure of data categories and purposes
+- You may request deletion of personal information
+- You may opt-out of data sales (though we do not sell data)
+
+16. EFFECTIVE DATE
+
+This Privacy Policy is effective as of January 2025 and applies to all users of Roampal AI.
+
+---
+
+By using Roampal AI, you acknowledge that you have read and understood this Privacy Policy and consent to the collection and use of your information as described herein. 
