@@ -1,0 +1,26 @@
+Extract the key quotes, mental models, and summaries from the following book text: {content}
+
+Book: {book_title}
+
+For each item, assign a category that best describes its domain or topic. Use these predefined categories when they fit well: philosophy, psychology, business, science, technology, health, relationships, creativity, leadership, spirituality, education, economics, politics, history, literature, art, music, sports, nature, personal_development, productivity, communication, decision_making, strategy, innovation, ethics, culture, society, environment.
+
+If none of these categories fit well, create a new descriptive category that captures the essence of the content. Be specific and meaningful - avoid generic terms like "general" or "other".
+
+Output in JSON format only:
+{{
+  "quotes": [
+    {{"text": "quote1", "category": "philosophy"}},
+    {{"text": "quote2", "category": "business"}},
+    ...
+  ],
+  "models": [
+    {{"text": "model1", "category": "psychology"}},
+    {{"text": "model2", "category": "decision_making"}},
+    ...
+  ],
+  "summaries": [
+    {{"text": "summary1", "category": "leadership"}},
+    {{"text": "summary2", "category": "strategy"}},
+    ...
+  ]
+}}

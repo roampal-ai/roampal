@@ -1,0 +1,32 @@
+# backend/config/default_config.yaml
+app:
+  app_name: "Roampal Main Backend"
+  log_level: "INFO"
+
+llm:
+  provider: "ollama"
+  ollama_base_url: "http://localhost:11434"
+  ollama_model: "llama3:8b"
+  ollama_request_timeout_seconds: 300
+  ollama_keep_alive_seconds: 60
+
+memory:
+  adapter_type: "file"
+  file_memory_data_path: "data/"
+  file_goals_filename: "goals.txt"
+  file_values_filename: "values.txt"
+  file_conversation_history_dir: "data/conversations/"
+  file_arbitrary_data_dir: "data/arbitrary_store/"
+
+web_search:
+  default_search_engine: "bing"
+  playwright_service_url: "http://localhost:8001"
+  playwright_service_request_timeout_seconds: 60
+
+scoring: # MODIFIED/ADDED IN THIS STEP
+  strategy_type: "basic"
+  scores_file_path: "data/scores.json"
+
+prompt:
+  template_directory: "backend/modules/prompt/templates"
+  default_system_prompt_name: "default_system"

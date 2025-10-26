@@ -1,0 +1,42 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="256" fill="#1a1a1a"/>
+
+  <!-- Memory path - 4 connected nodes representing 4-tier memory -->
+  <!-- Books node (bottom) -->
+  <circle cx="256" cy="380" r="32" fill="#4A90E2" opacity="0.3"/>
+  <circle cx="256" cy="380" r="24" fill="#4A90E2"/>
+
+  <!-- Working memory node (left) -->
+  <circle cx="160" cy="256" r="32" fill="#4A90E2" opacity="0.3"/>
+  <circle cx="160" cy="256" r="24" fill="#4A90E2"/>
+
+  <!-- History node (right) -->
+  <circle cx="352" cy="256" r="32" fill="#4A90E2" opacity="0.3"/>
+  <circle cx="352" cy="256" r="24" fill="#4A90E2"/>
+
+  <!-- Patterns node (top) -->
+  <circle cx="256" cy="132" r="32" fill="#10B981" opacity="0.3"/>
+  <circle cx="256" cy="132" r="24" fill="#10B981"/>
+
+  <!-- Connection lines between nodes -->
+  <path d="M 256 356 L 256 280 L 184 256 L 160 256"
+        stroke="#4A90E2"
+        stroke-width="4"
+        stroke-linecap="round"
+        opacity="0.6"/>
+  <path d="M 256 280 L 328 256 L 352 256"
+        stroke="#4A90E2"
+        stroke-width="4"
+        stroke-linecap="round"
+        opacity="0.6"/>
+  <path d="M 256 280 L 256 156"
+        stroke="#4A90E2"
+        stroke-width="4"
+        stroke-linecap="round"
+        opacity="0.6"/>
+
+  <!-- Central hub (current memory) -->
+  <circle cx="256" cy="280" r="12" fill="#F59E0B"/>
+  <circle cx="256" cy="280" r="8" fill="#FBBF24"/>
+</svg>

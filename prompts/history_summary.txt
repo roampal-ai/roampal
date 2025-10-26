@@ -1,0 +1,5 @@
+Summarize the following chat in {num_bullets} bullet points.
+Only include facts, explicit user-affirmed goals, or preferences. Ignore speculation, jokes, and assistant suggestions.
+{chat_text}
+
+Summary:

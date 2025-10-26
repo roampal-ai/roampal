@@ -1,0 +1,18 @@
+Analyze the following text chunk and extract key insights:
+
+Text: {chunk_text}
+
+Please provide:
+1. A concise summary of the main points
+2. Any notable quotes or phrases
+3. Key concepts or models mentioned
+4. The overall tone and style
+
+Format your response as JSON with the following structure:
+{{{{
+  "summary": "Brief summary of the chunk",
+  "quotes": ["notable quote 1", "notable quote 2"],
+  "concepts": ["concept 1", "concept 2"],
+  "tone": "descriptive tone",
+  "style": "writing style"
+}}}} 

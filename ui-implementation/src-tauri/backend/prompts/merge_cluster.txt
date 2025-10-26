@@ -1,0 +1,8 @@
+Merge the following similar fragments into a single consolidated fragment.
+
+Cluster contents:
+{cluster_contents}
+
+Output:
+**Consolidated Fragment**: the merged text
+**Confidence Score**: a number from 0.0 to 1.0 indicating merge quality

@@ -1,0 +1,84 @@
+# Backend Service Requirements - Pinned for Compatibility
+# Note: Some optional packages (tts, torchvision) may show conflicts but are not critical for core functionality
+# Core FastAPI and web framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+python-dotenv==1.0.0
+starlette==0.27.0
+
+# HTTP client for Ollama and external APIs
+httpx>=0.27.0,<0.29.0
+httpcore==1.0.9
+
+# Database and vector storage
+chromadb==0.4.18
+sentence-transformers==2.2.2
+
+# Scientific computing (pinned for compatibility)
+numpy>=1.22.5,<2.0.0
+scipy>=1.11.4,<2.0.0
+pandas>=1.5.3,<3.0.0
+
+# Web scraping and browser automation
+playwright==1.40.0
+
+# Async support
+aiofiles==23.2.1
+asyncio-mqtt==0.16.1
+filelock==3.13.1
+
+# Configuration and environment
+pydantic>=2.9.0,<3.0.0
+pydantic-settings>=2.4.0,<3.0.0  # Required by langchain-community if installed
+
+# Logging and utilities
+loguru==0.7.2
+rich==13.7.0
+
+# File handling
+pathlib2==2.3.7
+
+# JSON handling
+orjson>=3.9.14,<4.0.0  # Updated for langsmith compatibility
+
+# Machine Learning (compatible versions)
+torch>=2.1.0,<2.9.0
+torchaudio>=2.1.0,<2.9.0
+transformers>=4.36.2,<5.0.0
+tokenizers>=0.15.0,<1.0.0
+
+# Text processing
+nltk==3.8.1
+textblob==0.17.1
+vaderSentiment==3.3.2
+
+# Document processing (Enhanced - Session 11)
+PyPDF2==3.0.1           # Basic PDF text extraction
+python-docx==1.1.0      # Word document processing (.docx)
+docx2txt==0.8           # Alternative Word document text extraction
+PyMuPDF==1.23.8         # Advanced PDF processing with OCR support
+chardet==5.2.0          # Encoding detection for text files
+beautifulsoup4==4.12.2  # HTML/XML text extraction
+striprtf==0.0.26        # RTF document processing
+openpyxl==3.1.2         # Excel file processing
+# pytesseract==0.3.10  # Optional: for OCR support (requires tesseract-ocr system package)
+
+# LangChain for advanced document processing (SmartBookProcessor)
+langchain==0.3.27
+langchain-community==0.3.31
+langchain-core==0.3.79
+langchain-text-splitters==0.3.11
+aiosqlite==0.20.0       # Required by SmartBookProcessor
+
+# Network and utilities
+anyio==3.7.1
+sniffio==1.3.0
+click==8.1.7
+typer==0.9.0
+
+# Optional: For development
+watchfiles==0.21.0
+
+# Ollama integration
+ollama @ git+https://github.com/ollama/ollama-python.git@65f94b4fba2cc95dd718cbda683a326a8e5e670a

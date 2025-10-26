@@ -1,0 +1,2 @@
+Infer the desired tone for this user input: {user_input}
+Output a tone label: "formal", "casual", "empathetic", etc.

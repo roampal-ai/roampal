@@ -1,0 +1,19 @@
+{{ system_prompt }}
+
+{% if contextual_opener %}
+{{ contextual_opener }}
+
+{% endif %}
+{% if conversation_bridges %}
+{% for bridge in conversation_bridges %}
+{{ bridge }}
+{% endfor %}
+
+{% endif %}
+{% if conversation_history %}
+Recent conversation:
+{{ conversation_history }}
+
+{% endif %}
+Current user input:
+{{ user_input }}

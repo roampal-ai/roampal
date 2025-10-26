@@ -1,0 +1,2 @@
+Re-synthesize this low-value fragment: {fragment_text}
+Improved version:

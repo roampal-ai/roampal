@@ -1,0 +1,30 @@
+{
+  "memory_consolidation": {
+    "enabled": true,
+    "realtime_consolidation": false,
+    "consolidation_interval": 10,
+    "max_fragments_per_consolidation": 5,
+    "only_consolidate_active": true,
+    "comment": "Consolidate every N messages, only process active memories"
+  },
+  "knowledge_graph": {
+    "enabled": true,
+    "realtime_updates": false,
+    "update_interval": 5,
+    "max_concepts_per_update": 3,
+    "comment": "Update knowledge graph every N messages, limit concepts"
+  },
+  "embedding_optimization": {
+    "cache_enabled": true,
+    "cache_ttl_seconds": 3600,
+    "batch_embeddings": true,
+    "max_batch_size": 10,
+    "comment": "Cache embeddings for 1 hour, batch up to 10 at a time"
+  },
+  "performance": {
+    "lazy_memory_loading": true,
+    "max_memories_per_query": 10,
+    "skip_consolidation_if_fast_response": true,
+    "comment": "Limit memory queries and skip consolidation for quick responses"
+  }
+}

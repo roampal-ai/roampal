@@ -1,0 +1,17 @@
+Combine and synthesize the following summaries into a coherent overview:
+
+Summaries:
+{summaries}
+
+Please create a unified summary that:
+1. Identifies common themes and patterns
+2. Highlights the most important insights
+3. Maintains the key concepts from each summary
+4. Provides a cohesive narrative
+
+Format your response as JSON:
+{{{{
+  "unified_summary": "Combined summary text",
+  "key_themes": ["theme1", "theme2"],
+  "main_insights": ["insight1", "insight2"]
+}}}} 

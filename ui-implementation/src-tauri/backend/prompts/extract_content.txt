@@ -1,0 +1,17 @@
+Extract specific content from the following text:
+
+Text: {text_content}
+
+Please extract:
+1. Notable quotes and memorable phrases
+2. Key concepts, models, or frameworks
+3. Important insights and lessons
+4. Technical terms or specialized vocabulary
+
+Format your response as JSON:
+{{
+  "quotes": ["quote1", "quote2"],
+  "concepts": ["concept1", "concept2"],
+  "insights": ["insight1", "insight2"],
+  "technical_terms": ["term1", "term2"]
+}} 

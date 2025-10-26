@@ -1,0 +1,89 @@
+Analyze the following fragments and extract concepts and relationships for knowledge graph construction.
+
+## TASK
+Extract key concepts and their relationships from the provided fragments to build a knowledge graph that represents how ideas connect and influence each other.
+
+## ANALYSIS REQUIREMENTS
+
+### 1. CONCEPT EXTRACTION
+For each fragment, identify:
+- **Key concepts mentioned** (people, ideas, principles, emotions, actions)
+- **Concept types** (quote, model, summary, learning, concept)
+- **Concept descriptions** (brief explanation of what the concept represents)
+- **Confidence scores** (how certain you are about the concept extraction)
+
+### 2. RELATIONSHIP IDENTIFICATION
+Find relationships between concepts such as:
+- **influences** - One concept affects or shapes another
+- **builds_upon** - One concept extends or develops from another
+- **supports** - One concept reinforces or validates another
+- **contradicts** - One concept opposes or challenges another
+- **evolves_from** - One concept develops from or grows out of another
+- **connects_to** - One concept relates to or links with another
+- **CAUSES** - One concept directly causes another (strong causal relationship)
+- **LEADS_TO** - One concept leads to or results in another (causal chain)
+- **TRIGGERS** - One concept triggers or initiates another (causal trigger)
+- **PREVENTS** - One concept prevents or blocks another (causal prevention)
+
+### 3. CONCEPTUAL HIERARCHIES
+Identify:
+- **Core concepts** - Fundamental ideas that other concepts build upon
+- **Derived concepts** - Ideas that emerge from or depend on core concepts
+- **Influence patterns** - How concepts shape and inform each other
+
+## OUTPUT FORMAT
+
+Return a JSON object with the following structure:
+
+```json
+{
+  "concepts": [
+    {
+      "concept_id": "unique_identifier",
+      "name": "concept_name",
+      "description": "brief_description",
+      "concept_type": "quote|model|summary|learning|concept",
+      "source_fragment_id": "fragment_id_if_applicable",
+      "source_book": "book_title_if_known",
+      "confidence": 0.0-1.0
+    }
+  ],
+  "relationships": [
+    {
+      "source_id": "source_concept_id",
+      "target_id": "target_concept_id", 
+      "relationship_type": "influences|builds_upon|supports|contradicts|evolves_from|connects_to",
+      "confidence": 0.0-1.0
+    }
+  ],
+  "confidence_score": 0.0-1.0,
+  "metadata": {
+    "analysis_notes": "any_observations_about_the_analysis",
+    "key_themes": ["theme1", "theme2"],
+    "influence_patterns": ["pattern1", "pattern2"]
+  }
+}
+```
+
+## ANALYSIS GUIDELINES
+
+1. **Focus on soul/spiritual/psychological content** - Prioritize concepts related to personal growth, wisdom, relationships, emotions, and spiritual development
+
+2. **Extract meaningful concepts** - Look for ideas that represent important principles, insights, or understandings
+
+3. **Identify genuine relationships** - Only create relationships where there's a clear conceptual connection
+
+4. **Maintain consistency** - Use consistent concept IDs and relationship types throughout
+
+5. **Consider context** - How concepts relate to the broader themes and wisdom in the fragments
+
+6. **Quality over quantity** - Prefer fewer, high-confidence concepts and relationships over many low-confidence ones
+
+## EXAMPLE
+
+For a fragment about "The power of vulnerability in leadership", you might extract:
+- Concept: "vulnerability" (core concept)
+- Concept: "authentic_leadership" (derived concept)  
+- Relationship: "vulnerability" → "authentic_leadership" (builds_upon)
+
+Analyze the fragments with these guidelines and return the structured JSON response. 
