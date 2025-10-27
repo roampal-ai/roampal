@@ -1385,7 +1385,24 @@ GET  /api/chat/feature-mode       # Get current feature mode
 GET  /api/memory/stats            # Memory system statistics
 GET  /api/memory/search           # Search memories
 POST /api/memory/feedback         # Record user feedback on memory usefulness
+
+# Memory Bank Operations (NEW - For MCP Bridge Integration)
+GET  /api/memory-bank/list        # List memories (with pagination)
+GET  /api/memory-bank/search      # Semantic search in memory bank
+GET  /api/memory-bank/stats       # Memory bank statistics
+POST /api/memory-bank/create      # Create new memory (MCP tool endpoint)
+PUT  /api/memory-bank/update/{doc_id}  # Update memory (MCP tool endpoint)
+POST /api/memory-bank/archive/{doc_id} # Archive memory (MCP tool endpoint)
+POST /api/memory-bank/restore/{doc_id} # User restore archived memory
+DELETE /api/memory-bank/delete/{doc_id} # User hard delete memory
+GET  /api/memory-bank/archived    # List archived memories
 ```
+
+**MCP Bridge Integration** (Planned)
+- Create/Update/Archive endpoints enable MCP protocol integration
+- Allows external tools (Claude Desktop, Cursor) to access Roampal's memory
+- See: [roampal-bridge repository](https://github.com/roampal-ai/roampal-bridge)
+- Tool definitions in [tool_definitions.py](../utils/tool_definitions.py)
 
 ### Session Management
 ```

@@ -71,6 +71,7 @@ router = APIRouter()
 
 # Global state for async generation tasks
 _generation_tasks: Dict[str, Dict[str, Any]] = {}
+_active_tasks: Dict[str, asyncio.Task] = {}  # Track task handles for cancellation
 _task_lock = threading.Lock()
 
 
@@ -2621,6 +2622,11 @@ async def _run_generation_task_streaming(
             conversation_id=conversation_id,
             app_state=app_state
         ):
+            # Check if WebSocket is still connected (early exit if client disconnected)
+            if not websocket or (hasattr(websocket, 'client_state') and websocket.client_state.name != 'CONNECTED'):
+                logger.info(f"[CANCEL] WebSocket disconnected for {conversation_id}, stopping generation")
+                break
+
             # Send events to WebSocket
             if event["type"] == "token":
                 full_response.append(event["content"])
@@ -2689,6 +2695,17 @@ async def _run_generation_task_streaming(
             _generation_tasks[conversation_id]['thinking'] = thinking_content
             _generation_tasks[conversation_id]['completed_at'] = datetime.now().isoformat()
 
+    except asyncio.CancelledError:
+        logger.info(f'[CANCEL] Generation cancelled for {conversation_id}')
+        if websocket:
+            try:
+                await websocket.send_json({
+                    "type": "cancelled",
+                    "message": "Generation cancelled by user"
+                })
+            except:
+                pass  # WebSocket may already be closed
+        raise  # Re-raise to properly mark task as cancelled
     except asyncio.TimeoutError:
         logger.error(f'Streaming timeout for {conversation_id}')
         if websocket:
@@ -2812,19 +2829,33 @@ async def agent_chat_stream(request: AgentChatRequest, req: Request):
 
     logger.info(f"WebSocket check - has_websockets: {has_websockets}, count: {websocket_count}, has {conversation_id}: {has_this_websocket}")
 
-    # Start appropriate generation task
+    # Start appropriate generation task and track it for cancellation
     if use_streaming and has_websockets and has_this_websocket:
         logger.info(f"Using streaming generation for conversation {conversation_id}")
         # Use streaming version
-        asyncio.create_task(
+        task = asyncio.create_task(
             _run_generation_task_streaming(conversation_id, request, user_id, req.app.state)
         )
     else:
         logger.info(f"Using batch generation for conversation {conversation_id} (streaming={'enabled' if use_streaming else 'disabled'})")
         # Use existing batch version
-        asyncio.create_task(
+        task = asyncio.create_task(
             _run_generation_task(conversation_id, request, user_id, req.app.state)
         )
+
+    # Cancel existing task for this conversation (prevents race condition)
+    existing_task = _active_tasks.get(conversation_id)
+    if existing_task and not existing_task.done():
+        existing_task.cancel()
+
+    # Store task handle for cancellation
+    _active_tasks[conversation_id] = task
+
+    # Clean up task handle when done (only if still current)
+    def cleanup_task(t):
+        if _active_tasks.get(conversation_id) == t:
+            _active_tasks.pop(conversation_id, None)
+    task.add_done_callback(cleanup_task)
 
     # Return conversation_id immediately for polling
     # Frontend can poll /progress/{conversation_id} or use WebSocket for real-time updates
@@ -2836,6 +2867,36 @@ async def agent_chat_stream(request: AgentChatRequest, req: Request):
 
 # Removed 1370 lines of dead SSE code (unreachable event_generator function after return statement)
 # WebSocket streaming is now used instead - see _run_generation_task() above
+
+
+@router.post("/cancel/{conversation_id}")
+async def cancel_generation(conversation_id: str, req: Request):
+    """Cancel active generation task for a conversation"""
+
+    # Cancel the asyncio task
+    task = _active_tasks.get(conversation_id)
+    if task and not task.done():
+        task.cancel()
+        logger.info(f"[CANCEL] Cancelled generation task for {conversation_id}")
+
+        # Close WebSocket if exists
+        if hasattr(req.app.state, 'websockets'):
+            ws = req.app.state.websockets.pop(conversation_id, None)
+            if ws:
+                try:
+                    await ws.close()
+                    logger.info(f"[CANCEL] Closed WebSocket for {conversation_id}")
+                except Exception as e:
+                    logger.warning(f"[CANCEL] Failed to close WebSocket: {e}")
+
+        # Clean up task status
+        with _task_lock:
+            if conversation_id in _generation_tasks:
+                _generation_tasks[conversation_id]['status'] = 'cancelled'
+
+        return {"status": "cancelled", "conversation_id": conversation_id}
+
+    return {"status": "not_found", "conversation_id": conversation_id}
 
 
 @router.post("/cleanup-sessions")

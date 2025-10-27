@@ -802,22 +802,37 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     }
   },
 
-  cancelProcessing: () => {
+  cancelProcessing: async () => {
     const state = get();
 
+    // 1. Abort HTTP polling
     if (state.abortController) {
       state.abortController.abort();
       set({ abortController: null });
     }
 
+    // 2. Call backend to cancel task
+    const conversationId = state.conversationId;
+    if (conversationId) {
+      try {
+        await apiFetch(`http://localhost:8000/api/agent/cancel/${conversationId}`, {
+          method: 'POST',
+        });
+        console.log('[Cancel] Backend task cancelled');
+      } catch (e) {
+        console.warn('[Cancel] Failed to cancel backend task:', e);
+      }
+    }
+
+    // 3. Reset UI state
     set({
       isProcessing: false,
       processingStage: 'idle',
       processingStatus: null,
-          actionStatuses: new Map()
+      actionStatuses: new Map()
     });
 
-    // Mark streaming messages as complete
+    // 4. Mark streaming messages as complete
     set((state) => {
       const messages = [...state.messages];
       const lastMsg = messages[messages.length - 1];

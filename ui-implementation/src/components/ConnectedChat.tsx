@@ -6,7 +6,6 @@ import { useSplitPane } from '../hooks/useSplitPane';
 import { ROAMPAL_CONFIG } from '../config/roampal';
 import { ChatBubbleLeftRightIcon, CircleStackIcon } from '@heroicons/react/24/outline';
 import { Sidebar } from './Sidebar';
-import { ContextBar } from './ContextBar';
 import MemoryPanelV2 from './MemoryPanelV2';
 import DevPanel from './DevPanel';
 import { TerminalMessageThread } from './TerminalMessageThread';
@@ -1386,19 +1385,7 @@ export const ConnectedChat: React.FC = () => {
     relationships: activeMemories.length * 7,
     activeTopics: ['loopsmith'],
   };
-  
-  // Mock references (from citations with URLs)
-  const references = messages
-    .flatMap(m => m.citations || [])
-    .filter(c => c.url)
-    .map(c => ({
-      id: c.id,
-      title: c.title || 'Reference',
-      url: c.url,
-      snippet: c.snippet || '',
-      timestamp: new Date(),
-    }));
-  
+
   const handleShardChange = async (shard: string) => {
     // TODO: Implement shard switching
     console.log('Shard change:', shard);

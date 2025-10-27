@@ -305,3 +305,135 @@ async def get_memory_stats(request: Request):
     except Exception as e:
         logger.error(f"Error getting memory stats: {e}", exc_info=True)
         raise HTTPException(500, f"Failed to get memory stats: {str(e)}")
+
+
+@router.post("/create")
+async def create_memory(
+    request: Request,
+    memory_data: MemoryCreate
+):
+    """
+    Create a new memory in memory_bank.
+    Used by MCP bridge and external tools.
+
+    Args:
+        memory_data: Memory content, tags, importance, confidence
+
+    Returns:
+        Created memory ID
+    """
+    memory = request.app.state.memory
+    if not memory:
+        raise HTTPException(503, "Memory system not available")
+
+    try:
+        doc_id = await memory.store_memory_bank(
+            text=memory_data.text,
+            tags=memory_data.tags,
+            importance=memory_data.importance,
+            confidence=memory_data.confidence
+        )
+
+        return {
+            "status": "created",
+            "doc_id": doc_id,
+            "text": memory_data.text
+        }
+
+    except ValueError as e:
+        # Capacity errors
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Error creating memory: {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to create memory: {str(e)}")
+
+
+@router.put("/update/{doc_id}")
+async def update_memory(
+    request: Request,
+    doc_id: str,
+    memory_data: MemoryUpdate
+):
+    """
+    Update an existing memory in memory_bank.
+    Old version is automatically archived.
+    Used by MCP bridge and external tools.
+
+    Args:
+        doc_id: Memory ID to update
+        memory_data: New text and optional metadata
+
+    Returns:
+        Updated memory ID
+    """
+    memory = request.app.state.memory
+    if not memory:
+        raise HTTPException(503, "Memory system not available")
+
+    try:
+        updated_id = await memory.update_memory_bank(
+            doc_id=doc_id,
+            new_text=memory_data.text,
+            reason="api_update"
+        )
+
+        # Update tags/importance if provided
+        if memory_data.tags is not None or memory_data.importance is not None:
+            doc = memory.collections["memory_bank"].get_fragment(updated_id)
+            if doc:
+                metadata = doc.get("metadata", {})
+                if memory_data.tags is not None:
+                    metadata["tags"] = json.dumps(memory_data.tags)
+                if memory_data.importance is not None:
+                    metadata["importance"] = memory_data.importance
+                memory.collections["memory_bank"].update_fragment_metadata(updated_id, metadata)
+
+        return {
+            "status": "updated",
+            "doc_id": updated_id,
+            "text": memory_data.text
+        }
+
+    except Exception as e:
+        logger.error(f"Error updating memory: {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to update memory: {str(e)}")
+
+
+@router.post("/archive/{doc_id}")
+async def archive_memory(
+    request: Request,
+    doc_id: str
+):
+    """
+    Archive a memory (soft delete).
+    Used by MCP bridge and external tools.
+
+    Args:
+        doc_id: Memory ID to archive
+
+    Returns:
+        Success status
+    """
+    memory = request.app.state.memory
+    if not memory:
+        raise HTTPException(503, "Memory system not available")
+
+    try:
+        success = await memory.archive_memory_bank(
+            doc_id=doc_id,
+            reason="api_archive"
+        )
+
+        if not success:
+            raise HTTPException(404, "Memory not found")
+
+        return {
+            "status": "archived",
+            "doc_id": doc_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error archiving memory: {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to archive memory: {str(e)}")
