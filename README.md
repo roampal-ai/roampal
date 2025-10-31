@@ -3,7 +3,7 @@
 [![Status](https://img.shields.io/badge/status-alpha-orange)](https://roampal.ai)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri-FFC131?logo=tauri)](https://tauri.app/)
-[![Powered by Ollama](https://img.shields.io/badge/Powered%20by-Ollama-000000)](https://ollama.ai)
+[![Multi-Provider](https://img.shields.io/badge/LLM-Ollama%20%7C%20LM%20Studio-blue)](https://roampal.ai)
 
 **AI that grows with you.**
 
@@ -97,12 +97,10 @@ Think of it as your personal AI that compounds in value the longer you use it.
 
 ### Model Licensing Notice
 
-**Ollama models have separate licenses:**
-- Llama models (Meta): [Llama License Agreement](https://ai.meta.com/llama/license/)
-- Qwen models (Alibaba): Check [Ollama Library](https://ollama.com/library) for details
-- Other models: Check [Ollama Library](https://ollama.com/library) for individual licenses
-
-**Models you download have their own terms of use.**
+**Downloaded models have separate licenses:**
+- **Ollama models**: Llama (Meta - [License](https://ai.meta.com/llama/license/)), Qwen (Alibaba), etc. - Check [Ollama Library](https://ollama.com/library)
+- **LM Studio models**: GGUF format from Hugging Face - Check individual model cards for licenses
+- Models you download have their own terms of use - review before commercial use
 
 ---
 
@@ -121,11 +119,23 @@ Think of it as your personal AI that compounds in value the longer you use it.
 
 **Quick start:**
 1. [Download from roampal.ai](https://roampal.ai) and extract
-2. Install [Ollama](https://ollama.ai)
+2. Install an LLM provider:
+   - **Ollama** ([ollama.com](https://ollama.com)) - Recommended for beginners
+   - **LM Studio** ([lmstudio.ai](https://lmstudio.ai)) - Advanced users with GUI preferences
 3. Right-click `Roampal.exe` → **Run as administrator** (Windows requires this to avoid permission issues)
-4. Download your first model in the UI
+4. Download your first model in the UI (Roampal handles the rest!)
 
 Your AI will start learning about you immediately.
+
+### Updating Roampal
+
+**To update to a new version:**
+1. Download the latest release and extract it
+2. Close Roampal if it's running
+3. Replace your old Roampal folder with the new one
+4. Run `Roampal.exe` - all your data is preserved!
+
+**Your data is safe** - All conversations, memories, settings, and downloaded models are stored in AppData and remain intact across updates. Simply overwrite the program files and you're good to go.
 
 ## Architecture
 

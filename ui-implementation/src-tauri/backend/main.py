@@ -47,6 +47,7 @@ from config.settings import DATA_PATH
 # API routers - Clean architecture with single agent router
 from app.routers.agent_chat import router as agent_router
 from app.routers.model_switcher import router as model_switcher_router
+from app.routers.model_registry import router as model_registry_router
 from app.routers.model_contexts import router as model_contexts_router
 from app.routers.memory_visualization_enhanced import router as memory_enhanced_router
 from app.routers.sessions import router as sessions_router
@@ -196,120 +197,96 @@ async def lifespan(app: FastAPI):
                 logger.warning("⚠️  - Install Ollama from https://ollama.com to enable AI features")
                 app.state.embedding_service = None
 
-        # Initialize LLM client with smart model selection
-        import subprocess
+        # ==================== MULTI-PROVIDER LLM INITIALIZATION ====================
+        logger.info("🔍 Detecting available LLM providers...")
 
-        # Priority: ROAMPAL_LLM_OLLAMA_MODEL > ROAMPAL_LLM_OLLAMA_MODEL (backward compat) > OLLAMA_MODEL
-        configured_model = (
-            os.getenv("ROAMPAL_LLM_OLLAMA_MODEL") or    # From .env file (preferred)
-            os.getenv("ROAMPAL_LLM_OLLAMA_MODEL") or  # Backward compatibility
-            os.getenv("OLLAMA_MODEL")                   # Fallback to OLLAMA_MODEL
-        )
+        from app.routers.model_switcher import PROVIDERS, detect_provider, get_provider_models
 
-        # Verify the model exists, fallback if necessary
-        model_name = configured_model
-        available_models = []
+        # Detect all running providers
+        detected_providers = {}
+        for provider_name, provider_config in PROVIDERS.items():
+            provider_info = await detect_provider(provider_name, provider_config)
+            if provider_info:
+                models = await get_provider_models(provider_name, provider_config)
+                provider_info['models'] = models
+                detected_providers[provider_name] = provider_info
+                logger.info(f"✓ Detected {provider_name} on port {provider_config['port']} with {len(models)} models")
 
-        try:
-            # Get list of available models from Ollama
-            result = subprocess.run(
-                ["ollama", "list"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-
-            if result.returncode == 0:
-                lines = result.stdout.strip().split('\n')[1:]  # Skip header
-                for line in lines:
-                    if line.strip():
-                        parts = line.split()
-                        if parts:
-                            available_models.append(parts[0])
-
-                # Check if configured model exists
-                if configured_model and configured_model not in available_models:
-                    logger.warning(f"⚠️  Configured model '{configured_model}' not found in Ollama")
-
-                    # Use first available model (truly modular - no preferences)
-                    if available_models:
-                        fallback_model = available_models[0]
-
-                    if fallback_model:
-                        logger.info(f"✓ Automatically switching to available model: {fallback_model}")
-                        model_name = fallback_model
-
-                        # Update .env file with the working model
-                        env_path = Path("./").resolve() / '.env'
-                        if env_path.exists():
-                            lines = env_path.read_text().splitlines()
-                            updated = False
-                            for i, line in enumerate(lines):
-                                if line.startswith('ROAMPAL_LLM_OLLAMA_MODEL='):
-                                    lines[i] = f'ROAMPAL_LLM_OLLAMA_MODEL={model_name}'
-                                    updated = True
-                                elif line.startswith('ROAMPAL_LLM_OLLAMA_MODEL='):
-                                    lines[i] = f'ROAMPAL_LLM_OLLAMA_MODEL={model_name}'
-                                    updated = True
-                                elif line.startswith('OLLAMA_MODEL=') and not updated:
-                                    lines[i] = f'OLLAMA_MODEL={model_name}'
-
-                            # If doesn't exist, add ROAMPAL_LLM_OLLAMA_MODEL
-                            if not any(line.startswith('ROAMPAL_LLM_OLLAMA_MODEL=') for line in lines):
-                                # Find where to insert (after OLLAMA_MODEL or at end of Ollama section)
-                                insert_pos = len(lines)
-                                for i, line in enumerate(lines):
-                                    if line.startswith('OLLAMA_MODEL='):
-                                        insert_pos = i + 1
-                                        break
-                                    elif line.startswith('# ChromaDB'):  # Next section
-                                        insert_pos = i - 1
-                                        break
-                                lines.insert(insert_pos, f'ROAMPAL_LLM_OLLAMA_MODEL={model_name}')
-
-                            env_path.write_text('\n'.join(lines) + '\n')
-                            logger.info(f"✓ Updated .env file with working model: {model_name}")
-                    else:
-                        logger.warning("⚠️  No models available - starting in setup mode")
-                        logger.warning("   Users will be prompted to download via UI")
-                        model_name = None  # Allow startup without model
-
-                elif not configured_model:
-                    # No model configured, pick best available
-                    if available_models:
-                        # Try to pick a good default
-                        # Pick first available model (no preferences - truly modular)
-                        model_name = available_models[0]
-                        logger.info(f"✓ No model configured, using: {model_name}")
-
-                        # Save to .env for next time
-                        env_path = Path("./").resolve() / '.env'
-                        if env_path.exists():
-                            with open(env_path, 'a') as f:
-                                f.write(f"\nROAMPAL_LLM_OLLAMA_MODEL={model_name}\n")
-                    else:
-                        raise ValueError("No models available and none configured")
-
-        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-            logger.warning(f"⚠️  Ollama not reachable: {e}")
-            logger.warning("   Starting in setup mode - user will be prompted to install Ollama via UI")
-            model_name = None  # Allow startup without Ollama
-
-        # Check if model is configured
-        if not model_name:
-            logger.warning("⚠️  No LLM model available - starting in setup mode")
-            logger.warning("   User will be prompted to install Ollama and download a model via UI")
-            app.state.llm_client = None  # No LLM client - will be initialized when user installs
+        if not detected_providers:
+            logger.warning("⚠️  No LLM providers detected")
+            port_list = ', '.join([f"{name}:{cfg['port']}" for name, cfg in PROVIDERS.items()])
+            logger.warning(f"   Checked ports: {port_list}")
+            logger.warning("   Starting in setup mode - user will be prompted to install a provider")
+            app.state.llm_client = None
         else:
-            # Debug log to see what's happening
-            logger.info(f"Model selection - Configured: {configured_model}, Available: {len(available_models)}, Selected: {model_name}")
+            # Select provider (priority: configured > first available)
+            configured_provider = os.getenv('ROAMPAL_LLM_PROVIDER', 'ollama')
 
-            app.state.llm_client = OllamaClient()
-            await app.state.llm_client.initialize({
-                "ollama_base_url": os.getenv("OLLAMA_HOST", "http://localhost:11434"),
-                "ollama_model": model_name
-            })
-            logger.info(f"✓ LLM client initialized with model: {app.state.llm_client.model_name}")
+            if configured_provider in detected_providers:
+                active_provider = configured_provider
+                logger.info(f"✓ Using configured provider: {active_provider}")
+            else:
+                active_provider = list(detected_providers.keys())[0]
+                logger.info(f"✓ Configured provider '{configured_provider}' not available, using: {active_provider}")
+
+            # Select model from active provider
+            available_models = detected_providers[active_provider]['models']
+            configured_model = os.getenv('ROAMPAL_LLM_OLLAMA_MODEL') or os.getenv('OLLAMA_MODEL')
+
+            if configured_model and configured_model in available_models:
+                selected_model = configured_model
+                logger.info(f"✓ Using configured model: {selected_model}")
+            elif available_models:
+                selected_model = available_models[0]
+                logger.info(f"✓ Using first available model: {selected_model}")
+            else:
+                # Active provider has no models - try other providers
+                logger.warning(f"⚠️  Provider {active_provider} has no models - checking other providers")
+                selected_model = None
+                for other_provider, other_info in detected_providers.items():
+                    if other_provider != active_provider and other_info['models']:
+                        active_provider = other_provider
+                        available_models = other_info['models']
+                        selected_model = available_models[0]
+                        logger.info(f"✓ Switched to {active_provider} - using first model: {selected_model}")
+                        break
+
+                if not selected_model:
+                    logger.warning(f"⚠️  No models found in ANY provider")
+                    app.state.llm_client = None
+
+            # Initialize LLM client with selected provider
+            if selected_model:
+                provider_config = PROVIDERS[active_provider]
+                base_url = f"http://localhost:{provider_config['port']}"
+
+                from modules.llm.ollama_client import OllamaClient
+                app.state.llm_client = OllamaClient()
+                app.state.llm_client.base_url = base_url
+                app.state.llm_client.model_name = selected_model
+                app.state.llm_client.api_style = provider_config['api_style']
+
+                await app.state.llm_client.initialize({
+                    "ollama_base_url": base_url,
+                    "ollama_model": selected_model
+                })
+
+                # Reinitialize httpx client with new base URL (CRITICAL for requests to work)
+                if hasattr(app.state.llm_client, '_recycle_client'):
+                    await app.state.llm_client._recycle_client()
+
+                logger.info(f"✓ LLM initialized: {active_provider}:{selected_model} (API: {provider_config['api_style']})")
+
+                # Save preferences
+                os.environ['ROAMPAL_LLM_PROVIDER'] = active_provider
+                os.environ['OLLAMA_MODEL'] = selected_model
+                os.environ['ROAMPAL_LLM_OLLAMA_MODEL'] = selected_model
+            else:
+                app.state.llm_client = None
+
+        # Store detected providers for API access
+        app.state.detected_providers = detected_providers
+        # ==================== END MULTI-PROVIDER INITIALIZATION ====================
 
         # Inject LLM service into memory system for outcome detection
         if app.state.memory and app.state.llm_client:
@@ -490,6 +467,7 @@ app.include_router(agent_router, prefix="/api/chat", tags=["chat"])  # Compatibi
 
 # Supporting routers
 app.include_router(model_switcher_router, prefix="/api/model", tags=["model-switch"])  # Runtime model switching & installation
+app.include_router(model_registry_router)  # Unified model registry (uses /api/model prefix internally)
 app.include_router(model_contexts_router)  # Model context window management (uses /api/model prefix internally)
 app.include_router(memory_enhanced_router, prefix="/api/memory", tags=["memory"])  # Memory visualization
 app.include_router(memory_bank_router)  # Memory bank (5th collection) - user control over persistent memories

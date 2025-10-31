@@ -69,19 +69,35 @@ export const ConnectedChat: React.FC = () => {
     const savedModel = localStorage.getItem('selectedLLMModel');
     return savedModel || '';
   });
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [availableModels, setAvailableModels] = useState<Array<{name: string, provider: string}>>([]);
+  const [installedModelsMetadata, setInstalledModelsMetadata] = useState<Array<any>>([]);
   const [isSwitchingModel, setIsSwitchingModel] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [showProviderDropdown, setShowProviderDropdown] = useState(false);
   const [showModelInstallModal, setShowModelInstallModal] = useState(false);
   const [installingModelName, setInstallingModelName] = useState<string | null>(null);
+  const [installingProvider, setInstallingProvider] = useState<'ollama' | 'lmstudio' | null>(null);
   const [installProgress, setInstallProgress] = useState('');
   const [showInstallPopup, setShowInstallPopup] = useState(false);
   const [showBookProcessor, setShowBookProcessor] = useState(false);
-  const [uninstallConfirmModel, setUninstallConfirmModel] = useState<string | null>(null);
+  const [uninstallConfirmModel, setUninstallConfirmModel] = useState<{name: string, provider: 'ollama' | 'lmstudio'} | null>(null);
   const [showCancelDownloadConfirm, setShowCancelDownloadConfirm] = useState(false);
   const [modelSwitchPending, setModelSwitchPending] = useState<string | null>(null);
+  const [providerSwitchPending, setProviderSwitchPending] = useState<'ollama' | 'lmstudio' | null>(null);
   const hasLoadedModels = useRef(false);
   const [showOllamaRequired, setShowOllamaRequired] = useState(false);
+
+  // Multi-provider state
+  const [selectedProvider, setSelectedProvider] = useState<'ollama' | 'lmstudio'>(() => {
+    const saved = localStorage.getItem('selectedProvider');
+    return (saved === 'lmstudio' ? 'lmstudio' : 'ollama') as 'ollama' | 'lmstudio';
+  });
+  // Separate state for Model Library view (which models to display)
+  const [viewProvider, setViewProvider] = useState<'ollama' | 'lmstudio'>(() => {
+    const saved = localStorage.getItem('selectedProvider');
+    return (saved === 'lmstudio' ? 'lmstudio' : 'ollama') as 'ollama' | 'lmstudio';
+  });
+  const [availableProviders, setAvailableProviders] = useState<Array<{name: string, available: boolean}>>([]);
 
   // Check if Ollama is available
   const checkOllamaStatus = async () => {
@@ -112,16 +128,64 @@ export const ConnectedChat: React.FC = () => {
     return false;
   };
 
+  // Detect available providers
+  const fetchProviders = async () => {
+    try {
+      const [ollamaRes, lmstudioRes] = await Promise.all([
+        apiFetch('http://localhost:8000/api/model/ollama/status').catch(() => null),
+        apiFetch('http://localhost:8000/api/model/lmstudio/status').catch(() => null)
+      ]);
+
+      const providers = [];
+      if (ollamaRes?.ok) {
+        const data = await ollamaRes.json();
+        providers.push({ name: 'ollama', available: data.available });
+      } else {
+        providers.push({ name: 'ollama', available: false });
+      }
+
+      if (lmstudioRes?.ok) {
+        const data = await lmstudioRes.json();
+        providers.push({ name: 'lmstudio', available: data.available });
+      } else {
+        providers.push({ name: 'lmstudio', available: false });
+      }
+
+      setAvailableProviders(providers);
+    } catch (error) {
+      console.error('[Providers] Error fetching providers:', error);
+    }
+  };
+
   // Fetch available models on mount
+  // Fetch registry metadata for installed models
+  const fetchRegistryMetadata = async () => {
+    try {
+      const response = await apiFetch('http://localhost:8000/api/model/registry?tool_capable_only=true');
+      if (response.ok) {
+        const data = await response.json();
+        setInstalledModelsMetadata(data.models || []);
+      }
+    } catch (error) {
+      console.error('[Registry] Error fetching model registry:', error);
+    }
+  };
+
   const fetchModels = async () => {
     try {
       const response = await apiFetch('http://localhost:8000/api/model/available');
       if (response.ok) {
         const data = await response.json();
-        // Extract just the model names from the objects
-        const modelNames = data.models ? data.models.map((m: any) => m.name) : [];
-        setAvailableModels(modelNames);
+        // Store models with provider info for accurate "Installed" detection
+        const modelsWithProvider = data.models ? data.models.map((m: any) => ({
+          name: m.name,
+          provider: m.provider
+        })) : [];
+        setAvailableModels(modelsWithProvider);
         hasLoadedModels.current = true;
+
+        // Also fetch registry metadata for installed models
+        await fetchRegistryMetadata();
       }
     } catch (error) {
       console.error('[Models] Error fetching models:', error);
@@ -139,9 +203,17 @@ export const ConnectedChat: React.FC = () => {
   };
   
   useEffect(() => {
+    fetchProviders();
     fetchModels();
     // Also fetch current model from backend
     fetchCurrentModel();
+
+    // Poll provider status every 10 seconds to auto-detect when servers start/stop
+    const interval = setInterval(() => {
+      fetchProviders();
+    }, 10000);
+
+    return () => clearInterval(interval);
   }, []);
 
   // Auto-open Model Manager only on true first run (after models are loaded and still empty)
@@ -168,7 +240,30 @@ export const ConnectedChat: React.FC = () => {
             setSelectedModel(data.current_model);
             localStorage.setItem('selectedLLMModel', data.current_model);
           }
+        } else {
+          // Backend returned null/undefined current_model (model was deleted or doesn't exist)
+          // Find first available model from availableModels to switch to
+          console.log('[Models] Backend has no current model, finding first available...');
+          const nonLLMs = ['llava', 'nomic-embed', 'bge-', 'all-minilm', 'mxbai-embed'];
+          const chatModels = availableModels.filter((m: any) =>
+            !nonLLMs.some(excluded => m.name.toLowerCase().includes(excluded))
+          );
+
+          if (chatModels.length > 0) {
+            const firstModel = chatModels[0];
+            console.log(`[Models] Auto-selecting first available model: ${firstModel.name} (${firstModel.provider})`);
+            // Switch to it on backend
+            await performModelSwitch(firstModel.name);
+          }
         }
+
+        // Sync provider from backend (source of truth)
+        if (data.provider) {
+          console.log('[Provider Sync] Backend provider:', data.provider);
+          setSelectedProvider(data.provider);
+          localStorage.setItem('selectedProvider', data.provider);
+        }
+
         return data;
       }
     } catch (error) {
@@ -178,19 +273,28 @@ export const ConnectedChat: React.FC = () => {
   };
 
   // Function to switch model on backend
-  const switchModel = async (modelName: string) => {
+  const switchModel = async (modelName: string, newProvider?: 'ollama' | 'lmstudio'): Promise<boolean> => {
     // Warn if switching mid-conversation
     if (messages.length > 0) {
       setModelSwitchPending(modelName);
-      return;
+      if (newProvider) {
+        setProviderSwitchPending(newProvider);
+      }
+      return false; // User needs to confirm, didn't switch yet
     }
 
     // No conversation, proceed immediately
-    performModelSwitch(modelName);
+    const success = await performModelSwitch(modelName);
+    if (success && newProvider) {
+      setSelectedProvider(newProvider);
+      localStorage.setItem('selectedProvider', newProvider);
+      fetchModels();
+    }
+    return success;
   };
 
   // Actually perform the model switch
-  const performModelSwitch = async (modelName: string) => {
+  const performModelSwitch = async (modelName: string): Promise<boolean> => {
     setIsSwitchingModel(true);
     try {
       const response = await apiFetch('http://localhost:8000/api/model/switch', {
@@ -208,12 +312,16 @@ export const ConnectedChat: React.FC = () => {
         // Dispatch custom event for model change
         window.dispatchEvent(new CustomEvent('modelChanged', { detail: { model: modelName } }));
 
+        // Sync provider state from backend after switch
+        await fetchCurrentModel();
+
         // Show success message
         const successMsg = document.createElement('div');
         successMsg.className = 'fixed top-4 right-4 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg z-50';
         successMsg.textContent = `Switched to ${modelName}`;
         document.body.appendChild(successMsg);
         setTimeout(() => successMsg.remove(), 3000);
+        return true; // Success
       } else {
         throw new Error('Failed to switch model');
       }
@@ -225,6 +333,7 @@ export const ConnectedChat: React.FC = () => {
       errorMsg.textContent = 'Failed to switch model';
       document.body.appendChild(errorMsg);
       setTimeout(() => errorMsg.remove(), 3000);
+      return false; // Failed
     } finally {
       setIsSwitchingModel(false);
     }
@@ -382,6 +491,7 @@ export const ConnectedChat: React.FC = () => {
 
   const handleInstallModel = async (modelName: string) => {
     setInstallingModelName(modelName);
+    setInstallingProvider(viewProvider); // Use viewProvider (which tab user is on) not selectedProvider (active model)
     setShowInstallPopup(true);
     setInstallProgress(`Initializing download for ${modelName}...`);
     setDownloadProgress(0);
@@ -439,7 +549,7 @@ export const ConnectedChat: React.FC = () => {
               } else {
                 setInstallProgress(data.message || `Downloading ${modelName}...`);
               }
-            } else if (data.type === 'complete') {
+            } else if (data.type === 'complete' || data.type === 'loaded') {
               setDownloadProgress(100);
               setInstallProgress(`✓ ${modelName} installed successfully`);
               fetchModels().then(() => {
@@ -454,7 +564,9 @@ export const ConnectedChat: React.FC = () => {
 
                     if (backendHasNoChatModel) {
                       // First chat model - auto-switch
-                      performModelSwitch(modelName);
+                      // Use data.model if provided (LM Studio returns actual model ID), otherwise use modelName
+                      const modelIdToSwitch = data.model || modelName;
+                      performModelSwitch(modelIdToSwitch);
                     }
                     // Else: subsequent install - toast already shows success, user switches manually
                   });
@@ -463,6 +575,7 @@ export const ConnectedChat: React.FC = () => {
                 setTimeout(() => {
                   setShowInstallPopup(false);
                   setInstallingModelName(null);
+                  setInstallingProvider(null);
                   setInstallProgress('');
                   setDownloadProgress(0);
                   setDownloadDetails({ downloaded: '', total: '', speed: '' });
@@ -474,6 +587,7 @@ export const ConnectedChat: React.FC = () => {
               setInstallProgress(`❌ ${data.message}`);
               setDownloadProgress(0);
               setInstallingModelName(null);
+              setInstallingProvider(null);
               setDownloadAbortController(null);
               wsCleanup();
               // Show error for 5 seconds then clear
@@ -506,12 +620,8 @@ export const ConnectedChat: React.FC = () => {
           console.error('WebSocket state:', ws.readyState);
           setInstallProgress(`❌ Connection error. Please check if backend is running on port 8000.`);
           setDownloadProgress(0);
-          setTimeout(() => {
-            setShowInstallPopup(false);
-            setInstallingModelName(null);
-            setInstallProgress('');
-            setDownloadAbortController(null);
-          }, 3000);
+          // Keep popup open so user can see error and manually close
+          setDownloadAbortController(null);
         };
 
         ws.onclose = (event) => {
@@ -535,7 +645,16 @@ export const ConnectedChat: React.FC = () => {
 
       // Use SSE for dev mode (original implementation)
       console.log('[Model Install] Using SSE for development mode');
-      const response = await apiFetch('http://localhost:8000/api/model/pull-stream', {
+
+      // Route to correct endpoint based on which provider tab user is viewing
+      // (NOT selectedProvider - that's the active model, viewProvider is which library tab they're on)
+      const endpoint = viewProvider === 'lmstudio'
+        ? 'http://localhost:8000/api/model/download-gguf-stream'
+        : 'http://localhost:8000/api/model/pull-stream';
+
+      console.log(`[Model Install] View Provider: ${viewProvider}, Endpoint: ${endpoint}`);
+
+      const response = await apiFetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -565,6 +684,7 @@ export const ConnectedChat: React.FC = () => {
           setTimeout(() => {
             setShowInstallPopup(false);
             setInstallingModelName(null);
+            setInstallingProvider(null);
             setInstallProgress('');
           }, 2000);
         }
@@ -599,7 +719,7 @@ export const ConnectedChat: React.FC = () => {
                   } else {
                     setInstallProgress(data.message || `Downloading ${modelName}...`);
                   }
-                } else if (data.type === 'complete') {
+                } else if (data.type === 'complete' || data.type === 'loaded') {
                   setDownloadProgress(100);
                   setInstallProgress(`✓ ${modelName} installed successfully`);
                   await fetchModels(); // Refresh model list
@@ -615,7 +735,9 @@ export const ConnectedChat: React.FC = () => {
 
                     if (backendHasNoChatModel) {
                       // First chat model - auto-switch
-                      await performModelSwitch(modelName);
+                      // Use data.model if provided (LM Studio returns actual model ID), otherwise use modelName
+                      const modelIdToSwitch = data.model || modelName;
+                      await performModelSwitch(modelIdToSwitch);
                     }
                     // Else: subsequent install - toast already shows success, user switches manually
                   }
@@ -623,6 +745,7 @@ export const ConnectedChat: React.FC = () => {
                   setTimeout(() => {
                     setShowInstallPopup(false);
                     setInstallingModelName(null);
+                    setInstallingProvider(null);
                     setInstallProgress('');
                     setDownloadProgress(0);
                     setDownloadDetails({ downloaded: '', total: '', speed: '' });
@@ -632,6 +755,7 @@ export const ConnectedChat: React.FC = () => {
                   setInstallProgress(`❌ ${data.message}`);
                   setDownloadProgress(0);
                   setInstallingModelName(null);
+                  setInstallingProvider(null);
                   setDownloadAbortController(null);
                   // Show error for 5 seconds then clear
                   setTimeout(() => {
@@ -656,6 +780,7 @@ export const ConnectedChat: React.FC = () => {
       setDownloadProgress(0);
       setTimeout(() => {
         setInstallingModelName(null);
+        setInstallingProvider(null);
         setShowInstallPopup(false);
         setInstallProgress('');
         setDownloadDetails({ downloaded: '', total: '', speed: '' });
@@ -665,25 +790,32 @@ export const ConnectedChat: React.FC = () => {
   };
   
   // Handle model uninstallation - show confirmation modal
-  const handleUninstallModel = (modelName: string) => {
-    setUninstallConfirmModel(modelName);
+  const handleUninstallModel = (modelName: string, provider: 'ollama' | 'lmstudio') => {
+    setUninstallConfirmModel({name: modelName, provider});
   };
 
   // Confirm and execute uninstall
   const confirmUninstall = async () => {
     if (!uninstallConfirmModel) return;
 
-    const modelName = uninstallConfirmModel;
+    const { name: modelName, provider } = uninstallConfirmModel;
     setUninstallConfirmModel(null); // Close modal
 
     try {
-      const response = await apiFetch(`http://localhost:8000/api/model/uninstall/${encodeURIComponent(modelName)}`, {
+      const response = await apiFetch(`http://localhost:8000/api/model/uninstall/${encodeURIComponent(modelName)}?provider_hint=${provider}`, {
         method: 'DELETE',
       });
 
       const data = await response.json();
 
       if (data.success) {
+        // Show success toast in top-right corner
+        const successMsg = document.createElement('div');
+        successMsg.className = 'fixed top-4 right-4 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+        successMsg.textContent = `✓ Successfully uninstalled ${modelName}`;
+        document.body.appendChild(successMsg);
+        setTimeout(() => successMsg.remove(), 3000);
+
         await fetchModels(); // Refresh model list
         if (selectedModel === modelName) {
           // If we're uninstalling the selected model, switch to default
@@ -691,21 +823,46 @@ export const ConnectedChat: React.FC = () => {
           fetchCurrentModel();
         }
       } else {
-        alert(`Failed to uninstall ${modelName}: ${data.error}`);
+        // Show error toast in top-right corner
+        const errorMsg = document.createElement('div');
+        errorMsg.className = 'fixed top-4 right-4 bg-red-600 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+        errorMsg.textContent = `❌ Failed to uninstall ${modelName}: ${data.error || 'Unknown error'}`;
+        document.body.appendChild(errorMsg);
+        setTimeout(() => errorMsg.remove(), 5000);
       }
     } catch (error) {
-      alert(`Error uninstalling ${modelName}: ${error}`);
+      // Show error toast in top-right corner
+      const errorMsg = document.createElement('div');
+      errorMsg.className = 'fixed top-4 right-4 bg-red-600 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+      errorMsg.textContent = `❌ Error uninstalling ${modelName}: ${error}`;
+      document.body.appendChild(errorMsg);
+      setTimeout(() => errorMsg.remove(), 5000);
     }
   };
 
   // Confirm and execute download cancellation
-  const confirmCancelDownload = () => {
+  const confirmCancelDownload = async () => {
     setShowCancelDownloadConfirm(false);
+
+    // Call backend to cancel the download
+    if (installingModelName && installingProvider) {
+      try {
+        await apiFetch('http://localhost:8000/api/model/cancel-download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: installingModelName }),
+        });
+      } catch (error) {
+        console.error('[Cancel Download] Failed to notify backend:', error);
+      }
+    }
+
     if (downloadAbortController) {
       downloadAbortController.abort();
       setDownloadAbortController(null);
       setShowInstallPopup(false);
       setInstallingModelName(null);
+      setInstallingProvider(null);
       setInstallProgress('');
     }
   };
@@ -713,8 +870,21 @@ export const ConnectedChat: React.FC = () => {
   // Confirm and execute model switch
   const confirmModelSwitch = () => {
     if (modelSwitchPending) {
-      performModelSwitch(modelSwitchPending);
+      const modelToSwitch = modelSwitchPending;
+      const providerToSwitch = providerSwitchPending;
+
+      // Clear pending states and close dialog immediately
       setModelSwitchPending(null);
+      setProviderSwitchPending(null);
+
+      // Perform switch in background (non-blocking)
+      performModelSwitch(modelToSwitch).then(success => {
+        if (success && providerToSwitch) {
+          setSelectedProvider(providerToSwitch);
+          localStorage.setItem('selectedProvider', providerToSwitch);
+          fetchModels();
+        }
+      });
     }
   };
   
@@ -838,27 +1008,34 @@ export const ConnectedChat: React.FC = () => {
     
     // Filter out non-LLM models (embedding, vision, etc.)
     const nonLLMs = ['llava', 'nomic-embed', 'bge-', 'all-minilm', 'mxbai-embed'];
+
+    // Filter by selected provider AND exclude non-LLMs
     const filteredModels = availableModels.filter(model =>
-      !nonLLMs.some(excluded => model.toLowerCase().includes(excluded))
+      model.provider === selectedProvider &&
+      !nonLLMs.some(excluded => model.name.toLowerCase().includes(excluded))
     );
 
     return filteredModels.map(model => {
-      const isAgentCapable = MODEL_TOKEN_LIMITS[model] && MODEL_TOKEN_LIMITS[model] >= 12000;
-      const baseDescription = modelDescriptions[model] || 'Custom model';
+      const modelName = model.name;
+      const isAgentCapable = MODEL_TOKEN_LIMITS[modelName] && MODEL_TOKEN_LIMITS[modelName] >= 12000;
+      const baseDescription = modelDescriptions[modelName] || 'Custom model';
 
       return {
-        value: model,
-        label: model.split(':')[0].replace(/-/g, ' '),
+        value: modelName,
+        label: modelName.split(':')[0].replace(/-/g, ' '),
         description: baseDescription,
         agentCapable: isAgentCapable
       };
     });
   };
 
-  // Check if chat model is available
+  // Check if chat model is available (from ANY provider, not just selected one)
   const hasChatModel = React.useMemo(() => {
-    const options = getModelOptions();
-    return options.length > 0;
+    const nonLLMs = ['llava', 'nomic-embed', 'bge-', 'all-minilm', 'mxbai-embed'];
+    const chatModels = availableModels.filter(m =>
+      !nonLLMs.some(excluded => m.name.toLowerCase().includes(excluded))
+    );
+    return chatModels.length > 0;
   }, [availableModels]);
 
   // Get processing state
@@ -1556,12 +1733,89 @@ export const ConnectedChat: React.FC = () => {
               )}
             </div>
             
-            {/* Model Selector - Compact Combo */}
+            {/* Provider & Model Selectors */}
             <div className="flex items-center gap-2">
+              {/* Provider Selector - only show when both providers have models installed */}
+              {availableProviders.filter(p => p.available).length > 1 &&
+               availableModels.some(m => m.provider === 'ollama') &&
+               availableModels.some(m => m.provider === 'lmstudio') && (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowProviderDropdown(!showProviderDropdown)}
+                    className="flex items-center gap-1 px-2 py-1 text-xs bg-zinc-800/50 hover:bg-zinc-700/50 border border-zinc-700/50 hover:border-zinc-600 rounded-lg transition-all focus:outline-none focus:ring-1 focus:ring-zinc-500/30 text-zinc-300"
+                  >
+                    <span>{selectedProvider === 'ollama' ? 'Ollama' : 'LM Studio'}</span>
+                    <svg className={`w-3 h-3 text-zinc-500 transition-transform ${showProviderDropdown ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+
+                  {showProviderDropdown && (
+                    <div className="absolute top-full mt-1 left-0 w-full bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl z-50 overflow-hidden">
+                      <button
+                        onClick={() => {
+                          if (selectedProvider === 'ollama') {
+                            setShowProviderDropdown(false);
+                            return;
+                          }
+                          const providerModels = availableModels.filter(m => m.provider === 'ollama');
+                          if (providerModels.length === 0) {
+                            alert('No Ollama models installed. Please install a model first.');
+                            setShowProviderDropdown(false);
+                            return;
+                          }
+                          const currentModelInNewProvider = providerModels.find(m => m.name === selectedModel);
+                          const modelToSwitch = currentModelInNewProvider ? selectedModel : providerModels[0].name;
+
+                          // Switch model and provider (non-blocking)
+                          setShowProviderDropdown(false);
+                          switchModel(modelToSwitch, 'ollama');
+                        }}
+                        className={`w-full px-3 py-2 text-xs text-left transition-colors ${
+                          selectedProvider === 'ollama'
+                            ? 'bg-blue-600/20 text-blue-400'
+                            : 'text-zinc-300 hover:bg-zinc-800'
+                        }`}
+                      >
+                        Ollama
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (selectedProvider === 'lmstudio') {
+                            setShowProviderDropdown(false);
+                            return;
+                          }
+                          const providerModels = availableModels.filter(m => m.provider === 'lmstudio');
+                          if (providerModels.length === 0) {
+                            alert('No LM Studio models installed. Please install a model first.');
+                            setShowProviderDropdown(false);
+                            return;
+                          }
+                          const currentModelInNewProvider = providerModels.find(m => m.name === selectedModel);
+                          const modelToSwitch = currentModelInNewProvider ? selectedModel : providerModels[0].name;
+
+                          // Switch model and provider (non-blocking)
+                          setShowProviderDropdown(false);
+                          switchModel(modelToSwitch, 'lmstudio');
+                        }}
+                        className={`w-full px-3 py-2 text-xs text-left transition-colors ${
+                          selectedProvider === 'lmstudio'
+                            ? 'bg-blue-600/20 text-blue-400'
+                            : 'text-zinc-300 hover:bg-zinc-800'
+                        }`}
+                      >
+                        LM Studio
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Model Selector */}
               <div className="relative model-dropdown-container">
                 <button
                     onClick={() => setShowModelDropdown(!showModelDropdown)}
-                  className="flex items-center gap-2 px-2 sm:px-3 py-1.5 text-xs sm:text-sm bg-zinc-800/50 hover:bg-zinc-700/50 border border-zinc-700/50 hover:border-zinc-600 rounded-lg transition-all focus:outline-none focus:ring-2 focus:ring-zinc-500/30 min-w-[140px] max-w-[200px]"
+                  className="flex items-center gap-1.5 px-2 py-1 text-xs bg-zinc-800/50 hover:bg-zinc-700/50 border border-zinc-700/50 hover:border-zinc-600 rounded-lg transition-all focus:outline-none focus:ring-1 focus:ring-zinc-500/30"
                     disabled={isSwitchingModel}
                     title="Switch or install models"
                   >
@@ -1631,7 +1885,7 @@ export const ConnectedChat: React.FC = () => {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleUninstallModel(option.value);
+                                handleUninstallModel(option.value, selectedProvider);
                               }}
                               className="ml-2 p-1.5 text-zinc-600 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                               title={`Uninstall ${option.label}`}
@@ -1913,6 +2167,38 @@ export const ConnectedChat: React.FC = () => {
               </div>
             </div>
 
+            {/* Provider Tabs - Browse models without switching active model */}
+            <div className="flex gap-2 px-6 pt-4 border-b border-zinc-800">
+                <button
+                  onClick={() => {
+                    setViewProvider('ollama');
+                    localStorage.setItem('viewProvider', 'ollama');
+                    // Don't call switchModel() - just change which models are displayed
+                  }}
+                  className={`px-4 py-2 text-sm font-medium transition-all ${
+                    viewProvider === 'ollama'
+                      ? 'text-white border-b-2 border-blue-500'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  Ollama
+                </button>
+                <button
+                  onClick={() => {
+                    setViewProvider('lmstudio');
+                    localStorage.setItem('viewProvider', 'lmstudio');
+                    // Don't call switchModel() - just change which models are displayed
+                  }}
+                  className={`px-4 py-2 text-sm font-medium transition-all ${
+                    viewProvider === 'lmstudio'
+                      ? 'text-white border-b-2 border-blue-500'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  LM Studio
+                </button>
+            </div>
+
             {/* Scrollable Content */}
             <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
               {installProgress && (
@@ -1925,6 +2211,9 @@ export const ConnectedChat: React.FC = () => {
                           className="bg-gradient-to-r from-blue-500 to-blue-600 h-2 rounded-full transition-all duration-500 ease-out animate-pulse"
                           style={{ width: `${downloadProgress}%` }}
                         ></div>
+                      </div>
+                      <div className="flex items-center justify-between mt-1">
+                        <span className="text-xs text-zinc-500">{Math.floor(downloadProgress)}%</span>
                       </div>
                       {downloadProgress < 100 && downloadAbortController && (
                         <button
@@ -1943,8 +2232,21 @@ export const ConnectedChat: React.FC = () => {
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-lg font-medium text-white">Available Models</h3>
                   <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                    <span className="text-xs text-zinc-400">Connected to Ollama</span>
+                    {availableProviders.find(p => p.name === viewProvider)?.available ? (
+                      <>
+                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                        <span className="text-xs text-zinc-400">
+                          Connected to {viewProvider === 'lmstudio' ? 'LM Studio' : 'Ollama'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                        <span className="text-xs text-zinc-400">
+                          {viewProvider === 'lmstudio' ? 'LM Studio' : 'Ollama'} offline
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
                 
@@ -1979,7 +2281,66 @@ export const ConnectedChat: React.FC = () => {
                 </div>
 
                 <div className="space-y-6">
-                {curatedModels.map(category => (
+                {/* Ollama setup banner - only show if NOT detected */}
+                {viewProvider === 'ollama' && !availableProviders.find(p => p.name === 'ollama')?.available && (
+                  <div className="p-4 bg-blue-900/20 border border-blue-600/30 rounded-lg">
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
+                        <span className="text-blue-500 text-lg">⚠</span>
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="text-sm font-semibold text-blue-300 mb-1">Ollama Not Installed</h3>
+                        <p className="text-xs text-zinc-400 mt-2">
+                          Ollama is not detected on your system. Download and install Ollama to use these models.
+                        </p>
+                      </div>
+                    </div>
+                    <a
+                      href="https://ollama.com/download"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-block px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-medium transition-colors"
+                    >
+                      Download Ollama
+                    </a>
+                  </div>
+                )}
+
+                {/* LM Studio setup banner - only show if server NOT detected */}
+                {viewProvider === 'lmstudio' && !availableProviders.find(p => p.name === 'lmstudio')?.available && (
+                  <div className="p-4 bg-amber-900/20 border border-amber-600/30 rounded-lg">
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className="w-8 h-8 bg-amber-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
+                        <span className="text-amber-500 text-lg">⚠</span>
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="text-sm font-semibold text-amber-300 mb-1">LM Studio Server Not Running</h3>
+                        <ol className="text-xs text-zinc-400 space-y-1 mt-2">
+                          <li>1. Open LM Studio app</li>
+                          <li>2. Click <span className="px-1 py-0.5 bg-zinc-700 rounded font-mono text-zinc-300">&lt;/&gt; Developer</span> in sidebar</li>
+                          <li>3. <span className="px-1 py-0.5 bg-green-600/20 text-green-400 rounded font-semibold">Start Server</span></li>
+                          <li>4. Load a model</li>
+                        </ol>
+                      </div>
+                    </div>
+                    <a
+                      href="https://lmstudio.ai"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-block px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-medium transition-colors"
+                    >
+                      Download LM Studio
+                    </a>
+                  </div>
+                )}
+
+                {/* LM Studio models - show all models except gpt-oss */}
+                {viewProvider === 'lmstudio' && curatedModels.map(category => {
+                  // Filter out gpt-oss models (don't work well as GGUF)
+                  const filteredModels = category.models.filter(m => !m.name.startsWith('gpt-oss'));
+                  if (filteredModels.length === 0) return null;
+
+                  return (
                   <div key={category.category}>
                     {/* Category Header */}
                     <div className="mb-3 p-3 bg-zinc-800/40 rounded-lg border border-zinc-700/50">
@@ -2005,8 +2366,8 @@ export const ConnectedChat: React.FC = () => {
 
                     {/* Models in Category */}
                     <div className="space-y-2 ml-3">
-                      {category.models.map(model => {
-                        const isAlreadyInstalled = availableModels.includes(model.name);
+                      {filteredModels.map(model => {
+                        const isAlreadyInstalled = availableModels.some(m => m.name === model.name && m.provider === 'lmstudio');
                         return (
                           <div
                             key={model.name}
@@ -2050,7 +2411,7 @@ export const ConnectedChat: React.FC = () => {
                                     Installed
                                   </span>
                                   <button
-                                    onClick={() => handleUninstallModel(model.name)}
+                                    onClick={() => handleUninstallModel(model.name, 'lmstudio')}
                                     disabled={!!installingModelName}
                                     className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all hover:scale-110"
                                     title={`Uninstall ${model.name}`}
@@ -2060,19 +2421,140 @@ export const ConnectedChat: React.FC = () => {
                                     </svg>
                                   </button>
                                 </>
+                              ) : installingModelName === model.name && installingProvider === 'lmstudio' ? (
+                                <button
+                                  onClick={() => setShowCancelDownloadConfirm(true)}
+                                  className="px-4 py-1.5 rounded-lg text-xs font-medium bg-red-600/10 hover:bg-red-600/20 border border-red-600/30 text-red-400 transition-all"
+                                >
+                                  Cancel Download
+                                </button>
                               ) : (
                                 <button
                                   onClick={() => handleInstallModel(model.name)}
-                                  disabled={!!installingModelName || installingModelName === model.name}
-                                  className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap ${
-                                    installingModelName === model.name
-                                      ? 'bg-zinc-700/50 text-zinc-500 cursor-not-allowed'
-                                      : model.agentCapable
-                                        ? 'bg-green-600 hover:bg-green-700 text-white shadow-sm hover:shadow-md'
-                                        : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm hover:shadow-md'
-                                  }`}
+                                  disabled={!!installingModelName}
+                                  className="px-4 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
-                                  {installingModelName === model.name ? 'Installing...' : 'Install'}
+                                  Install
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  );
+                }).filter(Boolean)}
+
+                {/* Only show Ollama models in library */}
+                {viewProvider === 'ollama' && curatedModels.map(category => (
+                  <div key={category.category}>
+                    {/* Category Header */}
+                    <div className="mb-3 p-3 bg-zinc-800/40 rounded-lg border border-zinc-700/50">
+                      <div className="flex items-center gap-2 mb-1">
+                        {category.icon === 'sparkles' ? (
+                          <svg className="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                          </svg>
+                        ) : (
+                          <svg className="w-5 h-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                          </svg>
+                        )}
+                        <h3 className="font-semibold text-white">{category.category}</h3>
+                        {category.category === 'Premium Models' && (
+                          <span className="ml-auto px-2 py-0.5 bg-green-500/20 text-green-400 rounded-full text-xs font-medium">
+                            Recommended
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-zinc-400 ml-7">{category.description}</p>
+                    </div>
+
+                    {/* Models in Category */}
+                    <div className="space-y-2 ml-3">
+                      {category.models.map(model => {
+                        const isAlreadyInstalled = availableModels.some(m => m.name === model.name && m.provider === 'ollama');
+                        // Get enriched metadata from registry if model is installed
+                        const ollamaMetadata = installedModelsMetadata.find(m => m.name === model.name && m.provider === 'ollama');
+
+                        return (
+                          <div
+                            key={model.name}
+                            className={`group flex items-center justify-between p-4 bg-zinc-800/30 border rounded-xl hover:bg-zinc-800/50 transition-all duration-200 ${
+                              model.agentCapable
+                                ? 'border-green-700/30 hover:border-green-600/50'
+                                : 'border-zinc-700/50 hover:border-zinc-600/50'
+                            }`}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                <span className="font-medium text-white text-sm truncate group-hover:text-blue-400 transition-colors">
+                                  {model.name}
+                                </span>
+                                <span className="text-xs px-2 py-0.5 bg-zinc-700/50 text-zinc-300 rounded-full whitespace-nowrap">
+                                  {ollamaMetadata?.size_gb ? `${ollamaMetadata.size_gb}GB` : model.size}
+                                </span>
+                                {/* Show quantization if available from registry */}
+                                {ollamaMetadata?.quantization && (
+                                  <span className="text-xs px-2 py-0.5 bg-purple-600/20 text-purple-400 rounded font-mono whitespace-nowrap">
+                                    {ollamaMetadata.quantization}
+                                  </span>
+                                )}
+                                {model.agentCapable && (
+                                  <span className="text-xs px-2 py-0.5 bg-green-600/20 text-green-400 rounded-full whitespace-nowrap flex items-center gap-1">
+                                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                      <path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                    </svg>
+                                    Premium
+                                  </span>
+                                )}
+                                {model.tokens && (
+                                  <span className="text-xs px-2 py-0.5 bg-blue-600/20 text-blue-400 rounded-full whitespace-nowrap">
+                                    {model.tokens >= 1000 ? `${Math.floor(model.tokens/1000)}K` : model.tokens} tokens
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-zinc-500 line-clamp-2 mt-1">{ollamaMetadata?.description || model.description}</p>
+                            </div>
+                            <div className="flex items-center gap-2 ml-3">
+                              {isAlreadyInstalled ? (
+                                <>
+                                  <span className="px-3 py-1.5 bg-green-500/20 text-green-400 rounded-lg text-xs font-medium flex items-center gap-1">
+                                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                    </svg>
+                                    Installed
+                                  </span>
+                                  <button
+                                    onClick={() => handleUninstallModel(model.name, 'ollama')}
+                                    disabled={!!installingModelName}
+                                    className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all hover:scale-110"
+                                    title={`Uninstall ${model.name}`}
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                  </button>
+                                </>
+                              ) : installingModelName === model.name && installingProvider === 'ollama' ? (
+                                <button
+                                  onClick={() => setShowCancelDownloadConfirm(true)}
+                                  className="px-4 py-1.5 rounded-lg text-xs font-medium bg-red-600/10 hover:bg-red-600/20 border border-red-600/30 text-red-400 transition-all"
+                                >
+                                  Cancel Download
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleInstallModel(model.name)}
+                                  disabled={!!installingModelName}
+                                  className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap ${
+                                    model.agentCapable
+                                      ? 'bg-green-600 hover:bg-green-700 text-white shadow-sm hover:shadow-md'
+                                      : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm hover:shadow-md'
+                                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                >
+                                  Install
                                 </button>
                               )}
                             </div>
@@ -2090,7 +2572,9 @@ export const ConnectedChat: React.FC = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <p className="text-xs text-zinc-500">
-                      Models are downloaded from Ollama Hub. Larger models provide better quality but require more VRAM.
+                      {selectedProvider === 'lmstudio'
+                        ? 'Models are downloaded from HuggingFace and imported to LM Studio. Larger models provide better quality but require more VRAM.'
+                        : 'Models are downloaded from Ollama Hub. Larger models provide better quality but require more VRAM.'}
                     </p>
                   </div>
                 </div>
@@ -2170,10 +2654,10 @@ export const ConnectedChat: React.FC = () => {
               <div className="flex-1 min-w-0">
                 <h3 className="text-lg font-semibold text-zinc-100 mb-2">Uninstall Model?</h3>
                 <p className="text-sm text-zinc-400 mb-1">
-                  Are you sure you want to uninstall <span className="font-mono text-zinc-300">{uninstallConfirmModel}</span>?
+                  Are you sure you want to uninstall <span className="font-mono text-zinc-300">{uninstallConfirmModel.name}</span>?
                 </p>
                 <p className="text-sm text-zinc-500">
-                  This will permanently delete the model from your system.
+                  This will permanently delete the model from {uninstallConfirmModel.provider === 'ollama' ? 'Ollama' : 'LM Studio'}.
                 </p>
               </div>
             </div>

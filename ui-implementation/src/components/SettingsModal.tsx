@@ -14,8 +14,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [showMemoryBankModal, setShowMemoryBankModal] = useState(false);
   const [showModelContextSettings, setShowModelContextSettings] = useState(false);
   const [currentModel, setCurrentModel] = useState<string>('');
+  const [providers, setProviders] = useState<any[]>([]);
 
-  // Fetch current model when modal opens
+  // Fetch current model and providers when modal opens
   useEffect(() => {
     const fetchCurrentModel = async () => {
       try {
@@ -29,8 +30,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
       }
     };
 
+    const fetchProviders = async () => {
+      try {
+        const response = await apiFetch('http://localhost:8000/api/model/providers/detect');
+        if (response.ok) {
+          const data = await response.json();
+          setProviders(data.providers || []);
+        }
+      } catch (error) {
+        console.error('Failed to fetch providers:', error);
+      }
+    };
+
     if (isOpen) {
       fetchCurrentModel();
+      fetchProviders();
     }
   }, [isOpen]);
 
@@ -74,6 +88,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
           {/* Content */}
           <div className="p-6 space-y-3">
+            {/* LLM Providers Status */}
+            {providers.length > 0 && (
+              <div className="space-y-2 pb-3 border-b border-zinc-800">
+                <div className="flex items-center gap-2 px-2">
+                  <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-sm font-medium text-zinc-400">LLM Providers</span>
+                </div>
+                <div className="space-y-1">
+                  {providers.map((provider) => (
+                    <div
+                      key={provider.name}
+                      className="flex items-center justify-between px-4 py-2 bg-zinc-800/50 rounded-lg"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-green-500" />
+                        <span className="text-sm text-zinc-300 capitalize">{provider.name}</span>
+                      </div>
+                      <span className="text-xs text-zinc-500">{provider.model_count || 0} models</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Memory Bank */}
             <div className="space-y-2">
               <button

@@ -19,7 +19,14 @@ AVAILABLE_TOOLS = [
                     "collections": {
                         "type": "array",
                         "items": {"type": "string", "enum": ["books", "working", "history", "patterns", "memory_bank", "all"]},
-                        "description": "Which memory collections to search. Default: ['all'] for comprehensive search. Only specify specific collections if user explicitly asks for a particular memory type.",
+                        "description": """Which collections to search. Choose based on keywords:
+- 'books' = user says: book, document, pdf, chapter, uploaded file
+- 'working' = user says: working memory, recent context, current project
+- 'history' = user says: conversation, chat history, what we discussed
+- 'patterns' = user says: patterns, learned behaviors, user preferences
+- 'memory_bank' = user says: remember, stored fact, personal info, identity
+- 'all' = user doesn't specify OR wants comprehensive search
+Examples: "search my books" → ["books"], "what did we discuss" → ["history"], "do you remember my name" → ["memory_bank"]""",
                         "default": ["all"]
                     },
                     "limit": {

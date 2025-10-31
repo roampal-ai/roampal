@@ -23,6 +23,7 @@ class OllamaClient(LLMClientInterface):
         self.client: Optional[httpx.AsyncClient] = None
         self.base_url: str = settings.llm.ollama_base_url
         self.model_name: str = settings.llm.ollama_model  # Use default from settings
+        self.api_style: str = "ollama"  # NEW: API style (ollama or openai)
         self.request_timeout: int = settings.llm.ollama_request_timeout_seconds
         self.keep_alive_seconds: int = settings.llm.ollama_keep_alive_seconds
         # Track request count for connection recycling
@@ -82,6 +83,33 @@ class OllamaClient(LLMClientInterface):
 
         actual_model = model or self.model_name
         logger.debug(f"Using model: {actual_model} (requested: {model}, default: {self.model_name})")
+
+        # ==================== MULTI-PROVIDER API ROUTING ====================
+        if self.api_style == "openai":
+            # OpenAI-compatible providers (LM Studio, llama.cpp, etc.)
+            try:
+                logger.debug(f"Using OpenAI-style API at {self.base_url}/v1/chat/completions")
+
+                response = await self.client.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    json={
+                        "model": actual_model,
+                        "messages": messages,
+                        "temperature": 0.7,
+                        "max_tokens": 4000,
+                        "stream": False
+                    },
+                    timeout=self.request_timeout
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                return data['choices'][0]['message']['content']
+
+            except Exception as e:
+                logger.error(f"OpenAI-style API error: {e}")
+                raise OllamaException(f"OpenAI API error: {str(e)}")
+        # ==================== END MULTI-PROVIDER ROUTING ====================
 
         # DEBUG: Log the exact payload being sent
         logger.info(f"[DEBUG PAYLOAD] Messages count: {len(messages)}")
@@ -485,6 +513,48 @@ class OllamaClient(LLMClientInterface):
         actual_model = model or self.model_name
         logger.info(f"[STREAM] Using model: {actual_model}")
 
+        # ==================== MULTI-PROVIDER STREAMING ====================
+        if self.api_style == "openai":
+            # OpenAI-compatible streaming (Server-Sent Events format)
+            try:
+                logger.debug(f"Streaming from OpenAI-style API at {self.base_url}/v1/chat/completions")
+
+                async with self.client.stream(
+                    'POST',
+                    f"{self.base_url}/v1/chat/completions",
+                    json={
+                        "model": actual_model,
+                        "messages": messages,
+                        "temperature": 0.7,
+                        "stream": True
+                    },
+                    timeout=self.request_timeout
+                ) as response:
+                    response.raise_for_status()
+
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:]  # Remove "data: " prefix
+
+                            if data_str.strip() == "[DONE]":
+                                break
+
+                            try:
+                                data = json.loads(data_str)
+                                if 'choices' in data and len(data['choices']) > 0:
+                                    delta = data['choices'][0].get('delta', {})
+                                    if content := delta.get('content'):
+                                        yield content
+                            except json.JSONDecodeError:
+                                continue
+
+            except Exception as e:
+                logger.error(f"OpenAI-style streaming error: {e}")
+                raise OllamaException(f"OpenAI streaming error: {str(e)}")
+
+            return
+        # ==================== END MULTI-PROVIDER STREAMING ====================
+
         # Use /api/chat for streaming (works better with modern models like Qwen2.5)
         payload = {
             "model": actual_model,
@@ -591,6 +661,153 @@ class OllamaClient(LLMClientInterface):
             yield_count = 0
 
             logger.info(f"[STREAM DEBUG] Starting stream from /api/chat")
+
+            # ==================== MULTI-PROVIDER API ROUTING ====================
+            if self.api_style == "openai":
+                # OpenAI-compatible providers (LM Studio) use /v1/chat/completions with SSE
+                logger.debug(f"Using OpenAI-style streaming API at {self.base_url}/v1/chat/completions")
+
+                openai_payload = {
+                    "model": actual_model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 4000,
+                    "stream": True
+                }
+
+                # Add tools if provided
+                if tools:
+                    openai_payload["tools"] = tools
+                    logger.info(f"[OPENAI PAYLOAD] Added {len(tools)} tools to OpenAI payload")
+                    # Log system message length for debugging
+                    sys_msg_len = len(messages[0]['content']) if messages and messages[0]['role'] == 'system' else 0
+                    logger.info(f"[OPENAI PAYLOAD] System message length: {sys_msg_len} chars, Total messages: {len(messages)}")
+                    logger.info(f"[OPENAI PAYLOAD] Message roles: {[m['role'] for m in messages]}")
+                    for idx, msg in enumerate(messages):
+                        content_preview = msg['content'][:100] if len(msg['content']) > 100 else msg['content']
+                        logger.info(f"[OPENAI PAYLOAD] Message {idx} ({msg['role']}): {content_preview}...")
+                    # Dump full payload for debugging (excluding large tool definitions)
+                    debug_payload = {**openai_payload}
+                    debug_payload['tools'] = f"[{len(tools)} tools]"  # Replace with count
+                    logger.info(f"[OPENAI PAYLOAD] Full request: {json.dumps(debug_payload, indent=2)}")
+                else:
+                    logger.warning(f"[OPENAI PAYLOAD] NO TOOLS in payload! tools parameter was: {tools}")
+
+                try:
+                    response_stream = self.client.stream("POST", "/v1/chat/completions", json=openai_payload, timeout=self.request_timeout)
+                    response = await response_stream.__aenter__()
+                    response.raise_for_status()
+                    logger.info(f"[STREAM DEBUG] OpenAI-style Response status: {response.status_code}")
+                except httpx.HTTPStatusError as e:
+                    logger.error(f"OpenAI-style API streaming error: {e}")
+                    raise OllamaException(f"OpenAI API streaming error: {str(e)}")
+
+                # Stream OpenAI-style SSE responses
+                # Accumulator for tool calls (OpenAI streams them in chunks)
+                tool_call_accumulator = {}  # {index: {"id": "", "name": "", "arguments": ""}}
+
+                async for line in response.aiter_lines():
+                    line_count += 1
+                    if not line.strip() or line.startswith(":"):
+                        continue
+
+                    # OpenAI SSE format: "data: {...}"
+                    if line.startswith("data: "):
+                        data_str = line[6:]  # Remove "data: " prefix
+
+                        if data_str == "[DONE]":
+                            logger.info(f"[STREAM DEBUG] OpenAI stream complete")
+
+                            # Yield accumulated tool calls before finishing
+                            if tool_call_accumulator:
+                                logger.info(f"[OPENAI STREAM] Yielding {len(tool_call_accumulator)} accumulated tool calls")
+                                tool_calls = []
+                                for idx, tc in tool_call_accumulator.items():
+                                    try:
+                                        args_dict = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                                        tool_calls.append({
+                                            "id": tc["id"],
+                                            "type": "function",
+                                            "function": {
+                                                "name": tc["name"],
+                                                "arguments": args_dict
+                                            }
+                                        })
+                                    except json.JSONDecodeError as e:
+                                        logger.error(f"[OPENAI STREAM] Failed to parse tool arguments: {tc['arguments'][:100]}... Error: {e}")
+
+                                if tool_calls:
+                                    yield {"type": "tool_call", "tool_calls": tool_calls}
+                                    yield_count += 1
+
+                            break
+
+                        try:
+                            chunk = json.loads(data_str)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
+
+                            # Log first few chunks for debugging
+                            if line_count <= 3:
+                                logger.info(f"[OPENAI STREAM] Chunk {line_count}: delta keys = {list(delta.keys())}, finish_reason = {finish_reason}")
+
+                            # Handle content
+                            if "content" in delta and delta["content"]:
+                                yield {"type": "text", "content": delta["content"]}
+                                yield_count += 1
+
+                            # Handle tool calls (accumulate chunks)
+                            if "tool_calls" in delta:
+                                for tool_call_chunk in delta["tool_calls"]:
+                                    idx = tool_call_chunk.get("index", 0)
+
+                                    # Initialize accumulator for this tool call index
+                                    if idx not in tool_call_accumulator:
+                                        tool_call_accumulator[idx] = {
+                                            "id": tool_call_chunk.get("id", ""),
+                                            "name": "",
+                                            "arguments": ""
+                                        }
+
+                                    # Accumulate function name
+                                    if "function" in tool_call_chunk:
+                                        func = tool_call_chunk["function"]
+                                        if "name" in func:
+                                            tool_call_accumulator[idx]["name"] = func["name"]
+                                        if "arguments" in func:
+                                            tool_call_accumulator[idx]["arguments"] += func["arguments"]
+
+                            # If finish_reason is "tool_calls", yield accumulated tools immediately
+                            if finish_reason == "tool_calls" and tool_call_accumulator:
+                                logger.info(f"[OPENAI STREAM] finish_reason=tool_calls, yielding {len(tool_call_accumulator)} tool calls")
+                                tool_calls = []
+                                for idx, tc in tool_call_accumulator.items():
+                                    try:
+                                        args_dict = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                                        tool_calls.append({
+                                            "id": tc["id"],
+                                            "type": "function",
+                                            "function": {
+                                                "name": tc["name"],
+                                                "arguments": args_dict
+                                            }
+                                        })
+                                        logger.info(f"[OPENAI STREAM] Tool call: {tc['name']}({tc['arguments']})")
+                                    except json.JSONDecodeError as e:
+                                        logger.error(f"[OPENAI STREAM] Failed to parse tool arguments: {tc['arguments'][:100]}... Error: {e}")
+
+                                if tool_calls:
+                                    yield {"type": "tool_call", "tool_calls": tool_calls}
+                                    yield_count += 1
+                                    break  # Exit streaming to let agent handle tool execution
+
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"[STREAM DEBUG] Failed to parse OpenAI chunk: {data_str[:100]}... Error: {e}")
+                            continue
+
+                logger.info(f"[STREAM DEBUG] OpenAI stream finished: {line_count} lines, {yield_count} yields")
+                return
+            # ==================== END MULTI-PROVIDER ROUTING ====================
 
             # OOM Protection: Try with full context, retry with reduced if crashes
             oom_retry = False

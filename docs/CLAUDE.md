@@ -130,11 +130,18 @@ WebSocket → ui-implementation/src/stores/useChatStore.ts:800-950
 
 ### Switch Models
 ```bash
-# Check available
-curl localhost:8000/api/model/available
+# Check available models from all providers
+curl localhost:8000/api/model/providers/all/models
 
-# Switch model
-curl -X POST localhost:8000/api/model/switch -d '{"model_name":"llama3.3"}'
+# Switch model (auto-detects provider)
+curl -X POST localhost:8000/api/model/switch \
+  -H "Content-Type: application/json" \
+  -d '{"model_name":"qwen2.5:7b", "provider":"ollama"}'
+
+# Or for LM Studio
+curl -X POST localhost:8000/api/model/switch \
+  -H "Content-Type: application/json" \
+  -d '{"model_name":"qwen2.5-7b-instruct", "provider":"lmstudio"}'
 ```
 
 ## Testing
@@ -159,7 +166,8 @@ python test_clean_system.py       # End-to-end test
 
 ```yaml
 # System Configuration
-Model: qwen3:8b (ROAMPAL_LLM_OLLAMA_MODEL)
+Providers: Ollama (port 11434) | LM Studio (port 1234)
+Model: Auto-detected from available providers
 Mode: Chat with Memory (memory + learning enabled)
 Port: 8000 (backend), 5174 (frontend dev)
 
@@ -177,7 +185,7 @@ Books: Persistent reference docs
 
 # Active Services
 - ChromaDB in embedded mode (data/chromadb/)
-- Ollama on port 11434
+- LLM Providers: Ollama (11434) or LM Studio (1234)
 - SQLite for outcomes tracking
 ```
 

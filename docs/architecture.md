@@ -1030,7 +1030,7 @@ Regex: `\[MEMORY_BANK_ARCHIVE:\s*match="((?:[^"\\]|\\.)*)"\]`
 **Key Components**:
 - `chain_depth` tracking (lines 585-587) - Prevents infinite recursion
 - `tool_events` array - Collects tool execution metadata for UI persistence
-- Depth limit check: `tools=memory_tools if chain_depth < max_depth else None`
+- **Tool continuation policy** (line 2220): `tools=None` on continuation - prevents recursive tool calls after results are provided
 
 **Tool Execution Flow (Updated 2025-10-11 - Multi-Tool Chaining)**:
 1. User message sent to LLM with tools parameter
@@ -1447,36 +1447,60 @@ DELETE /api/model/context/{model_name} # Reset to default context size
 
 #### Features
 
-**Ollama Status Check** ([model_switcher.py:50-65](../app/routers/model_switcher.py)) (NEW - 2025-10-14)
-- Checks if Ollama is accessible at localhost:11434
-- Returns `{available: bool, message: str}`
-- Used by frontend to detect missing Ollama installation
-- Shows user-friendly modal with download link if unavailable
+**Multi-Provider Detection** ([model_switcher.py:28-50](../app/routers/model_switcher.py)) (Updated 2025-10-28)
+- Supports 2 LLM providers: **Ollama** (port 11434) and **LM Studio** (port 1234)
+- Checks provider availability via health check endpoints (`/api/tags` for Ollama, `/v1/models` for LM Studio)
+- Returns `{available: bool, message: str}` per provider
+- Used by frontend to detect missing LLM provider installations
+- Shows user-friendly modal with download links for both providers if none are available
 
-**Model Switching** ([model_switcher.py:82-210](../app/routers/model_switcher.py))
+**LM Studio Integration** (Added 2025-10-28, Updated 2025-10-29)
+- **Architecture**: GUI app + CLI tool (`lms.exe`) + Python SDK (`lmstudio`)
+- **Model format**: GGUF files stored in `~/.lmstudio/models/` (NOT `.cache/lm-studio/models/`)
+- **API compatibility**: OpenAI-compatible API on `http://localhost:1234/v1/`
+- **Model listing**: Returns model IDs as-is (e.g., `qwen2.5-7b-instruct`), no normalization to Ollama format
+- **CLI location**: `~/.lmstudio/bin/lms.exe` (installed with LM Studio GUI)
+- **SDK package**: `lmstudio` Python package - **DEPRECATED due to hang issues**
+- **One-step automation** (Updated 2025-10-29):
+  1. CLI import: `lms import --yes --copy --user-repo "publisher/model" /path/to/file.gguf`
+  2. ~~SDK load: Skipped due to `client.llm.load_new_instance()` hanging indefinitely~~
+  3. Models available via API immediately after CLI import completes
+- **Model unload**: ~~SDK's `loaded_model.unload()` removed~~ LM Studio API caches models until restart
+
+**Model Switching** ([model_switcher.py:425-520](../app/routers/model_switcher.py)) (Updated 2025-10-28)
+- **Multi-provider support**: Can switch between Ollama and LM Studio models
 - **Lazy initialization**: Creates `llm_client` if None (happens when app starts with no models)
-- Verifies model exists in Ollama before switching
-- Updates `app.state.llm_client.model_name` dynamically
+- Verifies provider is running and model exists before switching
+- Updates `app.state.llm_client` with new provider's base_url, model_name, and api_style
 - Runs health check (test inference with 10s timeout)
 - **Automatic rollback** on health check failure
-- Updates environment variables (OLLAMA_MODEL, ROAMPAL_LLM_OLLAMA_MODEL)
+- Updates environment variables (OLLAMA_MODEL, ROAMPAL_LLM_OLLAMA_MODEL, ROAMPAL_LLM_PROVIDER)
 - Persists to .env file with file locking
 - Returns HTTP 503 with rollback details on failure
 
-**Model Installation** ([model_switcher.py:262-369](../app/routers/model_switcher.py))
-- SSE (Server-Sent Events) streaming with real-time progress updates (appropriate for one-way progress tracking)
-- Parses Ollama output for download percentage, speed, size
+**Model Installation** ([model_switcher.py:262-657](../app/routers/model_switcher.py)) (Updated 2025-10-28)
+- **Multi-provider support**: Ollama and LM Studio installation workflows
+- **Ollama**: SSE streaming with real-time progress updates, parses download percentage/speed/size
+- **LM Studio**: Two-step automation (CLI import + SDK load)
+  - Downloads GGUF file to `~/.cache/lm-studio/models/`
+  - Uses `lms.exe import --yes --copy --user-repo` for non-interactive import
+  - Uses Python SDK `client.llm.load_new_instance()` to load into memory
+  - Status flow: `downloading` → `importing` → `loading` → `loaded`
 - **Concurrency control**: Download lock + tracking set prevents duplicate downloads
-- Validates model name format (prevents command injection)
+- **Auto-switch**: Automatically switches to newly installed model after successful load
 - 10-minute timeout for large models
-- Auto-refreshes UI model list on completion
+- WebSocket and SSE endpoints for flexible client support
 
-**Model Uninstallation** ([model_switcher.py:371-459](../app/routers/model_switcher.py))
-- Calls `ollama rm {model_name}` with 30s timeout
-- **Auto-switches** if deleting active model (picks first available chat model)
+**Model Uninstallation** ([model_switcher.py:1298-1443](../app/routers/model_switcher.py)) (Updated 2025-10-31)
+- **Multi-provider aware**: Detects provider ownership before uninstalling
+- **Ollama**: Calls `ollama rm {model_name}` with 30s timeout
+- **LM Studio**: Unloads from memory via SDK, then deletes GGUF file from `~/.cache/lm-studio/models/`
+- **Smart auto-switch**: If deleting active model, switches to first available chat model from ANY provider
+  - Updates `llm_client.model_name`, `base_url`, and `api_style` to match new provider
+  - **HTTP client recycling** ([model_switcher.py:1422-1425](../app/routers/model_switcher.py)): Calls `_recycle_client()` after changing `base_url` to ensure httpx AsyncClient uses correct provider URL (port 1234 for LM Studio, 11434 for Ollama)
+  - Updates environment variables for Ollama models
 - **Embedding model protection**: Filters out embedding models from fallback list
-- If no chat models available, sets `model_name` to `None` to prevent embedding model usage
-- Updates .env file with new model
+- If no chat models available, sets `model_name` to `None`
 - File locking prevents concurrent .env modifications
 
 **Embedding Model Protection** (Added 2025-10-09)
@@ -1516,17 +1540,30 @@ Chat models and embedding models serve different purposes. Embedding models (lik
 - Backend validates and returns clean error if frontend check bypassed
 - No exception logging for expected states (embedding model active is not an error)
 
-**UI Integration** ([ConnectedChat.tsx](../ui-implementation/src/components/ConnectedChat.tsx))
-- **Ollama detection** (NEW - 2025-10-14): Checks Ollama status on mount, shows modal if unavailable
-- **OllamaRequiredModal** (NEW - 2025-10-14): User-friendly modal with "Download Ollama" button linking to ollama.com
-- **Model dropdown** (lines 1460-1585): Select/switch models with live status
-- **Agent-capable badges** (lines 615-626): 🤖 emoji for models with 12K+ context
-- **Download progress popup** (lines 1979-2020): Real-time SSE progress bar with speed/size
-- **Download cancellation** (lines 319, 328-330, 340, 1986-1990): AbortController cancels in-flight downloads
-- **Mid-conversation warning** (lines 120-130): Confirms switch if messages exist
+**UI Integration** ([ConnectedChat.tsx](../ui-implementation/src/components/ConnectedChat.tsx)) (Updated 2025-10-31)
+- **Provider detection**: Checks for available LLM providers on mount, shows modal if none detected
+- **Provider selector** (lines 1760-1803): Dropdown to switch between Ollama/LM Studio (only visible if multiple providers detected)
+  - **Non-blocking switch** (Updated 2025-10-31): Removed `async/await` from onClick handlers to prevent UI freeze during model switch
+  - Closes dropdown immediately, then fires model switch in background
+- **Provider-filtered models** (lines 1029-1033): Model dropdown only shows models from currently selected provider (no duplicates)
+- **Chat input availability** ([ConnectedChat.tsx:1073-1080](../ui-implementation/src/components/ConnectedChat.tsx#L1073)) (Updated 2025-10-31):
+  - `hasChatModel` checks for chat models across ALL providers (not just selected provider)
+  - Prevents input from being disabled during provider auto-switch (when selectedProvider hasn't synced yet but another provider has models)
+  - Filters out embedding models from availability check
+- **Setup banners**: Per-provider setup instructions with download links
+  - Ollama banner: Shows download button for ollama.com
+  - LM Studio banner (lines 2234-2271): Shows download + server setup instructions, hides when server detected on port 1234
+- **Model dropdown** (lines 1823-1895): Select/switch models with live status, filtered by provider
+- **Agent-capable badges**: 🤖 emoji for models with 12K+ context
+- **Download progress popup**: Real-time progress with provider-specific status messages
+  - Ollama: `downloading` → `complete`
+  - LM Studio: `downloading` → `importing` → `loading` → `loaded`
+- **Download cancellation**: AbortController cancels in-flight downloads
+- **Mid-conversation warning**: Confirms switch if messages exist
+  - **Non-blocking confirmation** (Updated 2025-10-31): Dialog closes immediately when clicking "Switch Model", performs switch in background via `.then()`
 - **Model attribution** ([EnhancedChatMessage.tsx:90-94](../ui-implementation/src/components/EnhancedChatMessage.tsx)): Badge showing which model generated each response
-- **Auto-refresh** (lines 382, 433): Model list refreshes after install/uninstall
-- **Persistence**: Selected model saved to localStorage
+- **Auto-refresh**: Model list refreshes after install/uninstall
+- **Persistence**: Selected provider and model saved to localStorage
 **Confirmation Modals** (Updated 2025-10-21)
 - **Tauri Confirm Bug Fix**: Replaced all native `confirm()` dialogs with custom React modals
   - **Problem 1**: Tauri's native `confirm()` returns `true` when X is clicked (should be `false`)
@@ -1869,9 +1906,13 @@ backend/data/
 #### Model Selection Synchronization
 
 **Backend as Source of Truth:**
-- UI syncs with backend on startup via `/api/model/current` ([ConnectedChat.tsx:115-138](../ui-implementation/src/components/ConnectedChat.tsx#L115))
-- Backend returns `current_model`, `can_chat`, `is_embedding_model` flags
-- UI updates dropdown and localStorage to match backend state
+- **Initial sync on mount**: UI syncs with backend on startup via `/api/model/current` ([ConnectedChat.tsx:246-250](../ui-implementation/src/components/ConnectedChat.tsx#L246))
+- **Auto-sync after model list changes** ([ConnectedChat.tsx:187-188](../ui-implementation/src/components/ConnectedChat.tsx#L187)): `fetchModels()` calls `fetchCurrentModel()` after updating available models, ensuring UI syncs when backend auto-switches providers (e.g., after uninstalling active model)
+- **fetchCurrentModel()** ([ConnectedChat.tsx:268-308](../ui-implementation/src/components/ConnectedChat.tsx#L268)):
+  - Fetches backend's active model via `/api/model/current`
+  - Backend returns `current_model`, `provider`, `can_chat`, `is_embedding_model` flags
+  - Updates UI `selectedModel`, `selectedProvider`, and localStorage to match backend
+  - Handles case where backend has no chat model available (switches to first available)
 - Prevents phantom selection where UI shows different model than backend is using
 
 **Installation Auto-Switch Logic:**

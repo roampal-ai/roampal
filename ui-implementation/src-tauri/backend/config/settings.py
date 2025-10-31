@@ -70,7 +70,7 @@ class AppSettings(BaseSettings):
     )
 
 class LLMSettings(BaseSettings):
-    provider: Literal["ollama", "openchat"] = "ollama"
+    provider: Literal["ollama", "openchat", "lmstudio"] = "ollama"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "mistral-nemo:12b-instruct-2407-q4_0"  # Using Mistral Nemo for better performance
     ollama_request_timeout_seconds: int = 300  # 5 minutes for large models like codestral:22b

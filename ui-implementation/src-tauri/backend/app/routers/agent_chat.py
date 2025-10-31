@@ -493,6 +493,11 @@ class AgentChatService:
         Yields: {"type": "token|thinking|tool_start|tool_complete|done", "content": ...}
         """
         try:
+            # CRITICAL: Always fetch latest llm_client from app_state (handles model switches)
+            if app_state and hasattr(app_state, 'llm_client'):
+                self.llm = app_state.llm_client
+                logger.info(f"[LLM CLIENT REFRESH] Updated to current client: model={getattr(self.llm, 'model_name', 'unknown')}, base_url={getattr(self.llm, 'base_url', 'unknown')}")
+
             # Validate model BEFORE adding message to history (prevent garbage session files)
             is_valid, error_msg = self._validate_chat_model()
             if not is_valid:
@@ -550,10 +555,17 @@ class AgentChatService:
             MAX_CHAIN_DEPTH = 3  # Prevent infinite loops
             tool_events = []  # Collect tool events for UI persistence
 
+            # Check if LLM client is available
+            if self.llm is None:
+                raise Exception("No LLM client available. Please configure a provider (Ollama or LM Studio).")
+
             # Use the tool-enabled streaming method with proper message separation
+            # IMPORTANT: conversation_history already includes the current message (added at line 517)
+            # We pass it separately as 'prompt', so exclude it from history to avoid duplication
+            history_without_current = conversation_history[:-1] if conversation_history else []
             async for event in self.llm.stream_response_with_tools(
                 prompt=message,  # Current user message
-                history=conversation_history[-6:] if conversation_history else None,  # Last 3 exchanges
+                history=history_without_current[-6:] if history_without_current else None,  # Last 3 exchanges (excluding current)
                 system_prompt=system_instructions,  # System instructions only
                 tools=memory_tools
             ):
@@ -964,7 +976,47 @@ class AgentChatService:
 
         return results
 
+    def _build_openai_prompt(
+        self,
+        message: str,
+        conversation_history: List[Dict[str, str]] = None
+    ) -> str:
+        """
+        Condensed system prompt for OpenAI-style models (LM Studio).
+        Long prompts reduce tool-calling behavior, so this version is minimal.
+        """
+        from datetime import datetime
 
+        parts = []
+
+        # Concise system prompt optimized for OpenAI-style models (LM Studio)
+        # Long prompts reduce tool-calling behavior - keep under 1000 chars
+        current_datetime = datetime.now()
+        parts.append(f"""Today: {current_datetime.strftime('%Y-%m-%d %H:%M')}
+
+You are Roampal, an AI assistant with access to the user's personal knowledge base.
+
+**5-Tier Memory System:**
+• books = uploaded PDFs, documents, files
+• working = recent context, current work
+• history = past conversations
+• patterns = learned behaviors
+• memory_bank = stored personal facts
+
+**CRITICAL TOOL USAGE RULES:**
+You MUST use the available functions to access memory. DO NOT attempt to answer questions about user's personal information, past conversations, or uploaded documents without calling search_memory first.
+
+REQUIRED function calls:
+• Questions about books/docs → CALL search_memory(query, collections=["books"])
+• "What did we discuss" → CALL search_memory(query, collections=["history"])
+• "Do you remember X" → CALL search_memory(query, collections=["memory_bank"])
+• ANY question about user's data → CALL search_memory(query, collections=["all"])
+• User shares personal info → CALL create_memory(content, tag)
+
+ALWAYS use user's EXACT words as the query parameter.
+Cite sources from search results.""")
+
+        return "\n\n".join(parts)
 
 
 
@@ -976,9 +1028,15 @@ class AgentChatService:
         """
         Single source of truth for prompt structure.
         Used by streaming endpoint to ensure consistent prompt across all requests.
+
+        For OpenAI-style models (LM Studio), uses a shorter system prompt to maximize tool-calling behavior.
         """
         from datetime import datetime
         from config.model_contexts import get_context_size
+
+        # Check if using OpenAI-style API (LM Studio) - if so, use condensed prompt
+        if self.llm and hasattr(self.llm, 'api_style') and self.llm.api_style == "openai":
+            return self._build_openai_prompt(message, conversation_history)
 
         parts = []
 
@@ -1029,8 +1087,22 @@ CRITICAL: Distinguish between system data and training data:
 • NEVER fabricate sources - only cite what search_memory actually returns
 • If search returns 0 results, clearly state "I don't have any information about that in your data"
 
-When in doubt, searching is better than missing important context.
+When in doubt, searching is better than missing important context.""")
 
+        # Add stronger tool-calling instruction for OpenAI-style models (LM Studio)
+        if self.llm and hasattr(self.llm, 'api_style') and self.llm.api_style == "openai":
+            logger.info(f"[SYSTEM PROMPT] Adding OpenAI-style tool calling instructions (api_style={self.llm.api_style})")
+            parts.append("""
+
+[IMPORTANT - Function Calling]
+
+You MUST use the available functions/tools when appropriate. When a user asks about their memory, past conversations, documents, or personal information, you MUST call search_memory() instead of guessing or using your training data.
+
+Do NOT answer memory-related questions without calling the function first. Always wait for the function results before responding.""")
+        else:
+            logger.info(f"[SYSTEM PROMPT] NOT adding OpenAI instructions. llm={self.llm}, has api_style={hasattr(self.llm, 'api_style') if self.llm else 'N/A'}, api_style value={getattr(self.llm, 'api_style', 'N/A') if self.llm else 'N/A'}")
+
+        parts.append("""
 
 [Collections]
 
@@ -1956,12 +2028,14 @@ Respond with ONLY the title, nothing else."""
                 logger.warning(f"[TOOL] Empty query provided")
                 query = "recent information"
 
-            # Force search all collections - LLM makes poor collection choices
-            collections = ["all"]
+            # Use LLM's collection choices (with validation)
+            collections = tool_args.get("collections", ["all"])
             valid_collections = ['working', 'history', 'patterns', 'books', 'memory_bank', 'all']
             collections = [c for c in collections if c in valid_collections]
             if not collections:
                 collections = ["all"]
+
+            logger.info(f"[TOOL] search_memory called with collections={collections}, query='{query[:50]}...')")
 
             limit = tool_args.get("limit", 5)
             if not isinstance(limit, int) or limit < 1:
@@ -2145,13 +2219,13 @@ Respond with ONLY the title, nothing else."""
                 {"role": "system", "content": tool_response_content}
             ]
 
-            # Continue streaming with tools enabled (allows chaining)
+            # Continue streaming WITHOUT tools - LLM already has results, no need to search again
             chain_depth += 1
             async for continuation_event in self.llm.stream_response_with_tools(
                 prompt="Continue your response using the search results above.",
                 history=conversation_with_tools,
                 model=self.model_name,
-                tools=memory_tools if chain_depth < max_depth else None
+                tools=None  # Don't pass tools on continuation - prevents recursive searches
             ):
                 if continuation_event["type"] == "text":
                     chunk = continuation_event["content"]

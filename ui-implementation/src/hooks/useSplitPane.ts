@@ -25,6 +25,10 @@ export const useSplitPane = ({
       if (stored) {
         const parsed = parseInt(stored, 10);
         if (!isNaN(parsed)) {
+          // If stored size is collapsed (<= 50), use initialSize instead to start expanded
+          if (parsed <= 50) {
+            return initialSize;
+          }
           return Math.max(minSize, Math.min(maxSize, parsed));
         }
       }

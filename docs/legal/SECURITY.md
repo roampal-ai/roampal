@@ -62,13 +62,13 @@ We take security seriously and will respond to valid reports within:
 ## Best Practices for Users
 
 1. **Local Use Only**
-   - Do not expose ports 8000 (backend) or 11434 (Ollama) to the internet
+   - Do not expose ports 8000 (backend), 11434 (Ollama), or 1234 (LM Studio) to the internet
    - Do not deploy on shared hosting
    - Use firewall to restrict access to localhost only
 
 2. **Keep Dependencies Updated**
    - Update Roampal when new versions are released
-   - Update Ollama models periodically
+   - Update LLM models (Ollama/LM Studio) periodically
    - Monitor security advisories
 
 3. **Data Backup**
@@ -87,4 +87,5 @@ Out of scope:
 - Third-party forks or modifications
 - User-modified configurations
 - Ollama security (handled by Ollama project)
+- LM Studio security (handled by LM Studio)
 - Downloaded LLM model security (handled by model providers)

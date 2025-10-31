@@ -27,6 +27,7 @@ playwright==1.40.0
 aiofiles==23.2.1
 asyncio-mqtt==0.16.1
 filelock==3.13.1
+anyio>=4.0.0  # Updated for lmstudio SDK compatibility
 
 # Configuration and environment
 pydantic>=2.9.0,<3.0.0
@@ -72,7 +73,6 @@ langchain-text-splitters==0.3.11
 aiosqlite==0.20.0       # Required by SmartBookProcessor
 
 # Network and utilities
-anyio==3.7.1
 sniffio==1.3.0
 click==8.1.7
 typer==0.9.0
@@ -80,5 +80,9 @@ typer==0.9.0
 # Optional: For development
 watchfiles==0.21.0
 
-# Ollama integration
+# LLM Provider integrations
 ollama @ git+https://github.com/ollama/ollama-python.git@65f94b4fba2cc95dd718cbda683a326a8e5e670a
+lmstudio>=0.1.0  # LM Studio Python SDK for model loading
+
+# HuggingFace for GGUF model downloads
+huggingface-hub>=0.20.0,<1.0.0
