@@ -728,23 +728,35 @@ export const useChatStore = create<ChatState>()((set, get) => ({
                 }));
               }
 
-              if (lastMsg?.sender === 'assistant' && lastMsg.streaming) {
+              // Handle citations FIRST - they arrive after streaming ends
+              if (lastMsg?.sender === 'assistant' && data.citations && data.citations.length > 0) {
+                messages[messages.length - 1] = {
+                  ...lastMsg,
+                  citations: data.citations
+                };
+                console.log('[WebSocket] Set', data.citations.length, 'citations');
+              }
+
+              // Refresh lastMsg reference after citation update
+              const updatedLastMsg = messages[messages.length - 1];
+
+              // THEN handle streaming state and message cleanup
+              if (updatedLastMsg?.sender === 'assistant' && updatedLastMsg.streaming) {
                 // Only remove message if it has no content AND no tool executions
-                const hasContent = lastMsg.content && lastMsg.content.trim() !== '';
-                const hasTools = lastMsg.toolExecutions && lastMsg.toolExecutions.length > 0;
+                const hasContent = updatedLastMsg.content && updatedLastMsg.content.trim() !== '';
+                const hasTools = updatedLastMsg.toolExecutions && updatedLastMsg.toolExecutions.length > 0;
 
                 if (!hasContent && !hasTools) {
                   messages.pop();
                   console.log('[WebSocket] Removed empty assistant message');
                 } else {
-                  // FIX: Immutable update - preserve all properties including toolExecutions
+                  // FIX: Immutable update - preserve all properties including toolExecutions AND citations
                   messages[messages.length - 1] = {
-                    ...lastMsg,
+                    ...updatedLastMsg,
                     streaming: false,
-                    citations: data.citations || [],
-                    toolExecutions: lastMsg.toolExecutions // Preserve
+                    toolExecutions: updatedLastMsg.toolExecutions // Preserve
                   };
-                  console.log('[WebSocket] Keeping message - content:', lastMsg.content?.length || 0, 'tools:', lastMsg.toolExecutions?.length || 0);
+                  console.log('[WebSocket] Keeping message - content:', updatedLastMsg.content?.length || 0, 'tools:', updatedLastMsg.toolExecutions?.length || 0);
                 }
               }
 

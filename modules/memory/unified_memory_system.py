@@ -1300,11 +1300,16 @@ class UnifiedMemorySystem:
             best_rate = 0.0
 
             for coll_name, coll_stats in pattern["collections_used"].items():
-                if coll_stats["total"] > 0:
-                    rate = coll_stats["successes"] / coll_stats["total"]
+                # Only count outcomes with actual feedback (exclude partials from denominator)
+                total_with_feedback = coll_stats["successes"] + coll_stats["failures"]
+                if total_with_feedback > 0:
+                    rate = coll_stats["successes"] / total_with_feedback
                     if rate > best_rate:
                         best_rate = rate
                         best_collection = coll_name
+                elif coll_stats["total"] > 0:
+                    # All outcomes are partial (no feedback yet), use 0% as placeholder
+                    rate = 0.0
 
             pattern["best_collection"] = best_collection
             pattern["success_rate"] = best_rate

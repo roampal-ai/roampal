@@ -32,6 +32,28 @@ interface ConceptDefinition {
   success_rate?: number;
   usage_count?: number;
   related_concepts?: string[];
+
+  // Enhanced detail fields
+  total_searches?: number;
+  outcome_breakdown?: {
+    worked: number;
+    failed: number;
+    partial: number;
+  };
+  collections_breakdown?: Record<string, {
+    successes: number;
+    failures: number;
+    total: number;
+  }>;
+  related_concepts_with_stats?: Array<{
+    concept: string;
+    co_occurrence: number;
+    success_together: number;
+    failure_together: number;
+    success_rate: number;
+  }>;
+  context_snippet?: string;
+  confidence?: number;
 }
 
 interface KnowledgeGraphProps {
@@ -178,21 +200,45 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
       const response = await apiFetch(`http://localhost:8000/api/memory/knowledge-graph/concept/${concept.id}/definition`);
       if (response.ok) {
         const data = await response.json();
+        console.log('[KG] API response for', concept.id, ':', data);
 
-        // Check if the definition is the error message
-        if (data.definition && data.definition !== "Unable to retrieve definition") {
+        // Check if we got a useful definition (not generic fallback)
+        const isGenericFallback = data.definition && data.definition.includes("is a tracked concept representing");
+
+        if (data.definition && data.definition !== "Unable to retrieve definition" && !isGenericFallback) {
+          // Use the definition from memory search
           setConceptDefinition(data.definition);
+        } else if (data.collections_breakdown && Object.keys(data.collections_breakdown).length > 0) {
+          // Build summary from actual routing data
+          const totalSearches = data.total_searches || 0;
+          const worked = data.outcome_breakdown?.worked || 0;
+          const failed = data.outcome_breakdown?.failed || 0;
+          const successRate = totalSearches > 0 ? Math.round((worked / (worked + failed)) * 100) : 0;
+
+          let summary = `This concept has been used in ${totalSearches} memory searches.\n\n`;
+          summary += `**Performance**: ${worked} worked, ${failed} failed (${successRate}% success rate)\n\n`;
+          summary += `**Best performing collection**: ${data.best_collection || 'unknown'}\n\n`;
+          summary += `The system routes queries mentioning "${concept.label}" based on learned patterns from past interactions.`;
+
+          setConceptDefinition(summary);
         } else {
-          // No definition available from KG
+          // Ultimate fallback
           setConceptDefinition(formatConceptInfo(concept));
         }
 
-        // Update selected concept with additional data
+        // Update selected concept with additional data from API
         setSelectedConcept({
           ...concept,
           related_concepts: data.related_concepts || [],
+          related_concepts_with_stats: data.related_concepts_with_stats || [],
           sources: data.sources || [],
-          metadata: data.metadata || {}
+          metadata: data.metadata || {},
+          // Enhanced detail fields from backend
+          total_searches: data.total_searches,
+          outcome_breakdown: data.outcome_breakdown,
+          collections_breakdown: data.collections_breakdown,
+          context_snippet: data.context_snippet,
+          confidence: data.confidence
         } as ConceptDefinition);
       } else {
         // No definition from KG
@@ -544,7 +590,7 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
 
           {/* Modal */}
           <div
-            className="relative bg-zinc-900 rounded-2xl border border-zinc-800 shadow-2xl p-6 max-w-md w-full"
+            className="relative bg-zinc-900 rounded-2xl border border-zinc-800 shadow-2xl p-6 max-w-md w-full max-h-[85vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}
@@ -598,36 +644,117 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
               </div>
             </div>
 
-            {/* Concept Info */}
-            <div className="space-y-3">
-              <div className="p-4 bg-zinc-800/50 rounded-lg">
-                <h4 className="text-xs font-medium text-zinc-400 mb-2">Memory Routing Info</h4>
-                {loadingDefinition ? (
-                  <div className="text-sm text-zinc-500 animate-pulse">Loading concept info...</div>
-                ) : (
-                  <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-line">
-                    {conceptDefinition || 'Fetching concept info...'}
-                  </p>
-                )}
-              </div>
+            {/* Concept Info - Scrollable - MINIMAL DESIGN */}
+            <div className="space-y-3 overflow-y-auto flex-1 pr-2">
 
-              {/* Related Concepts */}
-              {selectedConcept.related_concepts && selectedConcept.related_concepts.length > 0 && (
-                <div className="p-4 bg-zinc-800/50 rounded-lg">
-                  <h4 className="text-xs font-medium text-zinc-400 mb-2">Related Concepts</h4>
-                  <div className="flex flex-wrap gap-1">
-                    {selectedConcept.related_concepts.map((concept, idx) => (
-                      <span key={idx} className="px-2 py-1 text-xs bg-zinc-700 rounded-md text-zinc-300">
-                        {concept}
-                      </span>
-                    ))}
+              {/* Loading State */}
+              {loadingDefinition && (
+                <div className="text-sm text-zinc-500 animate-pulse p-4 text-center">Loading concept data...</div>
+              )}
+
+              {!loadingDefinition && (
+                <>
+                  {/* Learned routing behavior header */}
+                  <div className="text-sm text-zinc-400 mb-4 px-4 py-2 bg-zinc-800/30 rounded-lg">
+                    <span className="text-zinc-200 font-semibold">Learned routing behavior</span> for queries containing "{selectedConcept.label}"
                   </div>
-                </div>
+
+                  {/* Search Strategy */}
+                  {selectedConcept.collections_breakdown && Object.keys(selectedConcept.collections_breakdown).length > 0 && (
+                    <div className="p-4 bg-zinc-800/50 rounded-lg">
+                      <h4 className="text-xs font-medium text-zinc-400 mb-3 flex items-center gap-1.5">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                        </svg>
+                        Collections Searched
+                      </h4>
+                      <div className="space-y-2">
+                        {Object.entries(selectedConcept.collections_breakdown)
+                          .sort(([, a], [, b]) => {
+                            const totalA = a.successes + a.failures;
+                            const totalB = b.successes + b.failures;
+                            const rateA = totalA > 0 ? a.successes / totalA : 0;
+                            const rateB = totalB > 0 ? b.successes / totalB : 0;
+                            return rateB - rateA; // Sort by success rate descending
+                          })
+                          .map(([collection, data], idx) => {
+                            const totalWithFeedback = data.successes + data.failures;
+                            const successRate = totalWithFeedback > 0 ? Math.round((data.successes / totalWithFeedback) * 100) : 0;
+                            const isBest = collection === selectedConcept.best_collection;
+                            return (
+                              <div key={collection} className="flex items-center justify-between text-xs">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-zinc-300">{collection}</span>
+                                  {isBest && <span className="text-yellow-400">⭐</span>}
+                                </div>
+                                <div className="text-zinc-500">
+                                  {totalWithFeedback > 0 ? `${totalWithFeedback} with feedback, ${successRate}% success` : `${data.total} tries (no feedback yet)`}
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Track Record */}
+                  {selectedConcept.outcome_breakdown && (
+                    <div className="p-4 bg-zinc-800/50 rounded-lg">
+                      <h4 className="text-xs font-medium text-zinc-400 mb-2 flex items-center gap-1.5">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 4 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                        </svg>
+                        Track Record
+                      </h4>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-4 text-sm">
+                          <span className="text-green-400">✓ {selectedConcept.outcome_breakdown.worked} worked</span>
+                          <span className="text-red-400">✗ {selectedConcept.outcome_breakdown.failed} failed</span>
+                          {(selectedConcept.outcome_breakdown.worked + selectedConcept.outcome_breakdown.failed) > 0 && (
+                            <span className="text-zinc-400">
+                              → {Math.round((selectedConcept.outcome_breakdown.worked / (selectedConcept.outcome_breakdown.worked + selectedConcept.outcome_breakdown.failed)) * 100)}% success
+                            </span>
+                          )}
+                        </div>
+                        {selectedConcept.outcome_breakdown.partial > 0 && (
+                          <div className="text-xs text-zinc-500">
+                            Plus {selectedConcept.outcome_breakdown.partial} partial result{selectedConcept.outcome_breakdown.partial !== 1 ? 's' : ''} (still useful data, just not counted in success rate)
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Often appears with */}
+                  {selectedConcept.related_concepts_with_stats && selectedConcept.related_concepts_with_stats.length > 0 && (
+                    <div className="p-4 bg-zinc-800/50 rounded-lg">
+                      <h4 className="text-xs font-medium text-zinc-400 mb-3 flex items-center gap-1.5">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                        </svg>
+                        Often appears with
+                      </h4>
+                      <div className="space-y-1.5">
+                        {selectedConcept.related_concepts_with_stats
+                          .sort((a, b) => b.success_rate - a.success_rate)
+                          .slice(0, 5)
+                          .map((rel, idx) => (
+                            <div key={idx} className="flex items-center justify-between text-xs">
+                              <span className="text-zinc-300">{rel.concept}</span>
+                              <span className="text-zinc-500">
+                                {Math.round(rel.success_rate * 100)}% success together
+                              </span>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
-            {/* Footer */}
-            <div className="mt-6 flex justify-end">
+            {/* Footer - Fixed at bottom */}
+            <div className="mt-4 pt-4 border-t border-zinc-800 flex justify-end flex-shrink-0">
               <button
                 onClick={() => setSelectedConcept(null)}
                 className="px-4 py-2 text-xs font-medium text-zinc-300 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors"

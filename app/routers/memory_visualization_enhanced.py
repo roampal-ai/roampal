@@ -403,10 +403,77 @@ async def get_concept_definition(
                 # Generic but more informative fallback
                 definition = f"{concept_id} is a tracked concept representing a specific pattern, technique, or component that has been identified through system usage and learning."
 
+        # Get the concept node data from KG (UnifiedMemorySystem)
+        memory = getattr(request.app.state, 'memory', None)
+        concept_data = {}
+        collections_breakdown = {}
+
+        if memory and hasattr(memory, 'knowledge_graph'):
+            graph = memory.knowledge_graph
+            routing_pattern = graph.get('routing_patterns', {}).get(concept_id, {})
+
+            if routing_pattern:
+                concept_data = {
+                    'best_collection': routing_pattern.get('best_collection'),
+                    'success_rate': routing_pattern.get('success_rate', 0),
+                    'collections_used': routing_pattern.get('collections_used', {})
+                }
+                collections_breakdown = routing_pattern.get('collections_used', {})
+
+        # Calculate success/fail breakdown from collections_used
+        worked = sum(c.get('successes', 0) for c in collections_breakdown.values())
+        failed = sum(c.get('failures', 0) for c in collections_breakdown.values())
+        total_searches = sum(c.get('total', 0) for c in collections_breakdown.values())
+        # Partial = total - (worked + failed)
+        partial = total_searches - (worked + failed)
+
+        # Get context snippet from best matching result
+        context_snippet = ""
+        if best_content and len(best_content) > 100:
+            context_snippet = best_content[:300].strip()
+            if len(best_content) > 300:
+                context_snippet += "..."
+
+        # Build relationship stats for related concepts
+        related_concepts_with_stats = []
+        if memory and hasattr(memory, 'knowledge_graph'):
+            relationships = memory.knowledge_graph.get('relationships', {})
+            for related_concept in related_concepts[:5]:
+                # Generate relationship key (sorted alphabetically)
+                rel_key = "|".join(sorted([concept_id, related_concept]))
+                rel_data = relationships.get(rel_key, {})
+
+                if rel_data:
+                    co_occur = rel_data.get('co_occurrence', 0)
+                    success = rel_data.get('success_together', 0)
+                    failure = rel_data.get('failure_together', 0)
+                    total_outcomes = success + failure
+                    success_rate = (success / total_outcomes) if total_outcomes > 0 else 0
+
+                    related_concepts_with_stats.append({
+                        "concept": related_concept,
+                        "co_occurrence": co_occur,
+                        "success_together": success,
+                        "failure_together": failure,
+                        "success_rate": success_rate
+                    })
+
         return {
             "concept": concept_id,
             "definition": definition,
-            "related_concepts": related_concepts[:5]  # Limit to 5 related concepts
+            "related_concepts": related_concepts[:5],  # Limit to 5 related concepts
+            "related_concepts_with_stats": related_concepts_with_stats,  # Enhanced with success rates
+            "best_collection": concept_data.get('best_collection'),
+            "success_rate": concept_data.get('success_rate', 0),
+            "total_searches": total_searches,
+            "outcome_breakdown": {
+                "worked": worked,
+                "failed": failed,
+                "partial": partial
+            },
+            "collections_breakdown": collections_breakdown,
+            "context_snippet": context_snippet,
+            "confidence": best_score
         }
 
     except Exception as e:

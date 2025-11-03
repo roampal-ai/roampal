@@ -222,37 +222,14 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
         // Set PYTHONPATH to include current directory (.) and backend_root
         let pythonpath = format!(".;{}", backend_root.display());
 
-        // Try to create log files, but don't fail if we can't
-        let log_dir = exe_dir.join("logs");
+        // Backend logging handled by Python's RotatingFileHandler in main.py
+        // No need for stdout/stderr file logging (prevents unbounded log growth)
         let mut child_cmd = Command::new(&python_exe);
         child_cmd
             .arg(&main_py)
             .current_dir(backend_root)
             .env("PYTHONPATH", pythonpath)
             .creation_flags(CREATE_NO_WINDOW);
-
-        // Attempt to set up logging, but continue without it if it fails
-        match std::fs::create_dir_all(&log_dir) {
-            Ok(_) => {
-                let stdout_log = log_dir.join("backend_stdout.log");
-                let stderr_log = log_dir.join("backend_stderr.log");
-
-                match (std::fs::File::create(&stdout_log), std::fs::File::create(&stderr_log)) {
-                    (Ok(stdout_file), Ok(stderr_file)) => {
-                        println!("[start_backend] Logs will be written to:");
-                        println!("  stdout: {:?}", stdout_log);
-                        println!("  stderr: {:?}", stderr_log);
-                        child_cmd.stdout(stdout_file).stderr(stderr_file);
-                    }
-                    _ => {
-                        println!("[start_backend] Warning: Could not create log files, running without file logging");
-                    }
-                }
-            }
-            Err(e) => {
-                println!("[start_backend] Warning: Could not create logs directory ({}), running without file logging", e);
-            }
-        }
 
         let child = child_cmd
             .spawn()
@@ -268,7 +245,7 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
 
         println!("[start_backend] Backend process spawned successfully");
         *backend = Some(child);
-        Ok(format!("Backend started from {} (logs in {:?})", main_py.display(), log_dir))
+        Ok(format!("Backend started from {}", main_py.display()))
     }
 
     #[cfg(not(target_os = "windows"))]

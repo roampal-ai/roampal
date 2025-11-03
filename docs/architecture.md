@@ -452,6 +452,9 @@ Return JSON: {outcome, confidence, indicators, reasoning}
    - LLM sees learned success rates: "This pattern succeeded 90% of the time (8 uses)"
    - Routing hints: "Similar queries (python async) had 85% success rate"
    - Enables LLM to leverage system's learned knowledge
+   - **Success Rate Calculation** (v0.1.6): `successes / (successes + failures)` - excludes partial outcomes from denominator
+     - Partial results tracked separately as contextual data (still useful but not counted in rate)
+     - Provides more accurate confidence metrics for routing decisions
 
 3. **Score Update Logging** ([unified_memory_system.py:883-887](modules/memory/unified_memory_system.py#L883-L887))
    - Transparent logging of all score changes
