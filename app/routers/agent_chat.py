@@ -1955,8 +1955,11 @@ Respond with ONLY the title, nothing else."""
                 logger.warning(f"[TOOL] Empty query provided")
                 query = "recent information"
 
-            # Force search all collections - LLM makes poor collection choices
-            collections = ["all"]
+            # Respect LLM's collection choice (direct control per architecture.md)
+            collections = tool_args.get("collections", ["all"])
+            if not isinstance(collections, list):
+                collections = ["all"]
+
             valid_collections = ['working', 'history', 'patterns', 'books', 'memory_bank', 'all']
             collections = [c for c in collections if c in valid_collections]
             if not collections:
