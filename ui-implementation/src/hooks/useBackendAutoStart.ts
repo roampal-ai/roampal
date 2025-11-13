@@ -21,9 +21,9 @@ export const useBackendAutoStart = () => {
         // First check if backend is already accessible via HTTP
         console.log('[BackendAutoStart] Checking if backend is already running via HTTP...');
         try {
-          const healthCheck = await apiFetch('http://localhost:8000/api/system/health', {
+          const healthCheck = await apiFetch('http://localhost:8000/health', {
             method: 'GET',
-            signal: AbortSignal.timeout(1000)
+            signal: AbortSignal.timeout(2000)
           });
 
           if (healthCheck.ok) {

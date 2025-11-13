@@ -32,6 +32,9 @@ filelock==3.13.1
 pydantic>=2.9.0,<3.0.0
 pydantic-settings>=2.4.0,<3.0.0  # Required by langchain-community if installed
 
+# MCP (Model Context Protocol) for AI tool integrations
+mcp>=0.9.0
+
 # Logging and utilities
 loguru==0.7.2
 rich==13.7.0

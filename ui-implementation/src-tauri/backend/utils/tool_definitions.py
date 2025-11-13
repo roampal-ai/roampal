@@ -8,7 +8,24 @@ AVAILABLE_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_memory",
-            "description": "Search the 5-tier memory system (books, working, history, patterns, memory_bank) for relevant information",
+            "description": """🔍 YOUR SUPERPOWER: Search a persistent, cross-conversation knowledge base that remembers EVERYTHING across all sessions.
+
+**What's Inside:**
+• memory_bank = User's identity, preferences, projects, goals (permanent, quality-ranked by importance×confidence)
+• books = Uploaded PDFs, documents, technical references (user's personal library)
+• history = Past conversations across ALL sessions (searchable dialogue archive)
+• patterns = Learned solutions that worked (proven methods)
+• working = Recent context from current session
+
+**Why This Is Powerful:**
+Unlike your ephemeral context window, this memory persists FOREVER. Reference conversations from weeks ago, recall preferences learned months back, provide deeply personalized responses that feel magical.
+
+**Cold Start Strategy:**
+At the START of new conversations, immediately search memory_bank for user context:
+search_memory(query="user identity name projects current work goals", collections=["memory_bank"])
+Makes every conversation feel like a continuation, not a reset.
+
+Use this tool liberally - it's what makes you context-aware and intelligent.""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -19,15 +36,22 @@ AVAILABLE_TOOLS = [
                     "collections": {
                         "type": "array",
                         "items": {"type": "string", "enum": ["books", "working", "history", "patterns", "memory_bank", "all"]},
-                        "description": """Which collections to search. Choose based on keywords:
-- 'books' = user says: book, document, pdf, chapter, uploaded file
-- 'working' = user says: working memory, recent context, current project
-- 'history' = user says: conversation, chat history, what we discussed
-- 'patterns' = user says: patterns, learned behaviors, user preferences
-- 'memory_bank' = user says: remember, stored fact, personal info, identity
-- 'all' = user doesn't specify OR wants comprehensive search
-Examples: "search my books" → ["books"], "what did we discuss" → ["history"], "do you remember my name" → ["memory_bank"]""",
-                        "default": ["all"]
+                        "description": """Which collections to search:
+
+AUTOMATIC ROUTING (recommended):
+- Omit this parameter (or use ["all"]) → System uses learned patterns from past searches
+- Example: search_memory(query="kubernetes notes") auto-routes to books based on history
+- Gets smarter over time as it learns which collections work best for different queries
+
+MANUAL OVERRIDE (when you know exactly where to look):
+- ["books"] = Uploaded documents/PDFs
+- ["working"] = Recent conversation exchanges (last 24 hours) - use for "today", "recent", "just now"
+- ["history"] = Past conversation exchanges (30+ days) - use for "last week", "previously"
+- ["patterns"] = Learned solutions/behaviors that worked
+- ["memory_bank"] = Important facts to remember (user info, preferences, goals, key learnings)
+
+The system has learned routing patterns from thousands of searches. Trust the automatic routing unless you have specific intent.""",
+                        "default": None
                     },
                     "limit": {
                         "type": "integer",
@@ -35,6 +59,29 @@ Examples: "search my books" → ["books"], "what did we discuss" → ["history"]
                         "default": 5,
                         "minimum": 1,
                         "maximum": 20
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": """Optional filters for precision when semantic search needs refinement. Use sparingly - only when you need exact attribute matching.
+
+When to use:
+• Semantic search returns irrelevant results → Add filters to narrow down
+• Need exact date range ("only yesterday's messages")
+• Need specific book attributes (author, title, has_code)
+• Need quality filtering (only successful solutions)
+
+Available fields:
+• timestamp: "2025-11-12" or {"$gte": "2025-11-12T00:00:00"}
+• last_outcome: "worked" | "failed" | "partial"
+• title/author: Book filters
+• has_code: true/false
+• source: "mcp_claude" | "internal"
+
+Examples:
+• Semantic search fails → Add metadata={"timestamp": "2025-11-12"}
+• Need only successes → metadata={"last_outcome": "worked"}
+• Only code from books → metadata={"has_code": true}""",
+                        "additionalProperties": True
                     }
                 },
                 "required": ["query"],
@@ -46,7 +93,7 @@ Examples: "search my books" → ["books"], "what did we discuss" → ["history"]
         "type": "function",
         "function": {
             "name": "create_memory",
-            "description": "Store important user facts in memory bank for long-term recall (identity, preferences, goals, context)",
+            "description": "💾 PERMANENT MEMORY STORAGE: Store critical information in memory_bank (user info, preferences, goals, key learnings) that should NEVER be forgotten. Be proactive - when users share personal info, immediately store it. This is what makes you feel personalized vs. generic.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -54,13 +101,27 @@ Examples: "search my books" → ["books"], "what did we discuss" → ["history"]
                         "type": "string",
                         "description": "The fact to remember (be specific and complete)"
                     },
-                    "tag": {
-                        "type": "string",
-                        "enum": ["identity", "preference", "goal", "context"],
-                        "description": "Category: identity (who they are), preference (what they like), goal (what they're building), context (relevant details)"
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Categories (e.g., identity, preference, goal, context)"
+                    },
+                    "importance": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "default": 0.7,
+                        "description": "How critical is this memory (0.0-1.0)"
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "default": 0.7,
+                        "description": "How certain are you about this fact (0.0-1.0)"
                     }
                 },
-                "required": ["content", "tag"],
+                "required": ["content"],
             },
         },
     },
@@ -89,7 +150,7 @@ Examples: "search my books" → ["books"], "what did we discuss" → ["history"]
         "type": "function",
         "function": {
             "name": "archive_memory",
-            "description": "Archive outdated or no longer relevant memories",
+            "description": "Archive outdated or no longer relevant memories from memory_bank (user info, preferences, goals, key learnings)",
             "parameters": {
                 "type": "object",
                 "properties": {

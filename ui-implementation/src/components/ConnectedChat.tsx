@@ -69,7 +69,7 @@ export const ConnectedChat: React.FC = () => {
     const savedModel = localStorage.getItem('selectedLLMModel');
     return savedModel || '';
   });
-  const [availableModels, setAvailableModels] = useState<Array<{name: string, provider: string}>>([]);
+  const [availableModels, setAvailableModels] = useState<Array<{name: string, provider: string, lmstudio_id?: string}>>([]);
   const [installedModelsMetadata, setInstalledModelsMetadata] = useState<Array<any>>([]);
   const [isSwitchingModel, setIsSwitchingModel] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
@@ -99,43 +99,42 @@ export const ConnectedChat: React.FC = () => {
   });
   const [availableProviders, setAvailableProviders] = useState<Array<{name: string, available: boolean}>>([]);
 
-  // Check if Ollama is available
+  // Check if Ollama is available (no longer shows modal)
   const checkOllamaStatus = async () => {
     try {
       const response = await apiFetch('http://localhost:8000/api/model/ollama/status');
       if (response.ok) {
         const data = await response.json();
-        if (!data.available) {
-          // Only show modal once per session to avoid spam
-          const hasShownThisSession = sessionStorage.getItem('hasShownOllamaPopup');
-          if (!hasShownThisSession) {
-            setShowOllamaRequired(true);
-            sessionStorage.setItem('hasShownOllamaPopup', 'true');
-          }
-          return false;
-        }
-        return true;
+        return data.available;
       }
     } catch (error) {
       console.error('[Ollama] Error checking status:', error);
-      const hasShownThisSession = sessionStorage.getItem('hasShownOllamaPopup');
-      if (!hasShownThisSession) {
-        setShowOllamaRequired(true);
-        sessionStorage.setItem('hasShownOllamaPopup', 'true');
-      }
       return false;
     }
     return false;
   };
 
-  // Detect available providers
+  // Detect available providers (only show if they have chat models)
   const fetchProviders = async () => {
     try {
+      // Fetch available models first to know which providers have chat models
+      const modelsRes = await apiFetch('http://localhost:8000/api/model/available');
+      let ollamaHasModels = false;
+      let lmstudioHasModels = false;
+
+      if (modelsRes?.ok) {
+        const modelsData = await modelsRes.json();
+        const models = modelsData.models || [];
+        ollamaHasModels = models.some((m: any) => m.provider === 'ollama');
+        lmstudioHasModels = models.some((m: any) => m.provider === 'lmstudio');
+      }
+
       const [ollamaRes, lmstudioRes] = await Promise.all([
         apiFetch('http://localhost:8000/api/model/ollama/status').catch(() => null),
         apiFetch('http://localhost:8000/api/model/lmstudio/status').catch(() => null)
       ]);
 
+      // Build providers array - includes ALL providers regardless of models (for detection banners)
       const providers = [];
       if (ollamaRes?.ok) {
         const data = await ollamaRes.json();
@@ -179,10 +178,40 @@ export const ConnectedChat: React.FC = () => {
         // Store models with provider info for accurate "Installed" detection
         const modelsWithProvider = data.models ? data.models.map((m: any) => ({
           name: m.name,
-          provider: m.provider
+          provider: m.provider,
+          lmstudio_id: m.lmstudio_id // Keep LM Studio actual model ID for switching
         })) : [];
         setAvailableModels(modelsWithProvider);
         hasLoadedModels.current = true;
+
+        // Auto-select provider with chat models if current provider has none
+        const nonLLMs = ['llava', 'nomic-embed', 'bge-', 'all-minilm', 'mxbai-embed'];
+        const currentProviderHasModels = modelsWithProvider.some((m: any) =>
+          m.provider === selectedProvider &&
+          !nonLLMs.some(excluded => m.name.toLowerCase().includes(excluded))
+        );
+
+        if (!currentProviderHasModels && modelsWithProvider.length > 0) {
+          // Find first provider with chat models
+          const ollamaHasModels = modelsWithProvider.some((m: any) =>
+            m.provider === 'ollama' &&
+            !nonLLMs.some(excluded => m.name.toLowerCase().includes(excluded))
+          );
+          const lmstudioHasModels = modelsWithProvider.some((m: any) =>
+            m.provider === 'lmstudio' &&
+            !nonLLMs.some(excluded => m.name.toLowerCase().includes(excluded))
+          );
+
+          if (lmstudioHasModels) {
+            setSelectedProvider('lmstudio');
+            setViewProvider('lmstudio');
+            localStorage.setItem('selectedProvider', 'lmstudio');
+          } else if (ollamaHasModels) {
+            setSelectedProvider('ollama');
+            setViewProvider('ollama');
+            localStorage.setItem('selectedProvider', 'ollama');
+          }
+        }
 
         // Also fetch registry metadata for installed models
         await fetchRegistryMetadata();
@@ -194,12 +223,8 @@ export const ConnectedChat: React.FC = () => {
     }
   };
 
-  const handleOllamaRetry = async () => {
+  const handleWelcomeClose = () => {
     setShowOllamaRequired(false);
-    // Recheck Ollama status
-    await checkOllamaStatus();
-    // Reload models
-    await fetchModels();
   };
   
   useEffect(() => {
@@ -207,6 +232,13 @@ export const ConnectedChat: React.FC = () => {
     fetchModels();
     // Also fetch current model from backend
     fetchCurrentModel();
+
+    // Show welcome modal once on first launch (using localStorage, not sessionStorage)
+    const hasSeenWelcome = localStorage.getItem('hasSeenWelcome');
+    if (!hasSeenWelcome) {
+      setShowOllamaRequired(true);
+      localStorage.setItem('hasSeenWelcome', 'true');
+    }
 
     // Poll provider status every 10 seconds to auto-detect when servers start/stop
     const interval = setInterval(() => {
@@ -229,21 +261,27 @@ export const ConnectedChat: React.FC = () => {
       const response = await apiFetch('http://localhost:8000/api/model/current');
       if (response.ok) {
         const data = await response.json();
-        if (data.current_model) {
-          // Don't select embedding models
-          const isEmbeddingModel = data.current_model.includes('nomic-embed') ||
-                                   data.current_model.includes('bge-') ||
-                                   data.current_model.includes('all-minilm') ||
-                                   data.current_model.includes('llava');
 
-          if (!isEmbeddingModel) {
-            setSelectedModel(data.current_model);
-            localStorage.setItem('selectedLLMModel', data.current_model);
-          }
-        } else {
-          // Backend returned null/undefined current_model (model was deleted or doesn't exist)
-          // Find first available model from availableModels to switch to
-          console.log('[Models] Backend has no current model, finding first available...');
+        // Check if backend has an embedding model or no chat capability
+        const isEmbeddingModel = data.current_model && (
+          data.current_model.includes('nomic-embed') ||
+          data.current_model.includes('bge-') ||
+          data.current_model.includes('all-minilm') ||
+          data.current_model.includes('llava') ||
+          data.is_embedding_model === true ||
+          data.can_chat === false
+        );
+
+        const needsAutoSwitch = !data.current_model || isEmbeddingModel;
+
+        if (data.current_model && !isEmbeddingModel) {
+          // Backend has a valid chat model
+          setSelectedModel(data.current_model);
+          localStorage.setItem('selectedLLMModel', data.current_model);
+        } else if (needsAutoSwitch) {
+          // Backend has no model, or has embedding-only model - auto-switch to first chat model
+          const reason = !data.current_model ? 'no current model' : 'embedding-only model';
+          console.log(`[Models] Backend has ${reason}, finding first available chat model...`);
           const nonLLMs = ['llava', 'nomic-embed', 'bge-', 'all-minilm', 'mxbai-embed'];
           const chatModels = availableModels.filter((m: any) =>
             !nonLLMs.some(excluded => m.name.toLowerCase().includes(excluded))
@@ -251,7 +289,7 @@ export const ConnectedChat: React.FC = () => {
 
           if (chatModels.length > 0) {
             const firstModel = chatModels[0];
-            console.log(`[Models] Auto-selecting first available model: ${firstModel.name} (${firstModel.provider})`);
+            console.log(`[Models] Auto-switching to first available chat model: ${firstModel.name} (${firstModel.provider})`);
             // Switch to it on backend
             await performModelSwitch(firstModel.name);
           }
@@ -297,10 +335,14 @@ export const ConnectedChat: React.FC = () => {
   const performModelSwitch = async (modelName: string): Promise<boolean> => {
     setIsSwitchingModel(true);
     try {
+      // Find the model in availableModels to get lmstudio_id if it exists
+      const modelInfo = availableModels.find((m: any) => m.name === modelName);
+      const actualModelId = modelInfo?.lmstudio_id || modelName; // Use lmstudio_id if available
+
       const response = await apiFetch('http://localhost:8000/api/model/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model_name: modelName })
+        body: JSON.stringify({ model_name: actualModelId })
       });
 
       if (response.ok) {
@@ -1163,19 +1205,29 @@ export const ConnectedChat: React.FC = () => {
   
   // Essential UI states only
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'integrations' | undefined>(undefined);
   const [showDevPanel, setShowDevPanel] = useState(false);
   const [showPersonalityCustomizer, setShowPersonalityCustomizer] = useState(false);
   const [showMemoryStats, setShowMemoryStats] = useState(false);
 
-  // Keyboard shortcut for dev panel (Ctrl+Shift+D)
+  // Keyboard shortcuts for dev features
   useEffect(() => {
     const handleKeydown = (e: KeyboardEvent) => {
+      // Ctrl+Shift+D: Open dev panel
       if (e.ctrlKey && e.shiftKey && e.key === 'D') {
         e.preventDefault();
         setShowDevPanel(true);
       }
+
+      // Ctrl+Shift+W: Reset welcome modal (for testing first-time startup)
+      if (e.ctrlKey && e.shiftKey && e.key === 'W') {
+        e.preventDefault();
+        localStorage.removeItem('hasSeenWelcome');
+        setShowOllamaRequired(true);
+        console.log('[Dev] Welcome modal reset - will show on next load');
+      }
     };
-    
+
     document.addEventListener('keydown', handleKeydown);
     return () => document.removeEventListener('keydown', handleKeydown);
   }, []);
@@ -1948,7 +2000,7 @@ export const ConnectedChat: React.FC = () => {
               className="h-full overflow-y-auto overflow-x-hidden"
               onScroll={handleScroll}
             >
-              {getModelOptions().length === 0 ? (
+              {!hasChatModel ? (
                 <div className="h-full flex items-center justify-center px-6">
                   <div className="max-w-md text-center space-y-6">
                     <div className="w-20 h-20 mx-auto bg-zinc-900 rounded-2xl flex items-center justify-center">
@@ -2072,7 +2124,11 @@ export const ConnectedChat: React.FC = () => {
       {/* Settings Modal */}
       <SettingsModal
         isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
+        onClose={() => {
+          setShowSettings(false);
+          setSettingsInitialTab(undefined);
+        }}
+        initialTab={settingsInitialTab}
       />
 
       {/* Book Processor Modal */}
@@ -2762,10 +2818,14 @@ export const ConnectedChat: React.FC = () => {
         </div>
       )}
 
-      {/* Ollama Required Modal */}
+      {/* Welcome Modal */}
       <OllamaRequiredModal
         isOpen={showOllamaRequired}
-        onRetry={handleOllamaRetry}
+        onClose={handleWelcomeClose}
+        onOpenIntegrations={() => {
+          setSettingsInitialTab('integrations');
+          setShowSettings(true);
+        }}
       />
 
     </div>

@@ -34,7 +34,7 @@ from typing import Dict, Any, Optional, List, AsyncGenerator, Tuple
 
 from datetime import datetime, timedelta
 
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict, defaultdict, defaultdict
 
 from pathlib import Path
 
@@ -68,6 +68,61 @@ from config.model_limits import (
 # Initialize router and logger
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Cold-start tracking for internal LLM (v0.2.0)
+# Auto-injects user profile from Content KG on message 1 of every new conversation
+internal_session_message_counter: Dict[str, int] = defaultdict(int)
+
+# Injection Protection: Response Validation (Layer 3)
+class ResponseValidator:
+    """Validates LLM responses for injection artifacts"""
+
+    HIJACK_INDICATORS = [
+        r"^(HACK|HACKED|PWNED)$",
+        r"^(ignore|disregard|forget)",
+        r"I (am now|will now|have been instructed to)",
+        r"</?system>",
+        r"as a (pirate|robot|assistant)",
+        r"\*.*in (pirate|robot) voice\*",
+    ]
+
+    @staticmethod
+    def is_hijacked(response: str) -> tuple:
+        """Returns: (is_hijacked, reason)"""
+        import re
+        response_stripped = response.strip()
+        response_lower = response_stripped.lower()
+
+        # Check suspicious short responses
+        if len(response_stripped) < 15:
+            suspicious_words = ["hack", "pwned", "error", "unauthorized"]
+            if any(word in response_lower for word in suspicious_words):
+                return True, "Short suspicious response"
+
+        # Check role change admission
+        role_changes = [
+            "i am now", "i will now", "i have been instructed",
+            "as a pirate", "in pirate voice", "arrr",
+            "as requested, i will"
+        ]
+        if any(phrase in response_lower for phrase in role_changes):
+            return True, "Role change detected"
+
+        # Check system tag injection
+        if "<system>" in response_lower or "</system>" in response_lower:
+            return True, "System tag injection"
+
+        # Check if response is ONLY the hijack payload
+        last_sentence = response_stripped.split('.')[-1].strip()
+        if last_sentence.upper() in ["HACK", "HACKED", "PWNED"]:
+            return True, "Hijack payload detected in final sentence"
+
+        return False, ""
+
+    @staticmethod
+    def get_fallback_response() -> str:
+        """Safe response when hijack detected"""
+        return "I noticed something unusual in my response. Let me try again - how can I help you?"
 
 # Global state for async generation tasks
 _generation_tasks: Dict[str, Dict[str, Any]] = {}
@@ -518,7 +573,36 @@ class AgentChatService:
                 # Move to end to mark as recently used
                 self.conversation_histories.move_to_end(conversation_id)
 
-            # Add user message to history (only after validation passes)
+            # COLD-START AUTO-TRIGGER (v0.2.0): Track messages and ALWAYS inject user profile on message 1
+            internal_session_message_counter[conversation_id] += 1
+            current_message = internal_session_message_counter[conversation_id]
+            logger.info(f"[COLD-START] Internal LLM message #{current_message} for conversation {conversation_id}")
+
+            # ALWAYS auto-inject user profile on message 1 (no tracking, no conditions)
+            if current_message == 1:
+                logger.info(f"[COLD-START] Auto-injecting user profile from Content KG on message 1...")
+                try:
+                    # Get cold-start context from Content KG (or fallback to vector search)
+                    context_summary = await asyncio.wait_for(
+                        self.memory.get_cold_start_context(limit=5),
+                        timeout=25.0
+                    )
+
+                    if context_summary:
+                        logger.info(f"[COLD-START] Injecting user profile: {context_summary[:100]}...")
+                        self.conversation_histories[conversation_id].append({
+                            "role": "system",
+                            "content": context_summary
+                        })
+                    else:
+                        logger.info(f"[COLD-START] No user profile context available yet")
+
+                except asyncio.TimeoutError:
+                    logger.error(f"[COLD-START] Auto-trigger timed out after 25s")
+                except Exception as e:
+                    logger.error(f"[COLD-START] Auto-trigger error: {e}", exc_info=True)
+
+            # Add user message to history (AFTER auto-trigger injection if any)
             self.conversation_histories[conversation_id].append({
                 "role": "user",
                 "content": message
@@ -537,6 +621,7 @@ class AgentChatService:
 
             # 2. Build system prompt (instructions only, no history or current message)
             conversation_history = self.conversation_histories.get(conversation_id, [])
+            logger.info(f"[DEBUG] conversation_history length: {len(conversation_history)}, roles: {[m.get('role') for m in conversation_history]}")
             system_instructions = self._build_complete_prompt(message, conversation_history)
 
             # 3. Get tool definitions for streaming
@@ -728,6 +813,14 @@ class AgentChatService:
             # Get complete response for processing
             complete_response = ''.join(full_response)
 
+
+            # INJECTION PROTECTION (Layer 3): Validate response for hijacking
+            is_hijacked, hijack_reason = ResponseValidator.is_hijacked(complete_response)
+            if is_hijacked:
+                logger.error(f"[INJECTION DETECTED] Response hijacked: {hijack_reason}")
+                logger.error(f"[INJECTION DETECTED] Original response: {complete_response[:200]}")
+                complete_response = ResponseValidator.get_fallback_response()
+                full_response = [complete_response]  # Replace buffer
             # DEPRECATED: Extract inline tags as fallback (tools are preferred method now)
             # This maintains backwards compatibility if LLM outputs old-style tags
             clean_response, memory_entries = await self._extract_and_store_memory_bank_tags(
@@ -790,6 +883,8 @@ class AgentChatService:
                     with open(session_file, 'r', encoding='utf-8') as f:
                         lines = f.readlines()
 
+                    logger.debug(f"[OUTCOME] Session file has {len(lines)} lines")
+
                     # Find last assistant message with doc_id (search backwards)
                     prev_assistant = None
                     for line in reversed(lines[:-1]):  # Skip last line (current user message just written)
@@ -802,6 +897,8 @@ class AgentChatService:
                             continue
 
                     if prev_assistant:
+                        logger.debug(f"[OUTCOME] Found previous assistant message with doc_id {prev_assistant['doc_id']}")
+
                         # Build conversation context for outcome detection
                         outcome_conversation = [
                                 {"role": "assistant", "content": prev_assistant["content"]},
@@ -810,6 +907,7 @@ class AgentChatService:
 
                         # Detect outcome using LLM
                         outcome_result = await self.memory.detect_conversation_outcome(outcome_conversation)
+                        logger.info(f"[OUTCOME] Detection result: {outcome_result.get('outcome')} (confidence: {outcome_result.get('confidence', 0):.2f})")
 
                         if outcome_result.get("outcome") in ["worked", "failed", "partial"]:
                             # Record outcome and update score
@@ -817,9 +915,13 @@ class AgentChatService:
                                     doc_id=prev_assistant["doc_id"],
                                     outcome=outcome_result["outcome"]
                                 )
-                            logger.info(f"[OUTCOME] Detected '{outcome_result['outcome']}' for doc_id {prev_assistant['doc_id']}, confidence: {outcome_result.get('confidence', 0):.2f}")
+                            logger.info(f"[OUTCOME] Recorded '{outcome_result['outcome']}' for doc_id {prev_assistant['doc_id']}")
+                        else:
+                            logger.debug(f"[OUTCOME] Skipping outcome '{outcome_result.get('outcome')}' (not worked/failed/partial)")
+                    else:
+                        logger.debug(f"[OUTCOME] No previous assistant message with doc_id found (first message in conversation)")
                 except Exception as e:
-                    logger.error(f"[OUTCOME] Failed to read session file for outcome detection: {e}")
+                    logger.error(f"[OUTCOME] Failed to read session file for outcome detection: {e}", exc_info=True)
 
             # Generate title if this is the first exchange (2 messages)
             title = await self._generate_title_if_needed(conversation_id, message, clean_response)
@@ -904,9 +1006,10 @@ class AgentChatService:
         query: str,
         collections: Optional[List[str]] = None,
         limit: int = 5,
+        metadata_filters: Optional[Dict[str, Any]] = None,
         transparency_context: Optional[TransparencyContext] = None
     ) -> List[Dict[str, Any]]:
-        """Enhanced search with LLM-controlled collection selection"""
+        """Enhanced search with LLM-controlled collection selection and metadata filtering"""
         # If no collections specified, search all
         if collections is None:
             collections_to_search = None  # This searches all collections
@@ -914,11 +1017,12 @@ class AgentChatService:
             # Map collection names to actual collections
             collections_to_search = collections
 
-        # Search with specified collections
+        # Search with specified collections and metadata filters
         results = await self.memory.search(
             query,
             limit=limit,
             collections=collections_to_search,
+            metadata_filters=metadata_filters,
             transparency_context=transparency_context
         )
 
@@ -983,40 +1087,10 @@ class AgentChatService:
     ) -> str:
         """
         Condensed system prompt for OpenAI-style models (LM Studio).
-        Long prompts reduce tool-calling behavior, so this version is minimal.
+        Now unified with Ollama prompt - this wrapper maintained for compatibility.
         """
-        from datetime import datetime
-
-        parts = []
-
-        # Concise system prompt optimized for OpenAI-style models (LM Studio)
-        # Long prompts reduce tool-calling behavior - keep under 1000 chars
-        current_datetime = datetime.now()
-        parts.append(f"""Today: {current_datetime.strftime('%Y-%m-%d %H:%M')}
-
-You are Roampal, an AI assistant with access to the user's personal knowledge base.
-
-**5-Tier Memory System:**
-• books = uploaded PDFs, documents, files
-• working = recent context, current work
-• history = past conversations
-• patterns = learned behaviors
-• memory_bank = stored personal facts
-
-**CRITICAL TOOL USAGE RULES:**
-You MUST use the available functions to access memory. DO NOT attempt to answer questions about user's personal information, past conversations, or uploaded documents without calling search_memory first.
-
-REQUIRED function calls:
-• Questions about books/docs → CALL search_memory(query, collections=["books"])
-• "What did we discuss" → CALL search_memory(query, collections=["history"])
-• "Do you remember X" → CALL search_memory(query, collections=["memory_bank"])
-• ANY question about user's data → CALL search_memory(query, collections=["all"])
-• User shares personal info → CALL create_memory(content, tag)
-
-ALWAYS use user's EXACT words as the query parameter.
-Cite sources from search results.""")
-
-        return "\n\n".join(parts)
+        # Use the same unified prompt for consistency
+        return self._build_complete_prompt(message, conversation_history)
 
 
 
@@ -1026,17 +1100,11 @@ Cite sources from search results.""")
         conversation_history: List[Dict[str, str]] = None
     ) -> str:
         """
+        Unified system prompt for all providers (Ollama, LM Studio).
         Single source of truth for prompt structure.
-        Used by streaming endpoint to ensure consistent prompt across all requests.
-
-        For OpenAI-style models (LM Studio), uses a shorter system prompt to maximize tool-calling behavior.
         """
         from datetime import datetime
         from config.model_contexts import get_context_size
-
-        # Check if using OpenAI-style API (LM Studio) - if so, use condensed prompt
-        if self.llm and hasattr(self.llm, 'api_style') and self.llm.api_style == "openai":
-            return self._build_openai_prompt(message, conversation_history)
 
         parts = []
 
@@ -1080,6 +1148,20 @@ WHEN NOT TO USE search_memory:
 ✗ Simple acknowledgments ("thanks", "ok", "got it")
 ✗ Meta questions about the system itself
 
+METADATA FILTERING (Advanced):
+You can filter searches by exact metadata matches using the metadata parameter.
+
+Common use cases (execute silently, never show function syntax to user):
+• Filter books by author or title
+• Find content from specific dates (use timestamp field)
+• Filter by quality (last_outcome: "worked" or "failed")
+• Filter by source (source: "mcp_claude" for MCP-learned content)
+
+When user asks:
+• "Show me books by Logan" → Search books collection with author filter
+• "What worked before?" → Search with last_outcome="worked" filter
+• "Recent conversations" or "today's messages" → Search with today's timestamp filter
+
 CRITICAL: Distinguish between system data and training data:
 • System data = Search results from search_memory tool (user's actual documents and conversations)
 • Training data = Your pre-training knowledge (general world knowledge)
@@ -1096,9 +1178,12 @@ When in doubt, searching is better than missing important context.""")
 
 [IMPORTANT - Function Calling]
 
-You MUST use the available functions/tools when appropriate. When a user asks about their memory, past conversations, documents, or personal information, you MUST call search_memory() instead of guessing or using your training data.
+You have access to functions/tools. Use them when appropriate:
+• Simple questions about the user → You may reference the auto-loaded User Profile facts
+• Detailed questions or specific searches → CALL search_memory() for comprehensive results
+• User shares new info → CALL create_memory()
 
-Do NOT answer memory-related questions without calling the function first. Always wait for the function results before responding.""")
+Always wait for function results before responding with detailed information.""")
         else:
             logger.info(f"[SYSTEM PROMPT] NOT adding OpenAI instructions. llm={self.llm}, has api_style={hasattr(self.llm, 'api_style') if self.llm else 'N/A'}, api_style value={getattr(self.llm, 'api_style', 'N/A') if self.llm else 'N/A'}")
 
@@ -2035,6 +2120,11 @@ Respond with ONLY the title, nothing else."""
             if not collections:
                 collections = ["all"]
 
+            # Extract metadata filters (optional)
+            metadata = tool_args.get("metadata", None)
+            if metadata and isinstance(metadata, dict):
+                logger.info(f"[TOOL] search_memory called with metadata filters: {metadata}")
+
             logger.info(f"[TOOL] search_memory called with collections={collections}, query='{query[:50]}...')")
 
             limit = tool_args.get("limit", 5)
@@ -2043,11 +2133,12 @@ Respond with ONLY the title, nothing else."""
 
             collections_param = None if "all" in collections else collections
 
-            # Execute search
+            # Execute search with metadata filters
             tool_results = await self._search_memory_with_collections(
                 query,
                 collections_param,
-                limit
+                limit,
+                metadata_filters=metadata
             )
 
             # Format results

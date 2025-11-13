@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Roampal",
-    "version": "0.1.6"
+    "version": "0.2.0"
   },
   "tauri": {
     "allowlist": {
@@ -60,7 +60,8 @@
         "../../LICENSE",
         "../../THIRD_PARTY_LICENSES.md",
         "backend",
-        "binaries/python"
+        "binaries/python",
+        "binaries/models"
       ],
       "publisher": "Roampal",
       "copyright": "\u00a9 2024 Roampal"

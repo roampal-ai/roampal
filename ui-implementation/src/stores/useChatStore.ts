@@ -764,6 +764,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
               return {
                 messages,
                 isStreaming: false,
+                isProcessing: false,
                 processingStage: 'idle',
                 processingStatus: null
               };

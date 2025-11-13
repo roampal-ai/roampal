@@ -111,7 +111,10 @@ async def get_provider_models(name: str, config: dict) -> List[str]:
 
             if config['api_style'] == 'ollama':
                 # Ollama format: {"models": [{"name": "..."}, ...]}
-                return [m['name'] for m in data.get('models', [])]
+                # Filter out embedding models
+                embedding_models = ['nomic-embed', 'mxbai-embed', 'all-minilm', 'bge-', 'text-embedding']
+                return [m['name'] for m in data.get('models', [])
+                       if not any(embed in m['name'].lower() for embed in embedding_models)]
             else:
                 # OpenAI format (LM Studio): {"data": [{"id": "..."}, ...]}
                 return [m['id'] for m in data.get('data', []) if not m['id'].startswith('text-embedding')]
@@ -554,21 +557,28 @@ async def list_available_models():
     """List all locally available models from both Ollama and LM Studio"""
     all_models = []
 
-    # 1. Get Ollama models
+    # 1. Get Ollama models (exclude embedding models)
+    embedding_models = ['nomic-embed-text', 'mxbai-embed-large', 'all-minilm']
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get('http://localhost:11434/api/tags')
             if response.status_code == 200:
                 data = response.json()
+                ollama_count = 0
                 for model in data.get('models', []):
-                    all_models.append({
-                        "name": model.get('name', ''),
-                        "id": model.get('digest', '')[:12],
-                        "size": _format_size(model.get('size', 0)),
-                        "modified": model.get('modified_at', ''),
-                        "provider": "ollama"
-                    })
-                logger.info(f"Found {len(all_models)} Ollama models")
+                    model_name = model.get('name', '')
+                    # Skip embedding models
+                    is_embedding = any(embed in model_name.lower() for embed in embedding_models)
+                    if not is_embedding:
+                        all_models.append({
+                            "name": model_name,
+                            "id": model.get('digest', '')[:12],
+                            "size": _format_size(model.get('size', 0)),
+                            "modified": model.get('modified_at', ''),
+                            "provider": "ollama"
+                        })
+                        ollama_count += 1
+                logger.info(f"Found {ollama_count} Ollama chat models")
     except Exception as e:
         logger.warning(f"Failed to fetch Ollama models: {e}")
 

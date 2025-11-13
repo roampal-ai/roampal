@@ -720,42 +720,67 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
               <div className="space-y-2">
                 <h4 className="text-sm font-semibold text-zinc-100">What is this?</h4>
                 <p className="text-sm text-zinc-400 leading-relaxed">
-                  Shows your top 20 most valuable learned patterns. The system tracks which conversation topics and approaches
-                  lead to successful outcomes (you say "thanks", "worked", etc.) vs. failures. Colors show success rates,
-                  and larger nodes = patterns that are both high-quality AND frequently used.
+                  Shows your top 20 most valuable learned patterns. When you search memory or chat with Roampal,
+                  the system tracks which concepts lead to successful outcomes (you say "thanks", "worked", etc.).
                 </p>
+                <p className="text-sm text-zinc-400 leading-relaxed">
+                  Each node represents a concept the system has learned to route effectively — it knows which
+                  memory sources (books, patterns, history, working, memory_bank) tend to have the best information
+                  for that topic.
+                </p>
+              </div>
+
+              {/* Dual Knowledge Graph System */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold text-zinc-100">Two Types of Learning</h4>
+                <div className="space-y-2">
+                  <div className="p-3 bg-zinc-800/50 rounded-lg">
+                    <p className="text-xs font-medium text-blue-400 mb-1">Routing Graph (Query-based)</p>
+                    <p className="text-xs text-zinc-400">
+                      Learns which memory collections successfully answer queries containing specific concepts.
+                      When you search for "Python debugging", it learns that "patterns" collection has the best answers.
+                    </p>
+                  </div>
+                  <div className="p-3 bg-zinc-800/50 rounded-lg">
+                    <p className="text-xs font-medium text-green-400 mb-1">Content Graph (Memory-based)</p>
+                    <p className="text-xs text-zinc-400">
+                      Learns relationships between concepts in your memory_bank content. Tracks which ideas
+                      appear together in your saved knowledge.
+                    </p>
+                  </div>
+                </div>
               </div>
 
               {/* Visual Elements */}
               <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-100">Colors & Connections</h4>
+                <h4 className="text-sm font-semibold text-zinc-100">Node Colors</h4>
                 <div className="space-y-3">
                   <div className="flex items-start gap-3">
                     <div className="w-3 h-3 rounded-full bg-green-500 mt-1"></div>
                     <div>
                       <p className="text-sm text-zinc-300 font-medium">Green (&gt;70% success)</p>
-                      <p className="text-sm text-zinc-500">Conversations with this pattern succeed most of the time</p>
+                      <p className="text-sm text-zinc-500">Queries with this concept find helpful answers most of the time</p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
                     <div className="w-3 h-3 rounded-full bg-amber-500 mt-1"></div>
                     <div>
                       <p className="text-sm text-zinc-300 font-medium">Amber (40-70% success)</p>
-                      <p className="text-sm text-zinc-500">Moderate success rate - sometimes works, sometimes doesn't</p>
+                      <p className="text-sm text-zinc-500">Moderate success rate — sometimes works, sometimes doesn't</p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
                     <div className="w-3 h-3 rounded-full bg-red-500 mt-1"></div>
                     <div>
                       <p className="text-sm text-zinc-300 font-medium">Red (&lt;40% success)</p>
-                      <p className="text-sm text-zinc-500">Low success rate - this approach often doesn't work well</p>
+                      <p className="text-sm text-zinc-500">Low success rate — queries for this concept often don't find good answers</p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
                     <div className="w-8 h-0.5 bg-zinc-600 mt-2"></div>
                     <div>
-                      <p className="text-sm text-zinc-300 font-medium">Lines</p>
-                      <p className="text-sm text-zinc-500">Concepts that often appear together in conversations</p>
+                      <p className="text-sm text-zinc-300 font-medium">Lines (Connections)</p>
+                      <p className="text-sm text-zinc-500">Concepts that appear together in successful query-answer pairs</p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
@@ -764,7 +789,7 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                     </div>
                     <div>
                       <p className="text-sm text-zinc-300 font-medium">Node Size</p>
-                      <p className="text-sm text-zinc-500">Larger = better quality × higher usage (hybrid score)</p>
+                      <p className="text-sm text-zinc-500">Larger = √usage × √quality (balances frequency and success rate)</p>
                     </div>
                   </div>
                 </div>
@@ -776,16 +801,30 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                 <div className="p-4 bg-zinc-800/50 rounded-lg space-y-2">
                   <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-2 text-sm">
                     <span className="text-zinc-500">Quality Score:</span>
-                    <span className="text-zinc-400">Percentage of conversations where this pattern led to success</span>
+                    <span className="text-zinc-400">Percentage of queries where this concept found helpful answers</span>
                     <span className="text-zinc-500">Usage Count:</span>
-                    <span className="text-zinc-400">How many times this concept has been referenced</span>
+                    <span className="text-zinc-400">How many memory searches included this concept</span>
                     <span className="text-zinc-500">Hybrid Score:</span>
-                    <span className="text-zinc-400">Combined quality × usage (determines node size)</span>
+                    <span className="text-zinc-400">√usage × √quality (determines node size)</span>
                     <span className="text-zinc-500">Best Memory Type:</span>
-                    <span className="text-zinc-400">Where this concept's information is typically stored</span>
+                    <span className="text-zinc-400">Which collection (books/patterns/history/working/memory_bank) performs best for this concept</span>
                     <span className="text-zinc-500">Related Concepts:</span>
-                    <span className="text-zinc-400">Other patterns that frequently appear together</span>
+                    <span className="text-zinc-400">Other concepts that appear together in successful searches</span>
                   </div>
+                </div>
+              </div>
+
+              {/* How It Works Example */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold text-zinc-100">How It Works (Example)</h4>
+                <div className="p-3 bg-zinc-800/30 rounded-lg">
+                  <ol className="text-xs text-zinc-400 space-y-1.5 list-decimal list-inside">
+                    <li>You search for "Python debugging"</li>
+                    <li>System identifies key concepts: "Python", "debugging"</li>
+                    <li>Checks which collections answered similar queries successfully</li>
+                    <li>Searches those collections first (e.g., "patterns" if you've solved Python bugs before)</li>
+                    <li>Based on your feedback ("that worked!"), updates routing strategy</li>
+                  </ol>
                 </div>
               </div>
 
@@ -794,9 +833,9 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                 <h4 className="text-sm font-semibold text-zinc-100">How It Improves</h4>
                 <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1.5 text-sm">
                   <span className="text-zinc-500">Learning:</span>
-                  <span className="text-zinc-400">Tracks which memories successfully answer queries</span>
+                  <span className="text-zinc-400">Tracks which memory collections successfully answer queries</span>
                   <span className="text-zinc-500">Connections:</span>
-                  <span className="text-zinc-400">Links concepts that appear together in solutions</span>
+                  <span className="text-zinc-400">Links concepts that appear together in successful searches</span>
                   <span className="text-zinc-500">Cleanup:</span>
                   <span className="text-zinc-400">Removes outdated routing patterns automatically</span>
                 </div>
@@ -805,7 +844,7 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
               {/* Important Note */}
               <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
                 <p className="text-sm text-blue-400">
-                  <strong>Note:</strong> This map helps the AI find information faster. It doesn't store the actual content - that's in your memory collections.
+                  <strong>Note:</strong> This is a routing optimizer, not a content store. It helps the AI find information faster by learning which memory sources work best for different topics. The actual content lives in your memory collections.
                 </p>
               </div>
             </div>

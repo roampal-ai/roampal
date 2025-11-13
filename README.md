@@ -5,7 +5,7 @@
 [![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri-FFC131?logo=tauri)](https://tauri.app/)
 [![Multi-Provider](https://img.shields.io/badge/LLM-Ollama%20%7C%20LM%20Studio-blue)](https://roampal.ai)
 
-**AI that grows with you.**
+THE Memory Layer That Actually Learns
 
 Stop re-explaining yourself every conversation. Roampal remembers your context, learns what actually works for you, and gets smarter over time—all while keeping your data 100% private and local on your machine.
 
@@ -19,6 +19,32 @@ Stop re-explaining yourself every conversation. Roampal remembers your context, 
 - **Gets smarter over time**: Successful advice promotes to long-term memory, failures get deleted
 
 Think of it as your personal AI that compounds in value the longer you use it.
+
+### Performance Metrics
+
+Validated performance characteristics:
+
+| Metric | Result |
+|--------|--------|
+| **Search Latency (p95)** | **34ms** |
+| **Token Efficiency** | **112 tokens/query** |
+| **Learning Under Noise** | **80% precision @ 4:1 semantic confusion** |
+| **Routing Accuracy** | **100% (cross-collection test)** |
+
+[See benchmark methodology & results →](benchmarks/README.md)
+
+---
+
+### Key Features
+
+Roampal includes advanced memory features:
+
+- **Outcome-Based Learning**: Memories adapt based on feedback (+0.2 worked, -0.3 failed)
+- **5-Tier Architecture**: Books, Working, History, Patterns, Memory Bank
+- **Dual Knowledge Graphs**: Routing KG + Content KG for entity tracking
+- **Local-First**: All processing on-device, no cloud dependencies
+
+[See architecture details →](docs/architecture.md)
 
 ## Key Features
 
@@ -104,16 +130,76 @@ Think of it as your personal AI that compounds in value the longer you use it.
 
 ---
 
+## Performance Details
+
+### Verified Metrics
+
+**Search Performance:**
+- p95 latency: 34ms
+- Token efficiency: 112 tokens/query average
+- Cross-collection routing: 100% accuracy (7/7 tests)
+
+**Learning Capabilities:**
+- Semantic confusion resistance: 80% precision under 4:1 noise ratio
+- Outcome-based score adaptation: +0.2 (worked), -0.3 (failed)
+- Automatic promotion: Score ≥0.7 + 2 uses → History → Patterns
+
+**Memory System:**
+- 5-tier architecture: Books, Working, History, Patterns, Memory Bank
+- Dual knowledge graphs: Routing KG + Content KG
+- Quality-based ranking: importance × confidence scoring
+
+> See [benchmarks/README.md](benchmarks/README.md) for test methodology
+
+---
+
+## Latest Release: v0.2.0
+
+**Learning-Based Knowledge Graph Routing + Enhanced MCP Integration** (Released November 10, 2025)
+
+### Major Features
+
+**🎯 Intelligent KG Routing**: System learns which collections answer which queries
+- Cold start (0-10 queries): Searches all collections
+- Learning phase (10-20 queries): Focuses on top 2-3 successful collections
+- Confident routing (20+ queries): Routes to single best collection with 80%+ success rate
+- Progression: 60% precision → 80% precision → 100% precision achievable
+
+**🔗 Enhanced MCP Integration**: Semantic learning storage with outcome-based scoring
+- External LLMs (Claude Desktop, Cursor) store summaries, not verbatim transcripts
+- Explicit outcome scoring (worked/failed/partial/unknown)
+- Scores CURRENT learning immediately (enables optional tool calling)
+- Cross-tool memory sharing across all MCP clients
+
+**📊 Dual Knowledge Graph System**:
+- **Routing KG** (blue nodes) - Learns query patterns → collection routing
+- **Content KG** (green nodes) - Entity relationships extracted from memories
+- **Purple nodes** - Concepts appearing in both graphs
+
+**🌐 Bundled Multilingual Embeddings**: Works offline in 50+ languages
+- Model: `paraphrase-multilingual-mpnet-base-v2`
+- No internet required after initial setup
+
+### Performance
+- Search latency: 34ms (p95)
+- Token efficiency: 112 tokens/query
+- Semantic confusion resistance: 80% precision @ 4:1 noise
+- Routing accuracy: 100% (cross-collection KG test)
+
+[View full changelog →](docs/RELEASE_NOTES_0.2.0.md)
+
+---
+
 ## What Makes Roampal Different?
 
-| Feature | Cloud AI Memory | Roampal |
-|---------|----------------|---------|
-| **Memory Type** | Stores what you say | Learns what works for you |
-| **Outcome Tracking** | No feedback loop | Scores every result (+0.2 / -0.3) |
-| **Bad Advice** | Stays in memory | Auto-deleted when score drops |
-| **Context** | Limited to current chat | Recalls from all past conversations |
-| **Privacy** | Cloud-based, data shared | 100% local, zero telemetry |
-| **Control** | Black box algorithms | Full transparency |
+| Feature | Roampal Approach |
+|---------|------------------|
+| **Memory Type** | Learns what works for you, not just what you say |
+| **Outcome Tracking** | Scores every result (+0.2 worked, -0.3 failed) |
+| **Bad Advice** | Auto-deleted when score drops below threshold |
+| **Context** | Recalls from all past conversations globally |
+| **Privacy** | 100% local, zero telemetry, full data ownership |
+| **Performance** | 34ms search latency (p95) |
 
 ## Getting Started
 
@@ -149,12 +235,82 @@ Roampal uses a memory-first architecture with five tiers:
 
 The LLM autonomously controls memory via tools (search_memory, create_memory, update_memory, archive_memory).
 
+## MCP Integration
+
+**Connect Roampal to Claude Desktop, Cursor, and other MCP-compatible tools** for persistent memory across applications.
+
+### Setup (No Manual Config Required)
+
+1. Open **Settings → Integrations** in Roampal
+2. Click **"Connect"** next to Claude Desktop or Cursor
+3. Restart your tool - memory tools are available immediately
+
+Roampal auto-discovers MCP clients and writes the config for you. No manual JSON editing required.
+
+### Available MCP Tools
+
+- **`search_memory`** - Search across all memory tiers with optional metadata filtering
+- **`add_to_memory_bank`** - Store permanent facts about the user
+- **`update_memory`** - Modify existing memories by doc_id
+- **`archive_memory`** - Remove outdated information
+- **`record_response`** - Store semantic learnings with explicit outcome scoring (worked/failed/partial/unknown)
+
+### How It Works
+
+**Semantic Learning Storage**: External LLMs store summaries, not verbatim transcripts. The `record_response` tool accepts:
+- `key_takeaway` (required) - 1-2 sentence summary of what was learned
+- `outcome` (optional) - Explicit scoring: "worked", "failed", "partial", or "unknown" (default)
+
+**Score CURRENT, not PREVIOUS**: Unlike Roampal's internal system (which scores previous exchanges), MCP scores the learning being recorded immediately. This allows optional tool calling - external LLMs only call `record_response` when clear outcomes occur.
+
+**Scores retrieved memories too**: When you call `record_response`, it also scores all memories from your last search with the same outcome. If advice worked, those memories get upvoted (+0.2). If it failed, they get downvoted (-0.3). This helps good memories promote faster and bad advice get deleted.
+
+**Cross-tool memory sharing**: Learnings recorded in Claude Desktop are searchable in Cursor, Roampal, and vice versa. All tools share the same local ChromaDB instance.
+
+### Features
+
+- ✅ **Auto-discovery** - Detects Claude Desktop, Cursor, and other MCP clients automatically
+- ✅ **Semantic learning** - Stores concepts, not chat logs
+- ✅ **Outcome-based scoring** - External LLM judges quality based on user feedback
+- ✅ **50+ languages** - Bundled multilingual embedding model (paraphrase-multilingual-mpnet-base-v2)
+- ✅ **100% local** - All data stays on your machine
+
+## Pricing & Philosophy
+
+### Why $9.99?
+
+Roampal is an experiment in building sustainable technology without artificial scarcity or surveillance capitalism.
+
+**Core principles:**
+- ✅ Open source from day one (MIT License)
+- ✅ One-time payment, not subscription trap
+- ✅ Zero telemetry, zero tracking
+- ✅ Your data stays on your machine
+- ✅ Free to build from source forever
+
+**The $9.99 pre-built version** includes:
+- Tested, packaged executable with embedded Python
+- Bundled dependencies (ChromaDB, FastAPI, multilingual embeddings)
+- Ready-to-run on Windows with zero setup
+
+**Building from source is free forever** - Technical users can clone the repo, install dependencies, and build for $0. The pre-built version exists to save you time, not lock you in.
+
+### Supported Models
+
+Works with any tool-calling capable model via Ollama or LM Studio:
+- **Llama** - Meta's models (3B - 70B parameters)
+- **Qwen** - Alibaba models (3B - 72B parameters)
+- **GPT** - OpenAI models (20B - 120B parameters)
+- **Mixtral** - Mistral's mixture-of-experts (8x7B)
+
+Install models via Settings → Model Management in the UI.
+
 ## Support
 
 For issues or feedback:
-- Discord: https://discord.gg/qM4yEXfF
-- Email: roampal@protonmail.com
-- GitHub Issues: https://github.com/roampal-ai/roampal/issues
+- **Discord**: https://discord.gg/F87za86R3v
+- **Email**: roampal@protonmail.com
+- **GitHub Issues**: https://github.com/roampal-ai/roampal/issues
 
 ---
 

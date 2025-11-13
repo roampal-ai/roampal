@@ -31,8 +31,7 @@ const App = () => {
             <p className="text-zinc-400 text-sm whitespace-pre-wrap font-mono">{errorMessage}</p>
           </div>
           <div className="text-zinc-500 text-sm mb-4">
-            <p>Please check the browser console (F12) for more details</p>
-            <p className="mt-2">If the backend files are missing, try reinstalling Roampal</p>
+            <p>If the backend files are missing, try reinstalling Roampal</p>
           </div>
           <button
             onClick={() => window.location.reload()}

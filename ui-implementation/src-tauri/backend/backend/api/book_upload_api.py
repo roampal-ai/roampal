@@ -35,6 +35,7 @@ async def upload_book(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: Optional[str] = Form(None, max_length=200),
+    author: Optional[str] = Form(None, max_length=200),
     description: Optional[str] = Form(None, max_length=1000),
     check_duplicate: bool = Form(True)
 ):
@@ -133,6 +134,7 @@ async def upload_book(
             "file_type": file_extension,
             "upload_timestamp": timestamp,
             "title": title or Path(file.filename).stem,
+            "author": author or "Unknown",
             "description": description,
             "processing_status": "pending",
             "file_path": str(file_path)

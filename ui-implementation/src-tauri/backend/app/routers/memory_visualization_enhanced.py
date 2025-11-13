@@ -179,83 +179,65 @@ async def get_collection_memories(
 @router.get("/knowledge-graph/concepts")
 async def get_kg_concepts(request: Request):
     """
-    Get concept graph data for visualization
+    Get concept graph data for visualization (v0.2.0: Dual KG system).
 
-    NOTE: Concept-to-concept relationships are derived from problem_categories.
-    The system tracks routing patterns and problem groupings, but not explicit
-    concept co-occurrence. Edges are inferred from concepts appearing in the
-    same problem category.
+    Returns merged entities from:
+    - Routing KG: Query patterns → collection routing
+    - Content KG: Memory content → entity relationships
+
+    Nodes include 'source' field: 'routing' | 'content' | 'both'
     """
     try:
-        # Try to get UnifiedMemorySystem first
         memory = getattr(request.app.state, 'memory', None)
-        if memory and hasattr(memory, 'knowledge_graph'):
-            # Use the knowledge graph from UnifiedMemorySystem
-            graph = memory.knowledge_graph
-        else:
-            # Fallback to kg_router for backward compatibility
-            kg_router = getattr(request.app.state, 'kg_router', None)
-            if not kg_router:
-                return {'concepts': [], 'relationships': []}
+        if not memory:
+            return {'nodes': [], 'edges': [], 'error': 'Memory system not initialized'}
 
-            # Load the knowledge graph
-            if kg_router.graph_path.exists():
-                with open(kg_router.graph_path, 'r') as f:
-                    graph = json.load(f)
-            else:
-                graph = {'concepts': {}, 'relationships': {}, 'success_patterns': {}}
+        # Use merged get_kg_entities() method (v0.2.0)
+        entities = await memory.get_kg_entities(filter_text=None, limit=200)
 
-        # Format for visualization
         nodes = []
-        edges = []
-
-        # Add concept nodes from routing_patterns (UnifiedMemorySystem format)
-        for concept, pattern in graph.get('routing_patterns', {}).items():
+        for entity in entities:
             nodes.append({
-                'id': concept,
-                'label': concept,
+                'id': entity['entity'],
+                'label': entity['entity'],
                 'type': 'concept',
-                'best_collection': pattern.get('best_collection'),
-                'success_rate': pattern.get('success_rate', 0),
+                'source': entity.get('source', 'routing'),  # v0.2.0: routing|content|both
+                'best_collection': entity.get('best_collection'),
+                'success_rate': entity.get('success_rate', 0.5),
                 'usage_count': sum(
                     coll_data.get('total', 0)
-                    for coll_data in pattern.get('collections_used', {}).values()
-                )
+                    for coll_data in entity.get('collections_used', {}).values()
+                ),
+                'mentions': entity.get('mentions', 0),  # v0.2.0: From content KG
+                'routing_connections': entity.get('routing_connections', 0),
+                'content_connections': entity.get('content_connections', 0),
+                'total_connections': entity.get('total_connections', 0),
+                'last_used': entity.get('last_used'),
+                'created_at': entity.get('created_at')
             })
 
-        # Also add from success_patterns if present (backward compatibility)
-        for concept, pattern in graph.get('success_patterns', {}).items():
-            if concept not in [n['id'] for n in nodes]:  # Don't duplicate
-                nodes.append({
-                    'id': concept,
-                    'label': concept,
-                    'type': 'concept',
-                    'best_collection': pattern.get('best_collection'),
-                    'success_rate': pattern.get('success_rate', 0),
-                    'usage_count': pattern.get('usage_count', 0)
-                })
+        # Build edges from merged relationships
+        edges = []
+        edges_seen = set()
 
-        # Use actual tracked concept relationships from the knowledge graph
-        for rel_key, rel_data in graph.get('relationships', {}).items():
-            # Relationship key format: "concept1|concept2" (sorted alphabetically)
-            concepts = rel_key.split('|')
-            if len(concepts) == 2:
-                concept_a, concept_b = concepts
+        for node in nodes:
+            entity_name = node['id']
+            # Get merged relationships for this entity
+            relationships = await memory.get_kg_relationships(entity_name)
 
-                # Check if both concepts exist as nodes
-                if concept_a in [n['id'] for n in nodes] and concept_b in [n['id'] for n in nodes]:
-                    # Calculate success rate from tracked data
-                    co_occur = rel_data.get('co_occurrence', 0)
-                    success = rel_data.get('success_together', 0)
-                    failure = rel_data.get('failure_together', 0)
-                    total_outcomes = success + failure
-                    success_rate = (success / total_outcomes) if total_outcomes > 0 else 0.5
+            for rel in relationships:
+                related = rel['related_entity']
+                # Create canonical edge key (sorted to avoid duplicates)
+                edge_key = tuple(sorted([entity_name, related]))
 
+                if edge_key not in edges_seen and related in [n['id'] for n in nodes]:
+                    edges_seen.add(edge_key)
                     edges.append({
-                        'source': concept_a,
-                        'target': concept_b,
-                        'weight': co_occur,  # Co-occurrence count
-                        'success_rate': success_rate  # Actual tracked success rate
+                        'source': entity_name,
+                        'target': related,
+                        'weight': rel.get('total_strength', 0),
+                        'source_type': rel.get('source', 'routing'),  # v0.2.0: routing|content|both
+                        'success_rate': 0.5  # Default neutral
                     })
 
         return {
@@ -266,7 +248,7 @@ async def get_kg_concepts(request: Request):
         }
 
     except Exception as e:
-        logger.error(f"Error getting KG concepts: {e}")
+        logger.error(f"Error getting KG concepts: {e}", exc_info=True)
         return {'nodes': [], 'edges': [], 'error': str(e)}
 
 
@@ -403,10 +385,60 @@ async def get_concept_definition(
                 # Generic but more informative fallback
                 definition = f"{concept_id} is a tracked concept representing a specific pattern, technique, or component that has been identified through system usage and learning."
 
+        # Get KG data for this concept
+        memory = getattr(request.app.state, 'memory', None)
+        collections_breakdown = {}
+        outcome_breakdown = {"worked": 0, "failed": 0, "partial": 0}
+        total_searches = 0
+        best_collection = None
+        related_concepts_with_stats = []
+
+        if memory and hasattr(memory, 'knowledge_graph'):
+            kg = memory.knowledge_graph
+            pattern = kg.get('routing_patterns', {}).get(concept_id)
+
+            if pattern:
+                # Extract collections breakdown
+                collections_breakdown = pattern.get('collections_used', {})
+                best_collection = pattern.get('best_collection')
+                total_searches = pattern.get('total_uses', 0)
+
+                # Calculate outcome breakdown from collections
+                for coll_name, coll_data in collections_breakdown.items():
+                    outcome_breakdown["worked"] += coll_data.get("successes", 0)
+                    outcome_breakdown["failed"] += coll_data.get("failures", 0)
+                    # Note: partials aren't tracked in collections_used
+
+                # Get related concepts with stats from relationships
+                relationships = kg.get('relationships', {})
+                for rel_key, rel_data in relationships.items():
+                    concepts = rel_key.split('|')
+                    if concept_id in concepts:
+                        other_concept = concepts[0] if concepts[1] == concept_id else concepts[1]
+                        co_occur = rel_data.get('co_occurrence', 0)
+                        success = rel_data.get('success_together', 0)
+                        failure = rel_data.get('failure_together', 0)
+                        total_rel = success + failure
+                        success_rate = (success / total_rel) if total_rel > 0 else 0.5
+
+                        related_concepts_with_stats.append({
+                            "concept": other_concept,
+                            "co_occurrence": co_occur,
+                            "success_together": success,
+                            "failure_together": failure,
+                            "success_rate": success_rate
+                        })
+
         return {
             "concept": concept_id,
             "definition": definition,
-            "related_concepts": related_concepts[:5]  # Limit to 5 related concepts
+            "related_concepts": related_concepts[:5],
+            # Enhanced KG data for UI modal
+            "collections_breakdown": collections_breakdown,
+            "outcome_breakdown": outcome_breakdown,
+            "total_searches": total_searches,
+            "best_collection": best_collection,
+            "related_concepts_with_stats": related_concepts_with_stats[:5]
         }
 
     except Exception as e:
@@ -630,4 +662,79 @@ async def record_memory_feedback(
 
     except Exception as e:
         logger.error(f"Error recording feedback: {e}", exc_info=True)
+        return {'status': 'error', 'message': str(e)}
+
+
+@router.post("/content-graph/backfill")
+async def backfill_content_graph(request: Request):
+    """
+    Backfill content graph with existing memory_bank entries (v0.2.0).
+    One-time migration endpoint for existing memories.
+
+    Returns:
+        Statistics about backfill operation including:
+        - total_memories: Count of memories processed
+        - indexed_count: Successfully indexed memories
+        - total_entities: Total entities extracted
+        - errors: List of errors encountered
+        - graph_stats: Content graph statistics
+    """
+    try:
+        memory = getattr(request.app.state, 'memory', None) or getattr(request.app.state, 'memory_collections', None)
+        if not memory:
+            return {'status': 'error', 'message': 'Memory system not initialized'}
+
+        # Run backfill
+        logger.info("Starting content graph backfill (API endpoint)")
+        stats = await memory.backfill_content_graph()
+
+        if stats.get("success"):
+            logger.info(f"Content graph backfill complete: {stats.get('indexed_count')}/{stats.get('total_memories')} memories")
+            return {
+                'status': 'success',
+                'message': 'Content graph backfill completed successfully',
+                **stats
+            }
+        else:
+            return {
+                'status': 'error',
+                'message': f"Backfill failed: {stats.get('error', 'Unknown error')}",
+                **stats
+            }
+
+    except Exception as e:
+        logger.error(f"Error in content graph backfill endpoint: {e}", exc_info=True)
+        return {'status': 'error', 'message': str(e)}
+
+
+@router.get("/content-graph/stats")
+async def get_content_graph_stats(request: Request):
+    """
+    Get content graph statistics (v0.2.0).
+
+    Returns:
+        Content graph metrics including:
+        - total_entities: Count of unique entities
+        - total_relationships: Count of entity relationships
+        - total_documents: Count of indexed documents
+        - avg_mentions_per_entity: Average mentions across entities
+        - avg_relationships_per_entity: Average connections per entity
+        - strongest_relationship: Most connected entity pair
+        - most_mentioned_entity: Most frequently mentioned entity
+        - metadata: Graph metadata (version, timestamps)
+    """
+    try:
+        memory = getattr(request.app.state, 'memory', None) or getattr(request.app.state, 'memory_collections', None)
+        if not memory:
+            return {'status': 'error', 'message': 'Memory system not initialized'}
+
+        stats = memory.content_graph.get_stats()
+
+        return {
+            'status': 'success',
+            **stats
+        }
+
+    except Exception as e:
+        logger.error(f"Error in content graph stats endpoint: {e}", exc_info=True)
         return {'status': 'error', 'message': str(e)}

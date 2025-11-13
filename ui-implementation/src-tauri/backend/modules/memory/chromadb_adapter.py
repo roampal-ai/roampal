@@ -105,8 +105,13 @@ class ChromaDBAdapter:
         self.collection_name = collection_name
         
         # Use get_or_create to reuse existing collection
-        self.collection = self.client.get_or_create_collection(name=collection_name)
-        logger.info(f"ChromaDB collection '{collection_name}' ready with {self.collection.count()} items")
+        # Don't use ChromaDB's default embedding function - Roampal provides embeddings manually
+        # This prevents dimension mismatch (ChromaDB default is 384d, Roampal uses 768d)
+        self.collection = self.client.get_or_create_collection(
+            name=collection_name,
+            embedding_function=None  # Manual embeddings from EmbeddingService
+        )
+        logger.info(f"ChromaDB collection '{collection_name}' ready (lazy loaded)")
         
         # No need to force file creation in server mode
         if not self.use_server and self.collection.count() == 0:

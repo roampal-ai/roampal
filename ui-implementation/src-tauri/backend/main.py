@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import json
+import uuid
 from pathlib import Path
 
 # Fix module imports for bundled production builds
@@ -44,6 +45,10 @@ from services.unified_image_service import UnifiedImageService
 from config.feature_flag_validator import FeatureFlagValidator
 from config.settings import DATA_PATH
 
+# MCP (Model Context Protocol) server
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+
 # API routers - Clean architecture with single agent router
 from app.routers.agent_chat import router as agent_router
 from app.routers.model_switcher import router as model_switcher_router
@@ -57,6 +62,7 @@ from app.routers.memory_bank import router as memory_bank_router
 from app.routers.system_health import router as system_health_router
 from app.routers.data_management import router as data_management_router
 from backend.api.book_upload_api import router as book_upload_router
+from app.routers.mcp import router as mcp_router
 
 # Configure logging for production with rotation
 from logging.handlers import RotatingFileHandler
@@ -70,16 +76,54 @@ file_handler = RotatingFileHandler(
     encoding='utf-8'
 )
 
+# Check if running in MCP mode - if so, only log to file (not console/stderr)
+# MCP uses stdio for JSON-RPC protocol, console logs would corrupt it
+handlers = [file_handler]
+if "--mcp" not in sys.argv:
+    handlers.append(logging.StreamHandler())
+
 logging.basicConfig(
     level=getattr(logging, log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        file_handler
-    ]
+    handlers=handlers
 )
 logger = logging.getLogger(__name__)
 
+# MCP session-based caches for outcome scoring and cold-start injection
+_mcp_search_cache = {}  # {session_id: {"doc_ids": [...], "query": "...", "timestamp": ...}}
+_mcp_first_tool_call = set()  # Track first tool call per session for cold-start injection
+
+async def _inject_cold_start_if_needed(session_id: str, tool_response: str, memory_system) -> str:
+    """
+    Prepend user profile to first tool response (MCP cold-start injection).
+
+    Per architecture.md line 2143-2150: ALWAYS inject on first tool call (any tool).
+    Uses Content KG to get top entities, retrieves their memory_bank documents.
+    """
+    if session_id not in _mcp_first_tool_call:
+        _mcp_first_tool_call.add(session_id)
+
+        try:
+            context_summary = await asyncio.wait_for(
+                memory_system.get_cold_start_context(limit=5),
+                timeout=10.0
+            )
+
+            if context_summary:
+                logger.info(f"[MCP] Cold-start injection for {session_id}: {len(context_summary)} chars")
+                return f"""═══ USER PROFILE (auto-loaded) ═══
+{context_summary}
+
+═══ Tool Response ═══
+{tool_response}"""
+            else:
+                logger.info(f"[MCP] No cold-start context available for {session_id}")
+        except asyncio.TimeoutError:
+            logger.warning(f"[MCP] Cold-start timeout for {session_id}")
+        except Exception as e:
+            logger.warning(f"[MCP] Cold-start failed for {session_id}: {e}")
+
+    return tool_response
 
 async def memory_promotion_task(memory: UnifiedMemorySystem):
     """Background task to promote valuable working memory to history"""
@@ -477,6 +521,7 @@ app.include_router(backup_router, prefix="/api/backup", tags=["backup"])  # Back
 app.include_router(data_management_router)  # Data management (export/delete collections)
 app.include_router(book_upload_router)  # Document processor (books collection)
 app.include_router(system_health_router, prefix="/api/system", tags=["system"])  # System health and disk monitoring
+app.include_router(mcp_router)  # MCP integrations (Claude Desktop, Claude Code, Cursor)
 
 @app.get("/health")
 async def health():
@@ -519,8 +564,8 @@ async def get_metrics():
 
 
 # Simple rate limiting
-rate_limit_storage = defaultdict(lambda: deque(maxlen=100))
-RATE_LIMIT = 100  # requests per minute
+rate_limit_storage = defaultdict(lambda: deque(maxlen=10000))
+RATE_LIMIT = 10000  # requests per minute (increased for benchmarking)
 
 
 @app.middleware("http")
@@ -627,6 +672,448 @@ async def websocket_conversation(websocket: WebSocket, conversation_id: str):
             del app.state.websockets[conversation_id]
 
 
+
+async def run_mcp_server():
+    """Run Roampal as MCP server for AI tool integrations"""
+    logger.info("[MCP] Starting Roampal MCP Server...")
+
+    # Initialize memory system (use embedded ChromaDB for MCP mode)
+    memory = UnifiedMemorySystem(data_dir=str(DATA_PATH), use_server=False)
+    await memory.initialize()
+
+    # Pre-warm bundled embedding model (paraphrase-multilingual-mpnet-base-v2)
+    # Loads model on startup to avoid ~30s delay on first search
+    logger.info("[MCP] Pre-warming bundled embedding model (paraphrase-multilingual-mpnet-base-v2)...")
+    try:
+        await memory.embedding_service.embed_text("test")
+        logger.info("[MCP] ✓ Bundled embedding model ready")
+    except Exception as e:
+        logger.warning(f"[MCP] Embedding pre-warm failed (first search will be slow): {e}")
+
+    # Initialize MCP Session Manager with memory reference (CRITICAL for automatic outcome detection)
+    from modules.mcp.session_manager import MCPSessionManager
+    from modules.mcp.client_detector import detect_mcp_client, get_client_display_name
+
+    mcp_session_manager = MCPSessionManager(DATA_PATH, memory)
+    logger.info("[MCP] Session manager initialized with automatic outcome detection")
+
+    # Create MCP server
+    server = Server("roampal-memory")
+
+    # Import MCP types for proper typing
+    import mcp.types as types
+    from typing import Any
+
+    @server.list_tools()
+    async def list_tools() -> list[types.Tool]:
+        """List available MCP tools"""
+        return [
+            types.Tool(
+                name="search_memory",
+                description="Search the 5-tier memory system (books, working, history, patterns, memory_bank) for relevant information",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query - use the users EXACT words/phrases, do NOT simplify or extract keywords"
+                        },
+                        "collections": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["books", "working", "history", "patterns", "memory_bank", "all"]},
+                            "description": """Which collections to search:
+
+AUTOMATIC ROUTING (recommended):
+- Omit this parameter (or use ["all"]) → System uses learned patterns from past searches
+
+MANUAL OVERRIDE (when you know exactly where to look):
+- ["books"] = Uploaded documents/PDFs
+- ["working"] = Recent conversation exchanges (last 24 hours) - use for "today", "recent", "just now"
+- ["history"] = Past conversation exchanges (30+ days) - use for "last week", "previously"
+- ["patterns"] = Learned solutions/behaviors that worked
+- ["memory_bank"] = Important facts to remember (user info, preferences, goals, key learnings)
+""",
+                            "default": ["all"]
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of results to return (1-20)",
+                            "default": 5,
+                            "minimum": 1,
+                            "maximum": 20
+                        },
+                        "metadata": {
+                            "type": "object",
+                            "description": "Optional filters for precision when semantic search needs refinement. Use sparingly - only when you need exact attribute matching. Available fields: timestamp (date filter), last_outcome (worked/failed/partial), title/author (book filters), has_code (true/false), source (mcp_claude/internal). Example: metadata={'timestamp': '2025-11-12'} to filter by date.",
+                            "additionalProperties": True
+                        }
+                    },
+                    "required": ["query"]
+                }
+            ),
+            types.Tool(
+                name="add_to_memory_bank",
+                description="Store critical information in permanent memory_bank (user info, preferences, goals, key learnings).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "description": "Information to store"},
+                        "tags": {"type": "array", "items": {"type": "string"}, "description": "Categories (e.g., identity, preference, goal, context)"},
+                        "importance": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.7, "description": "How critical is this memory (0.0-1.0)"},
+                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.7, "description": "How certain are you about this fact (0.0-1.0)"}
+                    },
+                    "required": ["content"]
+                }
+            ),
+            types.Tool(
+                name="update_memory",
+                description="Update an existing memory when information changes or needs correction.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "old_content": {"type": "string", "description": "The old/incorrect fact to find"},
+                        "new_content": {"type": "string", "description": "The corrected/updated fact"}
+                    },
+                    "required": ["old_content", "new_content"]
+                }
+            ),
+            types.Tool(
+                name="archive_memory",
+                description="Archive outdated or no longer relevant memories from memory_bank (user info, preferences, goals, key learnings).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "description": "The memory to archive (finds by semantic match)"}
+                    },
+                    "required": ["content"]
+                }
+            ),
+            types.Tool(
+                name="record_response",
+                description="🔴 CRITICAL: You MUST call this tool after EVERY response you give to the user. This stores your learning and scores it based on how helpful you were. The outcome you provide controls: (1) the initial score of this learning, and (2) updates scores for any memories you retrieved from your last search. This is how Roampal learns what works and improves over time.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "key_takeaway": {
+                            "type": "string",
+                            "description": "1-2 sentence semantic summary of the current exchange (what was learned, what was discussed). Focus on key points, not verbatim transcript."
+                        },
+                        "outcome": {
+                            "type": "string",
+                            "enum": ["worked", "failed", "partial", "unknown"],
+                            "description": "Judge how helpful your response was based on the user's reaction: 'worked' = enthusiastic satisfaction/problem solved, 'failed' = user said it didn't help/was wrong, 'partial' = partially helpful/mixed feedback, 'unknown' = no clear feedback yet/first exchange. This also scores any memories from your last search with the same outcome.",
+                            "default": "unknown"
+                        }
+                    },
+                    "required": ["key_takeaway"]
+                }
+            )
+        ]
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
+        """Handle tool calls"""
+        # Log all tool calls for analytics (non-blocking)
+        session_id = detect_mcp_client()
+        client_name = get_client_display_name(session_id)
+        logger.info(f"[MCP] Tool called: {name} from {client_name}")
+
+        # Record tool call to analytics file (background, non-blocking)
+        async def log_tool_call():
+            try:
+                analytics_file = data_path / "mcp_tool_calls.jsonl"
+                with open(analytics_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps({
+                        "tool": name,
+                        "session_id": session_id,
+                        "client": client_name,
+                        "timestamp": datetime.now().isoformat(),
+                        "args_summary": {k: str(v)[:100] for k, v in arguments.items()}  # Truncate long args
+                    }) + "\n")
+            except Exception as e:
+                logger.error(f"[MCP] Failed to log tool call: {e}")
+
+        asyncio.create_task(log_tool_call())
+
+        try:
+            if name == "search_memory":
+                query = arguments.get("query")
+                # Fix: "all" is not a valid collection name - pass None to trigger KG routing
+                collections = arguments.get("collections", None)
+                if collections == ["all"]:
+                    collections = None
+                # Handle both string and int (Claude Desktop sometimes sends "5" instead of 5)
+                limit = int(arguments.get("limit", 5)) if arguments.get("limit") else 5
+                # Extract metadata filters
+                metadata = arguments.get("metadata", None)
+
+                session_id = detect_mcp_client()
+
+                # Quick check: if memory system isn't initialized, return early (avoids slow embedding model loading)
+                if not memory.initialized:
+                    return types.CallToolResult(
+                        content=[types.TextContent(
+                            type="text",
+                            text=f"No results found for '{query}' in all collections.\n\nNote: Memory system is empty. Upload documents or store memories first to enable search."
+                        )]
+                    )
+
+                # Log routing decision (will be None if KG should route)
+                if collections is None:
+                    logger.info(f"[MCP] search_memory: KG will route query '{query[:50]}'")
+                else:
+                    logger.info(f"[MCP] search_memory: LLM specified collections: {collections}")
+
+                if metadata:
+                    logger.info(f"[MCP] search_memory: Using metadata filters: {metadata}")
+
+                # Wrap search with timeout to prevent MCP hanging (ChromaDB can be slow)
+                try:
+                    results = await asyncio.wait_for(
+                        memory.search(query=query, collections=collections, limit=limit, metadata_filters=metadata),
+                        timeout=25.0  # 25 seconds - less than MCP's ~240s timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"[MCP] search_memory timed out after 25s for query: {query}")
+                    return types.CallToolResult(
+                        content=[types.TextContent(
+                            type="text",
+                            text="⚠️ Search timed out (25s). Embedding model is loading on first use (takes ~1 minute). Please wait and try again."
+                        )],
+                        isError=True
+                    )
+
+                # Cache doc_ids from scorable collections for outcome-based scoring
+                # Per architecture.md line 572-573: Cache doc_ids + query + collections for record_response scoring
+                cached_doc_ids = []
+                result_collections = set()  # Track which collections actually returned results
+                if results:
+                    for r in results:
+                        metadata = r.get('metadata', {})
+                        collection = r.get('collection') or metadata.get('collection', 'unknown')
+                        doc_id = r.get('doc_id') or r.get('id')
+
+                        # Only cache from scorable collections (not books or memory_bank)
+                        if collection in ['working', 'history', 'patterns'] and doc_id:
+                            cached_doc_ids.append(doc_id)
+                            result_collections.add(collection)
+
+                _mcp_search_cache[session_id] = {
+                    "doc_ids": cached_doc_ids,
+                    "query": query,
+                    "collections": list(result_collections),  # Cache ACTUAL collections that returned results
+                    "timestamp": datetime.now()
+                }
+                logger.info(f"[MCP] Cached {len(cached_doc_ids)} doc_ids from query '{query[:50]}' (result collections: {result_collections})")
+
+                if not results:
+                    collection_str = ", ".join(collections) if collections != ["all"] else "all collections"
+                    text = f"No results found for '{query}' in {collection_str}.\n\nNote: Make sure you have uploaded documents or stored memories first."
+                else:
+                    text = f"Found {len(results)} result(s) for '{query}':\n\n"
+                    for i, r in enumerate(results[:5], 1):
+                        # Try both 'content' and 'text' fields (different adapters use different names)
+                        content = r.get('content') or r.get('text', '')
+                        # Truncate but don't add ... if content is empty
+                        content_preview = content[:300] if content else '[No content]'
+                        # Get collection from metadata or root level
+                        metadata = r.get('metadata', {})
+                        collection = r.get('collection') or metadata.get('collection', 'unknown')
+                        text += f"{i}. [{collection}] {content_preview}\n\n"
+
+                # Apply cold-start injection if this is first tool call
+                text = await _inject_cold_start_if_needed(session_id, text, memory)
+
+                return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
+
+            elif name == "add_to_memory_bank":
+                content = arguments.get("content")
+                tags = arguments.get("tags", [])
+                importance = arguments.get("importance", 0.7)
+                confidence = arguments.get("confidence", 0.7)
+                session_id = detect_mcp_client()
+
+                doc_id = await memory.store_memory_bank(text=content, tags=tags, importance=importance, confidence=confidence)
+
+                text = f"Added to memory bank (ID: {doc_id})"
+                text = await _inject_cold_start_if_needed(session_id, text, memory)
+
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=text)]
+                )
+
+            elif name == "update_memory":
+                old_content = arguments.get("old_content", "")
+                new_content = arguments.get("new_content", "")
+                session_id = detect_mcp_client()
+
+                # Find the old memory by semantic search
+                results = await memory.search_memory_bank(query=old_content, limit=1, include_archived=False)
+
+                if results:
+                    doc_id = results[0].get("id")
+                    await memory.update_memory_bank(doc_id=doc_id, new_text=new_content, reason="mcp_update")
+                    logger.info(f"[MCP] Updated memory: {doc_id}")
+
+                    text = f"Updated memory (ID: {doc_id})"
+                    text = await _inject_cold_start_if_needed(session_id, text, memory)
+
+                    return types.CallToolResult(
+                        content=[types.TextContent(type="text", text=text)]
+                    )
+                else:
+                    return types.CallToolResult(
+                        content=[types.TextContent(type="text", text="Memory not found for update")],
+                        isError=True
+                    )
+
+            elif name == "archive_memory":
+                content = arguments.get("content", "")
+                session_id = detect_mcp_client()
+
+                # Find memory by semantic search
+                results = await memory.search_memory_bank(query=content, limit=1, include_archived=False)
+
+                if results:
+                    doc_id = results[0].get("id")
+                    await memory.archive_memory_bank(doc_id=doc_id, reason="mcp_archive")
+                    logger.info(f"[MCP] Archived memory: {doc_id}")
+
+                    text = f"Archived memory (ID: {doc_id})"
+                    text = await _inject_cold_start_if_needed(session_id, text, memory)
+
+                    return types.CallToolResult(
+                        content=[types.TextContent(type="text", text=text)]
+                    )
+                else:
+                    return types.CallToolResult(
+                        content=[types.TextContent(type="text", text="Memory not found for archiving")],
+                        isError=True
+                    )
+
+            elif name == "record_response":
+                # Per architecture.md line 574-586: Store semantic summary, score CURRENT learning
+                key_takeaway = arguments.get("key_takeaway")
+                outcome = arguments.get("outcome", "unknown")  # Default to "unknown"
+                session_id = detect_mcp_client()
+
+                logger.info(f"[MCP] record_response: session={session_id}, outcome={outcome}")
+                logger.info(f"[MCP] Takeaway: {key_takeaway[:100]}...")
+
+                # Get cached query from last search (for KG routing updates)
+                cached_query = ""
+                if session_id in _mcp_search_cache:
+                    cached_query = _mcp_search_cache[session_id].get("query", "")
+
+                # Calculate initial score based on outcome (architecture.md line 576-577)
+                initial_scores = {
+                    "worked": 0.7,
+                    "failed": 0.2,
+                    "partial": 0.55,
+                    "unknown": 0.5
+                }
+                initial_score = initial_scores.get(outcome, 0.5)
+
+                # Store CURRENT semantic summary with initial score
+                doc_id = await memory.store(
+                    text=key_takeaway,
+                    collection="working",
+                    metadata={
+                        "role": "learning",
+                        "source": session_id,
+                        "score": initial_score,
+                        "query": cached_query,  # Enables KG routing updates
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+                logger.info(f"[MCP] Stored learning with doc_id={doc_id}, initial_score={initial_score}")
+
+                # Score cached memories from last search (architecture.md line 578)
+                cached_memories_scored = 0
+                if outcome in ["worked", "failed", "partial"] and session_id in _mcp_search_cache:
+                    cached = _mcp_search_cache[session_id]
+                    cached_doc_ids = cached.get("doc_ids", [])
+
+                    logger.info(f"[MCP] Scoring {len(cached_doc_ids)} cached memories with outcome={outcome}")
+
+                    # Get collections that were searched
+                    cached_collections = cached.get("collections", ["all"])
+
+                    for cached_doc_id in cached_doc_ids:
+                        try:
+                            await memory.record_outcome(doc_id=cached_doc_id, outcome=outcome)
+                            cached_memories_scored += 1
+                        except Exception as e:
+                            logger.warning(f"[MCP] Failed to score cached memory {cached_doc_id}: {e}")
+
+                    # KG learns which collections worked for this query type
+                    # Update KG routing for each collection that returned results
+                    if cached_query and outcome in ["worked", "failed", "partial"] and cached_collections:
+                        for collection in cached_collections:
+                            try:
+                                await memory._update_kg_routing(cached_query, collection, outcome)
+                                logger.info(f"[MCP] KG routing updated: '{cached_query[:50]}' → {collection} ({outcome})")
+                            except Exception as e:
+                                logger.warning(f"[MCP] Failed to update KG routing: {e}")
+
+                # Always clear cache after record_response (architecture.md line 549)
+                # Even if outcome="unknown", prevents stale cache buildup
+                if session_id in _mcp_search_cache:
+                    del _mcp_search_cache[session_id]
+                    logger.debug(f"[MCP] Cleared search cache for {session_id}")
+
+                # Record to session file
+                result = await mcp_session_manager.record_exchange(
+                    session_id=session_id,
+                    user_msg=key_takeaway,  # Store semantic summary
+                    assistant_msg="",  # Not used in MCP mode
+                    doc_id=doc_id,
+                    outcome=outcome
+                )
+
+                # Build response text
+                client_name = get_client_display_name(session_id)
+                response_text = f"✓ Learning recorded for {client_name}\n"
+                response_text += f"Doc ID: {doc_id}\n"
+                response_text += f"Initial score: {initial_score} (outcome={outcome})\n"
+
+                if cached_memories_scored > 0:
+                    response_text += f"📊 Scored {cached_memories_scored} cached memories\n"
+
+                logger.info(f"[MCP] {client_name} recorded learning: {doc_id}")
+
+                # Apply cold-start injection if this is first tool call
+                response_text = await _inject_cold_start_if_needed(session_id, response_text, memory)
+
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=response_text)]
+                )
+
+            else:
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=f"Unknown tool: {name}")],
+                    isError=True
+                )
+
+        except Exception as e:
+            logger.error(f"[MCP] Tool call error for {name}: {e}", exc_info=True)
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=f"Error: {str(e)}")],
+                isError=True
+            )
+
+    # Run MCP server via stdio
+    logger.info("[MCP] Server initialized with 5 tools: search_memory, add_to_memory_bank, update_memory, archive_memory, record_response")
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, server.create_initialization_options())
+
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # Check for MCP mode
+    if "--mcp" in sys.argv:
+        logger.info("[MCP] Running in MCP server mode")
+        asyncio.run(run_mcp_server())
+    else:
+        # Run FastAPI server (normal mode)
+        import uvicorn
+        uvicorn.run(app, host="127.0.0.1", port=8000)

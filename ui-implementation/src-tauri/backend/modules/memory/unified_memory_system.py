@@ -17,6 +17,7 @@ from filelock import FileLock
 
 from modules.memory.chromadb_adapter import ChromaDBAdapter
 from modules.memory.file_memory_adapter import FileMemoryAdapter
+from modules.memory.content_graph import ContentGraph
 from modules.embedding.embedding_service import EmbeddingService
 from config.feature_flags import is_enabled, get_flag
 from services.metrics_service import track_performance, get_metrics
@@ -31,9 +32,9 @@ try:
 except ImportError:
     OutcomeTracker = None
 
-# Autonomous router removed - LLM now has direct control over collection selection
-# The broken async router was causing gatekeeping by forcing emergency fallbacks
-AutonomousRouter = None
+# Hybrid routing: KG-based automatic routing + optional LLM override
+# LLM can explicitly specify collections OR let _route_query() use learned KG patterns
+AutonomousRouter = None  # Legacy import, no longer needed
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ class UnifiedMemorySystem:
     - memory_bank: Persistent project/user context (LLM-controlled, never decays)
 
     PRODUCTION THRESHOLDS:
-    - HIGH_VALUE_THRESHOLD: 0.8 (memories with this score are preserved beyond retention period)
+    - HIGH_VALUE_THRESHOLD: 0.9 (memories with this score are preserved beyond retention period)
     - PROMOTION_SCORE_THRESHOLD: 0.7 (minimum score for promotion to patterns)
     - DEMOTION_SCORE_THRESHOLD: 0.3 (below this, patterns demote to history)
     - DELETION_SCORE_THRESHOLD: 0.2 (below this, history items are deleted)
@@ -141,13 +142,34 @@ class UnifiedMemorySystem:
         self._kg_save_pending = False
         self._kg_save_task: Optional[asyncio.Task] = None
 
-        # Knowledge graph for routing
+        # Knowledge graph for routing (query patterns → collection routing)
         self.kg_path = self.data_dir / "knowledge_graph.json"
         self.knowledge_graph = self._load_kg()
+
+        # CRITICAL: Content Knowledge Graph (entity relationships from memory content)
+        # This is a CORE FEATURE - do not disable or remove
+        # Provides the green/purple nodes in KG visualization
+        self.content_graph_path = self.data_dir / "content_graph.json"
+        self.content_graph = self._load_content_graph()
+        logger.info(f"Content KG initialized with {len(self.content_graph.entities)} entities")
 
         # Memory relationships
         self.relationships_path = self.data_dir / "memory_relationships.json"
         self.relationships = self._load_relationships()
+
+    def _load_content_graph(self) -> ContentGraph:
+        """
+        Load Content Knowledge Graph from disk.
+
+        CRITICAL: This is a core feature for entity relationship mapping.
+        Do not disable or remove - required for dual KG visualization.
+        """
+        if self.content_graph_path.exists():
+            try:
+                return ContentGraph.load_from_file(str(self.content_graph_path))
+            except Exception as e:
+                logger.warning(f"Failed to load content graph, creating new: {e}")
+        return ContentGraph()
 
     def _load_kg(self) -> Dict[str, Any]:
         """Load knowledge graph routing patterns"""
@@ -188,7 +210,13 @@ class UnifiedMemorySystem:
         }
 
     def _save_kg_sync(self):
-        """Synchronous save knowledge graph - to be called in thread with file locking"""
+        """
+        Synchronous save both routing KG and content KG.
+
+        CRITICAL: Saves both graphs atomically to maintain consistency.
+        Do not remove content graph save - it's required for entity tracking.
+        """
+        # Save routing KG
         lock_path = str(self.kg_path) + ".lock"
         try:
             with FileLock(lock_path, timeout=10):
@@ -199,9 +227,15 @@ class UnifiedMemorySystem:
                     json.dump(self.knowledge_graph, f, indent=2)
                 temp_path.replace(self.kg_path)
         except PermissionError as e:
-            logger.error(f"Permission denied saving knowledge graph: {e}")
+            logger.error(f"Permission denied saving routing KG: {e}")
         except Exception as e:
-            logger.error(f"Failed to save KG: {e}", exc_info=True)
+            logger.error(f"Failed to save routing KG: {e}", exc_info=True)
+
+        # CRITICAL: Save content KG (entity relationships)
+        try:
+            self.content_graph.save_to_file(str(self.content_graph_path))
+        except Exception as e:
+            logger.error(f"Failed to save content KG: {e}", exc_info=True)
 
     async def _save_kg(self):
         """Save knowledge graph asynchronously"""
@@ -411,16 +445,25 @@ class UnifiedMemorySystem:
         limit: int = 10,
         offset: int = 0,
         collections: Optional[List[CollectionName]] = None,
+        metadata_filters: Optional[Dict[str, Any]] = None,
         return_metadata: bool = False,
         transparency_context: Optional[Any] = None
     ) -> Any:
         """
-        Search memory with intelligent routing.
+        Search memory with intelligent routing and optional metadata filtering.
 
         Args:
             query: Search query
             limit: Max results
             collections: Override automatic routing
+            metadata_filters: ChromaDB where filters for exact metadata matching
+                Examples:
+                - {"title": "architecture"} - Books by exact title
+                - {"author": "Smith"} - Books by author
+                - {"has_code": True} - Book chunks containing code
+                - {"source": "mcp_claude"} - Learnings from MCP
+                - {"last_outcome": "worked"} - Successful learnings only
+                - {"title": "architecture", "has_code": True} - Combined filters
 
         Returns:
             Ranked results
@@ -545,7 +588,8 @@ class UnifiedMemorySystem:
                 # Get ALL working memory across all conversations
                 results = await self.collections[coll_name].query_vectors(
                     query_vector=query_embedding,
-                    top_k=limit * 3  # Get more for better ranking
+                    top_k=limit * 3,  # Get more for better ranking
+                    filters=metadata_filters
                 )
 
                 # Add recency metadata for ALL results (no conversation filter)
@@ -585,20 +629,47 @@ class UnifiedMemorySystem:
                 if coll_name == "books":
                     results = await self.collections[coll_name].query_vectors(
                         query_vector=query_embedding,
-                        top_k=limit * 3  # Get 3x results from books
+                        top_k=limit * 3,  # Get 3x results from books
+                        filters=metadata_filters
+                    )
+                # Memory bank: exclude archived items by default (unless explicitly requested)
+                elif coll_name == "memory_bank":
+                    # Build filters: combine user filters + archived exclusion
+                    memory_bank_filters = metadata_filters.copy() if metadata_filters else {}
+                    # Only exclude archived if user hasn't explicitly set status filter
+                    if "status" not in memory_bank_filters:
+                        memory_bank_filters["status"] = {"$ne": "archived"}  # ChromaDB not-equals filter
+
+                    results = await self.collections[coll_name].query_vectors(
+                        query_vector=query_embedding,
+                        top_k=limit,
+                        filters=memory_bank_filters
                     )
                 else:
                     results = await self.collections[coll_name].query_vectors(
                         query_vector=query_embedding,
-                        top_k=limit
+                        top_k=limit,
+                        filters=metadata_filters
                     )
 
-            # Add source collection and boost recent books
+            # Add source collection and boost based on collection type
             for r in results:
                 r["collection"] = coll_name
                 # Boost patterns slightly
                 if coll_name == "patterns":
                     r["distance"] = r.get("distance", 1.0) * 0.9
+                # Boost memory_bank by importance × confidence
+                elif coll_name == "memory_bank":
+                    metadata = r.get("metadata", {})
+                    importance = metadata.get("importance", 0.7)
+                    confidence = metadata.get("confidence", 0.7)
+                    quality_score = importance * confidence
+
+                    # Reduce distance for high-quality memories (0.5 = 50% max boost)
+                    # quality_score=1.0 → 50% distance reduction → ranks much higher
+                    # quality_score=0.5 → 25% distance reduction → moderate boost
+                    # quality_score=0.0 → 0% distance reduction → no boost
+                    r["distance"] = r.get("distance", 1.0) * (1.0 - quality_score * 0.5)
                 # Boost recently uploaded books (within last 7 days)
                 elif coll_name == "books" and r.get("upload_timestamp"):
                     from datetime import datetime, timedelta
@@ -620,8 +691,25 @@ class UnifiedMemorySystem:
             unique_known = [s for s in known_solutions if s.get("id") not in existing_ids]
             all_results = unique_known + all_results
 
-        # Sort by distance
-        all_results.sort(key=lambda x: x.get("distance", 2.0))
+        # LEARNING-AWARE RANKING: Combine embedding distance with learned scores
+        for r in all_results:
+            metadata = r.get("metadata", {})
+            learned_score = metadata.get("score", 0.5)  # Default to neutral 0.5
+            distance = r.get("distance", 1.0)
+
+            # Convert distance to similarity (lower distance = higher similarity)
+            embedding_similarity = 1.0 - min(distance, 1.0)
+
+            # Combine: 70% embedding similarity + 30% learned score
+            # This ensures embeddings still matter most, but learning influences ranking
+            combined_score = (0.7 * embedding_similarity) + (0.3 * learned_score)
+
+            # Store as negative distance for sorting (higher score = lower "distance")
+            r["final_rank_score"] = combined_score
+            r["original_distance"] = distance  # Keep for debugging
+
+        # Sort by combined score (higher is better)
+        all_results.sort(key=lambda x: x.get("final_rank_score", 0.0), reverse=True)
 
         # Track query for KG learning (only for returned results)
         paginated_results = all_results[offset:offset + limit]
@@ -801,50 +889,348 @@ class UnifiedMemorySystem:
             logger.error(f"Error deleting memories for conversation {conversation_id}: {e}", exc_info=True)
             return 0
 
+    async def get_cold_start_context(self, limit: int = 5) -> Optional[str]:
+        """
+        Generate cold-start user profile from Content KG top entities.
+
+        Uses Content KG to find most important entities (by mention count),
+        then retrieves their source memory_bank documents.
+
+        Args:
+            limit: Maximum number of memory_bank facts to include
+
+        Returns:
+            Formatted string with top memory_bank facts, or None if unavailable
+        """
+        if not self.content_graph or len(self.content_graph.entities) == 0:
+            logger.info("[COLD-START] Content KG empty, falling back to vector search")
+            # Fallback to vector search
+            try:
+                results = await self.search(
+                    query="user identity name projects current work goals",
+                    collections=["memory_bank"],
+                    limit=limit
+                )
+                return self._format_cold_start_results(results)
+            except Exception as e:
+                logger.error(f"[COLD-START] Fallback search failed: {e}")
+                return None
+
+        # Get top entities by mentions (most important)
+        top_entities = self.content_graph.get_all_entities(min_mentions=1)[:10]
+
+        if not top_entities:
+            logger.info("[COLD-START] No entities in Content KG yet")
+            return None
+
+        logger.info(f"[COLD-START] Top entities: {[e['entity'] for e in top_entities[:5]]}")
+
+        # Collect unique memory_bank document IDs from top entities
+        seen_ids = set()
+        memory_ids = []
+
+        for entity in top_entities:
+            for doc_id in entity.get("documents", []):
+                # Only include memory_bank documents
+                if doc_id not in seen_ids and doc_id.startswith("memory_bank_"):
+                    seen_ids.add(doc_id)
+                    memory_ids.append(doc_id)
+                    if len(memory_ids) >= limit:
+                        break
+            if len(memory_ids) >= limit:
+                break
+
+        if not memory_ids:
+            logger.info("[COLD-START] No memory_bank documents found in top entities")
+            return None
+
+        logger.info(f"[COLD-START] Retrieving {len(memory_ids)} memory_bank documents: {memory_ids}")
+
+        # Retrieve actual memory_bank documents by ID
+        memories = []
+        try:
+            adapter = self.collections["memory_bank"]
+            result = await adapter.get_vectors_by_ids(memory_ids)
+
+            logger.info(f"[COLD-START] ChromaDB result keys: {result.keys() if result else 'None'}")
+
+            # ChromaDB returns {ids: [...], documents: [...], metadatas: [...]}
+            # Note: documents can be None if IDs don't exist
+            documents = result.get('documents') if result else None
+            if documents is None:
+                documents = []
+
+            logger.info(f"[COLD-START] Documents count: {len(documents)}")
+
+            if result and documents:
+                for i, doc_id in enumerate(result.get("ids", [])):
+                    if i < len(documents):
+                        memories.append({
+                            "id": doc_id,
+                            "content": documents[i],
+                            "text": documents[i],
+                            "metadata": result.get("metadatas", [])[i] if i < len(result.get("metadatas", [])) else {}
+                        })
+                logger.info(f"[COLD-START] Retrieved {len(memories)} memory_bank documents")
+            else:
+                logger.warning(f"[COLD-START] ChromaDB returned empty or no documents (requested IDs may not exist)")
+        except Exception as e:
+            logger.error(f"[COLD-START] Failed to retrieve memory_bank documents: {e}", exc_info=True)
+            return None
+
+        # If Content KG had entities but retrieval returned 0 documents (stale IDs), fall back to vector search
+        if not memories:
+            logger.warning(f"[COLD-START] Content KG entities point to non-existent documents (stale data), falling back to vector search")
+            try:
+                results = await self.search(
+                    query="user identity name projects current work goals",
+                    collections=["memory_bank"],
+                    limit=5
+                )
+                return self._format_cold_start_results(results)
+            except Exception as e:
+                logger.error(f"[COLD-START] Fallback vector search failed: {e}")
+                return None
+
+        return self._format_cold_start_results(memories)
+
+    def _smart_truncate(self, text: str, max_len: int = 250) -> str:
+        """Truncate text at sentence/word boundary, not mid-word"""
+        if len(text) <= max_len:
+            return text
+
+        truncated = text[:max_len]
+
+        # Try sentence boundary first (period + space)
+        last_period = truncated.rfind('. ')
+        if last_period > max_len * 0.6:  # At least 60% of target length
+            return truncated[:last_period + 1]
+
+        # Fall back to word boundary
+        last_space = truncated.rfind(' ')
+        if last_space > 0:
+            return truncated[:last_space] + '...'
+
+        return truncated + '...'
+
+    def _format_cold_start_results(self, results: List[Dict]) -> Optional[str]:
+        """Format cold-start memories into system message with injection protection"""
+        if not results:
+            return None
+
+        # INJECTION PROTECTION (Layer 4): Filter suspicious content
+        safe_results = [
+            r for r in results
+            if not any(
+                x in (r.get("content") or r.get("text", "")).lower()
+                for x in ["ignore all previous", "hacked", "pwned", "ignore instructions"]
+            )
+        ][:10]  # Limit to top 10 after filtering
+
+        if not safe_results:
+            logger.warning("[COLD-START] All results filtered by Layer 4 injection protection")
+            return None
+
+        logger.info(f"[COLD-START] Formatted {len(safe_results)} safe memory_bank facts")
+
+        context_summary = "📋 **User Profile** (auto-loaded from your most important stored facts):\n" + "\n".join([
+            f"• {self._smart_truncate((r.get('content') or r.get('text', '')).replace(chr(10), ' '), 250)}"
+            for r in safe_results
+        ])
+
+        return context_summary
+
+    def _calculate_tier_scores(self, concepts: List[str]) -> Dict[str, float]:
+        """
+        Calculate tier scores for each collection based on learned patterns.
+        Implements architecture.md tier scoring formula:
+
+        tier_score = success_rate * confidence
+        where:
+          success_rate = successes / (successes + failures)
+          confidence = min(total_uses / 10, 1.0)
+
+        Returns dict mapping collection_name → total_score
+        """
+        collection_scores = {
+            "working": 0.0,
+            "patterns": 0.0,
+            "history": 0.0,
+            "books": 0.0,
+            "memory_bank": 0.0
+        }
+
+        # Aggregate scores across all concepts
+        for concept in concepts:
+            if concept in self.knowledge_graph.get("routing_patterns", {}):
+                pattern_data = self.knowledge_graph["routing_patterns"][concept]
+                collections_used = pattern_data.get("collections_used", {})
+
+                for collection, stats in collections_used.items():
+                    successes = stats.get("successes", 0)
+                    failures = stats.get("failures", 0)
+                    partials = stats.get("partials", 0)
+                    total_uses = successes + failures + partials
+
+                    # Calculate success_rate (exclude partials from denominator)
+                    if successes + failures > 0:
+                        success_rate = successes / (successes + failures)
+                    else:
+                        success_rate = 0.5  # Neutral for no confirmed outcomes
+
+                    # Calculate confidence (reaches 1.0 after 10 uses)
+                    confidence = min(total_uses / 10.0, 1.0)
+
+                    # Tier score
+                    tier_score = success_rate * confidence
+
+                    # Add to collection's total score
+                    collection_scores[collection] += tier_score
+
+        return collection_scores
+
     def _route_query(self, query: str) -> List[str]:
         """
-        Simple fallback routing when LLM doesn't specify collections.
-        Removed broken async router to eliminate gatekeeping.
-        LLM now has full control via tool parameters.
+        Intelligent routing using learned KG patterns.
+        Implements architecture.md specification with learning phases:
+
+        Phase 1 (Exploration): total_score < 0.5 → search all 5 collections
+        Phase 2 (Medium Confidence): 0.5 ≤ total_score < 2.0 → search top 2-3 collections
+        Phase 3 (High Confidence): total_score ≥ 2.0 → search top 1-2 collections
+
+        Returns list of collection names to search.
         """
-        # When no collections specified, search all available collections
-        # This gives the LLM full control when it specifies collections,
-        # and comprehensive results when it doesn't
-        all_collections = ["working", "patterns", "history", "books", "memory_bank"]
+        # Extract concepts from query
+        concepts = self._extract_concepts(query)
 
-        # Log that we're using the default
-        logger.debug(f"[Routing] No collections specified by LLM, searching all: {all_collections}")
+        if not concepts:
+            logger.debug(f"[Routing] No concepts extracted, searching all collections")
+            return ["working", "patterns", "history", "books", "memory_bank"]
 
-        return all_collections
+        # Calculate tier scores for each collection
+        collection_scores = self._calculate_tier_scores(concepts)
+
+        # Calculate total score (sum of all collection scores)
+        total_score = sum(collection_scores.values())
+
+        # Sort collections by score (highest first)
+        sorted_collections = sorted(
+            collection_scores.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+
+        # Apply routing thresholds
+        if total_score < 0.5:
+            # EXPLORATION PHASE: No learned patterns yet, search everything
+            selected = ["working", "patterns", "history", "books", "memory_bank"]
+            logger.info(f"[Routing] Exploration phase (score={total_score:.2f}): searching all collections")
+
+        elif total_score < 2.0:
+            # MEDIUM CONFIDENCE: Search top 2-3 collections
+            # Take top collections with score > 0.1, up to 3
+            selected = [
+                coll for coll, score in sorted_collections[:3]
+                if score > 0.1
+            ]
+            if not selected:
+                selected = [sorted_collections[0][0]]  # At least take top 1
+            logger.info(f"[Routing] Medium confidence (score={total_score:.2f}): searching {selected}")
+
+        else:
+            # HIGH CONFIDENCE: Search top 1-2 collections
+            # Take top collections with score > 0.5, up to 2
+            selected = [
+                coll for coll, score in sorted_collections[:2]
+                if score > 0.5
+            ]
+            if not selected:
+                selected = [sorted_collections[0][0]]  # At least take top 1
+            logger.info(f"[Routing] High confidence (score={total_score:.2f}): searching {selected}")
+
+        # Log concept extraction and scores for debugging
+        logger.debug(f"[Routing] Concepts: {concepts[:5]}...")
+        logger.debug(f"[Routing] Scores: {dict(sorted_collections[:3])}")
+
+        # Track usage for KG visualization (increment 'total' for used patterns)
+        # This makes MCP-searched patterns visible in UI even without explicit outcome feedback
+        for concept in concepts:
+            if concept in self.knowledge_graph.get("routing_patterns", {}):
+                pattern = self.knowledge_graph["routing_patterns"][concept]
+                collections_used = pattern.get("collections_used", {})
+
+                # Increment total for each collection that was selected for search
+                for collection in selected:
+                    if collection in collections_used:
+                        collections_used[collection]["total"] = collections_used[collection].get("total", 0) + 1
+                    else:
+                        # Initialize if this collection not tracked yet
+                        collections_used[collection] = {
+                            "successes": 0,
+                            "failures": 0,
+                            "partials": 0,
+                            "total": 1
+                        }
+
+                # Update last_used timestamp
+                pattern["last_used"] = datetime.now().isoformat()
+
+        return selected
 
     def _extract_concepts(self, text: str) -> List[str]:
-        """Extract key concepts from text with better pattern matching"""
+        """
+        Extract N-grams (unigrams, bigrams, trigrams) from text for KG routing.
+        Implements architecture.md specification for concept extraction.
+        """
         concepts = set()
 
-        # Extract technical patterns
-        patterns = [
+        # Normalize and tokenize
+        text_lower = text.lower()
+        # Remove punctuation except hyphens and underscores
+        text_clean = re.sub(r'[^\w\s\-_]', ' ', text_lower)
+        words = text_clean.split()
+
+        # Stop words (expanded set)
+        stop_words = {
+            "the", "a", "an", "is", "are", "was", "were", "to", "for", "of",
+            "with", "in", "on", "at", "by", "from", "as", "be", "this", "that",
+            "it", "i", "you", "we", "they", "my", "your", "our", "their", "what",
+            "when", "where", "how", "why", "can", "could", "would", "should"
+        }
+
+        # Filter stop words
+        filtered_words = [w for w in words if w not in stop_words and len(w) > 2]
+
+        # 1. Extract UNIGRAMS (single words)
+        for word in filtered_words:
+            if len(word) > 3:  # Only meaningful words
+                concepts.add(word)
+
+        # 2. Extract BIGRAMS (2-word phrases)
+        for i in range(len(filtered_words) - 1):
+            bigram = f"{filtered_words[i]}_{filtered_words[i+1]}"
+            concepts.add(bigram)
+
+        # 3. Extract TRIGRAMS (3-word phrases)
+        for i in range(len(filtered_words) - 2):
+            trigram = f"{filtered_words[i]}_{filtered_words[i+1]}_{filtered_words[i+2]}"
+            concepts.add(trigram)
+
+        # 4. Extract technical patterns (CamelCase, snake_case, ErrorTypes)
+        technical_patterns = [
             r'[A-Z][a-z]+(?:[A-Z][a-z]+)+',  # CamelCase
             r'[a-z]+_[a-z]+(?:_[a-z]+)*',     # snake_case
-            r'\b(?:error|exception|warning)\s+\w+',  # Error patterns
             r'\b\w+Error\b',  # ErrorTypes
             r'\b\w+Exception\b',  # ExceptionTypes
         ]
 
-        for pattern in patterns:
+        for pattern in technical_patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             concepts.update(m.lower() for m in matches)
 
-        # Also get important words
-        words = text.lower().split()
-        stop_words = {"the", "a", "an", "is", "are", "was", "were", "to", "for", "of", "with", "in", "on", "at"}
-        important_words = [w for w in words if w not in stop_words and len(w) > 3]
-        concepts.update(important_words[:5])
-
-        # Extract error codes and numbers
-        error_codes = re.findall(r'\b[A-Z]{2,}_[A-Z_]+\b|\b\d{3,}\b', text)
-        concepts.update(c.lower() for c in error_codes)
-
-        return list(concepts)[:10]  # Return more concepts
+        # Return up to 15 concepts (prioritize longer n-grams for specificity)
+        sorted_concepts = sorted(concepts, key=lambda x: len(x.split('_')), reverse=True)
+        return sorted_concepts[:15]
 
     def _track_usage(self, query: str, collection: str, doc_id: str):
         """Track which collection was used for which query"""
@@ -872,17 +1258,7 @@ class UnifiedMemorySystem:
             doc_id: Document that was used
             outcome: Whether it worked
         """
-        # SAFEGUARD: Books are reference material, not scorable memories
-        if doc_id.startswith("books_"):
-            logger.warning(f"Cannot score book chunks - they are static reference material (doc_id: {doc_id})")
-            return
-
-        # SAFEGUARD: Memory bank is user identity/facts, not scorable patterns
-        if doc_id.startswith("memory_bank_"):
-            logger.warning(f"Cannot score memory_bank - persistent user facts, not outcome-based patterns (doc_id: {doc_id})")
-            return
-
-        # Get document to find collection
+        # Get document to find collection (needed for KG routing update)
         collection_name = None
         doc = None
 
@@ -894,6 +1270,26 @@ class UnifiedMemorySystem:
 
         if not doc:
             logger.warning(f"Document {doc_id} not found")
+            return
+
+        # UPDATE KG ROUTING FIRST - even for books/memory_bank
+        # This allows KG to learn which collections answer which queries
+        metadata = doc.get("metadata", {})
+        problem_text = metadata.get("query", "")
+        if problem_text and collection_name:
+            await self._update_kg_routing(problem_text, collection_name, outcome)
+            logger.info(f"[KG] Updated routing for '{problem_text[:50]}' → {collection_name} (outcome={outcome})")
+
+        # SAFEGUARD: Books are reference material, not scorable memories
+        # But we still updated KG routing above so system learns to route to books
+        if doc_id.startswith("books_"):
+            logger.info(f"[KG] Learned routing pattern for books, but skipping score update (static reference material)")
+            return
+
+        # SAFEGUARD: Memory bank is user identity/facts, not scorable patterns
+        # But we still updated KG routing above so system learns to route to memory_bank
+        if doc_id.startswith("memory_bank_"):
+            logger.info(f"[KG] Learned routing pattern for memory_bank, but skipping score update (persistent user facts)")
             return
 
         # Outcome tracking is active and learning from conversation patterns
@@ -965,11 +1361,9 @@ class UnifiedMemorySystem:
         await self._handle_promotion(doc_id, collection_name, new_score, uses, metadata, collection_size)
 
         # Update KG with both problem and solution for proper relationship building
+        # Note: routing patterns already updated above (before safeguard checks)
         problem_text = metadata.get("query", "")
         solution_text = doc.get("content", "")
-
-        # Update routing patterns
-        await self._update_kg_routing(problem_text, collection_name, outcome)
 
         # Build relationships and patterns when outcome is positive
         if outcome == "worked" and problem_text and solution_text:
@@ -1302,14 +1696,22 @@ class UnifiedMemorySystem:
             best_rate = 0.0
 
             for coll_name, coll_stats in pattern["collections_used"].items():
-                if coll_stats["total"] > 0:
-                    rate = coll_stats["successes"] / coll_stats["total"]
-                    if rate > best_rate:
-                        best_rate = rate
-                        best_collection = coll_name
+                # Calculate success rate: successes / (successes + failures)
+                # Excludes "partial" and "unknown" outcomes per v0.1.6 spec (architecture.md:648)
+                total_with_feedback = coll_stats["successes"] + coll_stats["failures"]
+
+                if total_with_feedback > 0:
+                    rate = coll_stats["successes"] / total_with_feedback
+                else:
+                    rate = 0.5  # Neutral baseline (50%) for untested patterns
+
+                if rate > best_rate:
+                    best_rate = rate
+                    best_collection = coll_name
 
             pattern["best_collection"] = best_collection
-            pattern["success_rate"] = best_rate
+            # Default to 0.5 if no collections have been tested with explicit feedback
+            pattern["success_rate"] = best_rate if best_rate > 0 else 0.5
 
         # Update relationship outcomes
         for i, concept1 in enumerate(concepts):
@@ -2366,6 +2768,18 @@ class UnifiedMemorySystem:
             }
         )
 
+        # CRITICAL: Extract entities from memory_bank content for Content KG
+        # This builds the user's personal knowledge graph (green/purple nodes in UI)
+        # Do NOT remove - core feature for entity relationship mapping
+        try:
+            timestamp = datetime.now().isoformat()
+            self.content_graph.add_entities_from_text(text, doc_id, timestamp)
+            # Save content graph asynchronously (debounced like routing KG)
+            await self._debounced_save_kg()  # This now saves both KGs
+            logger.debug(f"Extracted entities from memory_bank item: {doc_id}")
+        except Exception as e:
+            logger.error(f"Failed to extract entities for content KG: {e}", exc_info=True)
+
         logger.info(f"Stored memory_bank item: {text[:50]}... (tags: {tags})")
         return doc_id
 
@@ -2426,6 +2840,17 @@ class UnifiedMemorySystem:
             }]
         )
 
+        # CRITICAL: Update content graph with new entities
+        # Remove old entities, extract new ones
+        try:
+            self.content_graph.remove_entity_mention(doc_id)
+            timestamp = datetime.now().isoformat()
+            self.content_graph.add_entities_from_text(new_text, doc_id, timestamp)
+            await self._debounced_save_kg()
+            logger.debug(f"Updated content KG for memory_bank item: {doc_id}")
+        except Exception as e:
+            logger.error(f"Failed to update content KG: {e}", exc_info=True)
+
         logger.info(f"Updated memory_bank item {doc_id}: {reason}")
         return doc_id
 
@@ -2455,6 +2880,15 @@ class UnifiedMemorySystem:
         metadata["archived_at"] = datetime.now().isoformat()
 
         self.collections["memory_bank"].update_fragment_metadata(doc_id, metadata)
+
+        # CRITICAL: Remove entity mentions from content graph when archived
+        try:
+            self.content_graph.remove_entity_mention(doc_id)
+            await self._debounced_save_kg()
+            logger.debug(f"Removed content KG entities for archived memory: {doc_id}")
+        except Exception as e:
+            logger.error(f"Failed to update content KG on archive: {e}", exc_info=True)
+
         logger.info(f"Archived memory_bank item {doc_id}: {reason}")
         return True
 
@@ -2554,6 +2988,144 @@ class UnifiedMemorySystem:
         except Exception as e:
             logger.error(f"Failed to delete memory {doc_id}: {e}")
             return False
+
+    async def get_kg_entities(self, filter_text: Optional[str] = None, limit: int = 200) -> List[Dict[str, Any]]:
+        """
+        Get entities from DUAL knowledge graph (Routing KG + Content KG merged).
+
+        CRITICAL: This merges both graphs to provide complete entity view.
+        - Routing KG: Query patterns → collection routing
+        - Content KG: Entity relationships from memory_bank content
+        - Entities in both graphs get source="both" (purple nodes in UI)
+
+        NOTE: Reloads KG from disk to pick up changes from MCP process.
+        """
+        # Reload KG from disk to pick up changes from MCP process (different process writes to same file)
+        self.knowledge_graph = self._load_kg()
+
+        entities_map = {}  # entity_name -> entity_data
+
+        # STEP 1: Get routing KG entities (query-based patterns)
+        for concept, pattern in self.knowledge_graph.get("routing_patterns", {}).items():
+            if filter_text and filter_text.lower() not in concept.lower():
+                continue
+
+            # Count routing connections
+            routing_connections = 0
+            for rel_key in self.knowledge_graph.get("relationships", {}).keys():
+                if concept in rel_key.split("|"):
+                    routing_connections += 1
+
+            # Get total usage across all collections
+            collections_used = pattern.get("collections_used", {})
+            total_usage = sum(c.get("total", 0) for c in collections_used.values())
+
+            entities_map[concept] = {
+                "entity": concept,
+                "source": "routing",  # Will be updated if also in content KG
+                "routing_connections": routing_connections,
+                "content_connections": 0,
+                "total_connections": routing_connections,
+                "success_rate": pattern.get("success_rate", 0.5),
+                "best_collection": pattern.get("best_collection"),
+                "collections_used": collections_used,
+                "usage_count": total_usage,
+                "mentions": 0,  # From content KG
+                "last_used": pattern.get("last_used"),
+                "created_at": pattern.get("created_at")
+            }
+
+        # STEP 2: Get content KG entities (memory-based relationships)
+        # CRITICAL: Do not skip this step - provides green/purple nodes in UI
+        content_entities = self.content_graph.get_all_entities(min_mentions=1)
+        for entity_data in content_entities:
+            entity_name = entity_data["entity"]
+
+            if filter_text and filter_text.lower() not in entity_name.lower():
+                continue
+
+            # Count content connections
+            content_rels = self.content_graph.get_entity_relationships(entity_name, min_strength=0.0)
+            content_connections = len(content_rels)
+
+            if entity_name in entities_map:
+                # Entity exists in BOTH graphs → source="both" (purple node)
+                entities_map[entity_name]["source"] = "both"
+                entities_map[entity_name]["content_connections"] = content_connections
+                entities_map[entity_name]["total_connections"] += content_connections
+                entities_map[entity_name]["mentions"] = entity_data["mentions"]
+            else:
+                # Entity only in content KG → source="content" (green node)
+                entities_map[entity_name] = {
+                    "entity": entity_name,
+                    "source": "content",  # Content KG only
+                    "routing_connections": 0,
+                    "content_connections": content_connections,
+                    "total_connections": content_connections,
+                    "success_rate": 0.5,  # Neutral (no routing data)
+                    "best_collection": "memory_bank",  # Content entities are from memory_bank
+                    "collections_used": {"memory_bank": {"total": entity_data["mentions"]}},
+                    "usage_count": entity_data["mentions"],
+                    "mentions": entity_data["mentions"],
+                    "last_used": entity_data.get("last_seen"),
+                    "created_at": entity_data.get("first_seen")
+                }
+
+        # Convert to list and sort by usage
+        entities = list(entities_map.values())
+        entities.sort(key=lambda x: x["usage_count"], reverse=True)
+        return entities[:limit]
+
+    async def get_kg_relationships(self, entity: str) -> List[Dict[str, Any]]:
+        """
+        Get relationships for a specific entity (DUAL KG merged).
+
+        CRITICAL: Merges routing + content relationships for complete view.
+        """
+        relationships_map = {}  # related_entity -> relationship_data
+
+        # STEP 1: Get routing KG relationships
+        for rel_key, rel_data in self.knowledge_graph.get("relationships", {}).items():
+            concepts = rel_key.split("|")
+            if entity in concepts:
+                related = concepts[1] if concepts[0] == entity else concepts[0]
+                relationships_map[related] = {
+                    "related_entity": related,
+                    "source": "routing",  # Will update if also in content
+                    "strength": rel_data.get("co_occurrence", 0),
+                    "total_strength": rel_data.get("co_occurrence", 0),
+                    "success_together": rel_data.get("success_together", 0),
+                    "failure_together": rel_data.get("failure_together", 0),
+                    "content_strength": 0  # From content KG
+                }
+
+        # STEP 2: Get content KG relationships
+        # CRITICAL: Do not skip - provides entity relationship visualization
+        content_rels = self.content_graph.get_entity_relationships(entity, min_strength=0.0)
+        for rel_data in content_rels:
+            related = rel_data["related_entity"]  # Fixed: was "entity", should be "related_entity"
+            content_strength = rel_data["strength"]
+
+            if related in relationships_map:
+                # Relationship exists in BOTH graphs
+                relationships_map[related]["source"] = "both"
+                relationships_map[related]["content_strength"] = content_strength
+                relationships_map[related]["total_strength"] += content_strength
+            else:
+                # Relationship only in content KG
+                relationships_map[related] = {
+                    "related_entity": related,
+                    "source": "content",  # Content KG only
+                    "strength": 0,  # No routing data
+                    "total_strength": content_strength,
+                    "success_together": 0,
+                    "failure_together": 0,
+                    "content_strength": content_strength
+                }
+
+        relationships = list(relationships_map.values())
+        relationships.sort(key=lambda x: x["total_strength"], reverse=True)
+        return relationships
 
     async def cleanup(self):
         """Clean shutdown"""

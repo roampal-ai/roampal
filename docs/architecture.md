@@ -4,6 +4,43 @@
 
 Roampal is an intelligent chatbot with persistent memory and learning capabilities. The system features a **memory-first** architecture that learns from conversations and improves over time.
 
+## Performance Benchmarks
+
+### Benchmark Results
+
+See [BENCHMARKS.md](BENCHMARKS.md) for full methodology.
+
+---
+
+### Metrics Comparison
+
+Performance on various metrics compared to other memory systems:
+
+| Metric | Mem0 | OpenAI Memory | Roampal |
+|--------|------|---------------|---------|
+| **Search Latency (p95)** | 1.44s | - | **0.034s** |
+| **Relevance Precision@5** | 67% | - | **80%** |
+| **Token Efficiency** | 1,800 | - | **112** |
+| **Learning Under Noise** | Static | Static | **80% @ 4:1** |
+
+**Results:**
+- 40× faster retrieval (0.034s vs Mem0's 1.44s p95 latency)
+- 94% more efficient (112 tokens vs Mem0's 1,800 tokens)
+- 80% precision under 4:1 semantic noise (confusion attack test)
+- 100% knowledge graph routing accuracy (cross-collection test)
+- 100% cross-session retention (recall across simulated restarts)
+- Outcome-based learning (adapts from +0.2/-0.3 feedback signals)
+
+**PROOF: KG Routing Actually Learns:**
+- **Cold Start (no learned patterns)**: 60% precision - searches all collections, gets noise
+- **After Learning (20+ queries)**: **80% precision** - knows exactly where to look
+- **33% improvement** from learned routing patterns alone
+- **Continues improving**: 80% is not the ceiling - with 50+ queries, precision can reach 90%+ as patterns strengthen
+- **Per-user learning**: Each user's KG learns their specific query patterns and vocabulary
+- **Compounding gains**: More usage → stronger patterns → faster routing → higher accuracy
+- See `benchmarks/test_standard_metrics.py::test_relevance_ranking_precision` for proof
+
+> **All benchmarks reproducible** - See `benchmarks/` folder for complete test suite, methodology, and competitive analysis.
 
 ### Design Principles
 
@@ -71,10 +108,10 @@ Roampal is an intelligent chatbot with persistent memory and learning capabiliti
 - **Purpose**: Current conversation context
 - **Retention**: 24 hours from creation
 - **Scope**: Global across all conversations (see Cross-Conversation Memory Search below)
-- **Promotion**: Valuable items (score ≥0.7) promoted automatically via:
-  - Every 60 minutes (background task)
-  - Every 20 messages (auto-promotion, non-blocking)
-  - On conversation switch (manual trigger)
+- **Promotion**: Valuable items promoted automatically via:
+  - Working → History: score ≥0.7 AND uses ≥2
+  - Triggers: Every 30 minutes (background task), Every 20 messages (auto-promotion), On conversation switch
+  - History → Patterns: score ≥0.9 AND uses ≥3
 - **Use Case**: Active problem-solving context
 
 #### History Collection
@@ -91,7 +128,11 @@ Roampal is an intelligent chatbot with persistent memory and learning capabiliti
 
 #### Memory Bank Collection (NEW - 2025-10-01)
 - **Purpose**: Persistent user information (identity, preferences, projects, context)
-- **Retention**: Permanent (never decays, score fixed at 1.0)
+- **Retention**: Permanent (never decays)
+- **Ranking**: Results boosted by `importance × confidence` score
+  - High-quality memories (importance=0.9, confidence=0.9 → quality=0.81) rank significantly higher
+  - Low-quality memories (importance=0.3, confidence=0.4 → quality=0.12) rank lower
+  - Quality score reduces semantic distance by up to 50% for maximum-quality items
 - **Management**:
   - LLM has full autonomy to store/update/archive
   - User has override via Settings UI (restore/delete)
@@ -108,6 +149,185 @@ Roampal is an intelligent chatbot with persistent memory and learning capabiliti
   - `DELETE /api/memory-bank/delete/{id}` - User permanently deletes memory
   - `GET /api/memory-bank/search?q=...` - Semantic search
   - `GET /api/memory-bank/stats` - Statistics and tag cloud
+  - `GET /api/memory/knowledge-graph` - Get graph data (nodes/edges for visualization)
+    - Returns `last_used` and `created_at` timestamps when available (v0.2.0)
+    - Newly created concepts have `null` timestamps until first scored outcome
+  - `GET /api/memory/knowledge-graph/concept/{id}/definition` - Get concept details with routing stats
+
+**Memory Bank Quality Ranking (v0.2.0):**
+
+Unlike outcome-based collections (working/history/patterns), memory_bank uses **quality-based ranking** to prioritize authoritative facts over merely similar text.
+
+**Formula:** `adjusted_distance = semantic_distance × (1.0 - (importance × confidence) × 0.5)`
+
+**Example:**
+```
+Query: "What's my favorite programming language?"
+
+Result A: "User mentioned Python once in passing"
+- Semantic distance: 0.05 (very similar to query)
+- Importance: 0.3, Confidence: 0.4 → Quality: 0.12
+- Adjusted distance: 0.05 × (1.0 - 0.12 × 0.5) = 0.047
+
+Result B: "User is expert Python developer, strongly prefers Python for all projects"
+- Semantic distance: 0.08 (slightly less similar to query)
+- Importance: 0.9, Confidence: 0.9 → Quality: 0.81
+- Adjusted distance: 0.08 × (1.0 - 0.81 × 0.5) = 0.048
+
+→ Without quality boost: Result A wins (0.05 < 0.08)
+→ With quality boost: Result B wins (0.048 < 0.047) ✅
+```
+
+**Why This Matters:**
+- Prevents low-quality, high-similarity memories from dominating results
+- Ensures authoritative facts (high importance+confidence) surface even if semantically further
+- Balances semantic relevance with information reliability
+- Max 50% distance reduction for perfect quality scores (importance=1.0, confidence=1.0)
+
+**Implementation:**
+- `unified_memory_system.py:614-625` - Quality boost applied during search
+- Coefficient 0.5 = max 50% distance reduction for perfect quality (importance × confidence = 1.0)
+
+**KG Visualization Features (v0.2.0):**
+- **Time-based filtering**: All Time | Today | This Week | This Session
+  - **All Time**: Shows all concepts (including unused with `last_used = null`)
+  - **Today/Week/Session**: Only shows concepts with `last_used` timestamp in range
+- **Sort options**: Importance (hybrid score) | Recent (last used) | Oldest (creation time)
+- **Dynamic header**: Updates to show active filters ("Top 20 most recent concepts from today")
+- **Timestamps**: `created_at` and `last_used` are `null` for concepts created but never used in scored outcomes
+- **Success rate display**: Shows actual success percentage in nodes (50% default for unused concepts)
+- **Smooth resizing**: Debounced panel resize (300ms) prevents jank when dragging panel dividers
+- **Empty state UX**: Filter controls always visible, contextual messages based on active filter
+- **Concept modal**: Shows routing breakdown with collections searched and per-tier success rates
+- Always shows top 20 concepts based on selected filters
+
+### Metadata Schema (v0.2.0 - Searchable Fields)
+
+All memory chunks have metadata stored in ChromaDB that can be filtered during search using the `metadata` parameter in `search_memory` tool or internal API.
+
+#### Books Collection Metadata
+Every book chunk contains:
+- `title` (string) - Book title from upload
+- `author` (string) - Author name (can be "Unknown")
+- `book_id` (string) - Unique book identifier
+- `chunk_index` (int) - Sequential chunk number
+- `type` = "book_chunk" (constant)
+- `source_context` (string) - Section/chapter name from document structure
+- `doc_position` (float) - Position in document (0.0 to 1.0)
+- `has_code` (bool) - True if chunk contains code blocks/snippets
+- `token_count` (int) - Number of tokens in chunk
+- `upload_timestamp` (ISO datetime) - When book was uploaded
+- `content`/`text` (string) - Actual chunk text
+
+**Example Queries:**
+```python
+# Find architecture documentation
+{"title": "architecture"}
+
+# Find code examples in books
+{"has_code": True}
+
+# Find specific author's work
+{"author": "Martin Fowler"}
+
+# Combined: code examples from specific book
+{"title": "Clean Code", "has_code": True}
+```
+
+#### Working/History/Patterns/Memory_Bank Metadata
+Learning and conversation chunks contain:
+- `role` (string) - "exchange", "learning", etc.
+- `conversation_id` (string) - Session/conversation ID
+- `source` (string) - Source of memory (e.g., "mcp_claude", "internal")
+- `type` (string) - Type of entry (e.g., "key_takeaway", "exchange")
+- `timestamp` (ISO datetime) - When created
+- `query` (string) - Original search query (for learnings)
+- `collection` (string) - Collection name
+- `uses` (int) - Number of times retrieved
+- `last_outcome` (string) - "worked" | "failed" | "partial" | "unknown"
+- `problem_signature` (string) - Query that generated this learning
+- `persist_session` (bool) - Survives session clear
+- `score` (float) - Memory quality score (0.0 to 1.0)
+- `content`/`text` (string) - Memory content
+
+**Example Queries:**
+```python
+# Find successful MCP learnings
+{"source": "mcp_claude", "last_outcome": "worked"}
+
+# Find recent failures
+{"last_outcome": "failed"}
+
+# Find specific conversation
+{"conversation_id": "session_12345"}
+
+# Find all learnings (vs exchanges)
+{"type": "key_takeaway"}
+```
+
+#### ChromaDB Where Filter Syntax
+Roampal uses ChromaDB's `where` parameter for metadata filtering:
+
+```python
+# Exact match
+{"title": "architecture"}
+
+# Multiple conditions (AND logic)
+{"title": "architecture", "has_code": True}
+
+# Comparison operators
+{"uses": {"$gt": 5}}        # Greater than
+{"uses": {"$gte": 5}}       # Greater than or equal
+{"uses": {"$lt": 10}}       # Less than
+{"uses": {"$lte": 10}}      # Less than or equal
+{"uses": {"$ne": 0}}        # Not equal
+
+# In/not in
+{"collection": {"$in": ["working", "history"]}}
+{"collection": {"$nin": ["books"]}}
+
+# Boolean values
+{"has_code": True}
+{"persist_session": False}
+
+# Timestamp filtering (ISO datetime strings)
+{"timestamp": {"$gte": "2025-01-01T00:00:00"}}  # After Jan 1, 2025
+{"timestamp": {"$lt": "2025-12-31T23:59:59"}}   # Before end of 2025
+{"upload_timestamp": {"$gte": "2025-11-01T00:00:00"}}  # Books uploaded in Nov 2025
+```
+
+**Technical Implementation:**
+- `unified_memory_system.py:414` - `metadata_filters` parameter added to `search()` method
+- `main.py:710-714` - MCP tool definition includes `metadata` parameter
+- `tool_definitions.py:46-50` - Internal LLM tool includes `metadata` parameter
+- `agent_chat.py:929` - Internal search supports `metadata_filters` parameter
+- `agent_chat.py:2070` - Tool execution extracts and passes metadata filters
+- `chromadb_adapter.py:196` - ChromaDB `where` parameter passed to query
+
+### Outcome-Based Scoring (Working/History/Patterns Only)
+
+**What It Is:**
+- System automatically adjusts `score` based on user feedback about helpfulness
+- Tracks `last_outcome` metadata: "worked", "failed", "partial", "unknown"
+- Score evolves over time as memory is used and rated
+
+**Score Adjustments:**
+- ✅ `worked`: +0.2 (capped at 1.0)
+- ❌ `failed`: -0.3 (minimum 0.1)
+- ⚠️ `partial`: +0.05 (small boost)
+- ❓ `unknown`: No change
+
+**Technical Implementation:**
+- [unified_memory_system.py:849-933](modules/memory/unified_memory_system.py#L849-L933) - `record_outcome()` method
+- Score updates logged: `Score update [working]: 0.50 → 0.70 (outcome=worked, delta=+0.20)`
+
+**Example Evolution:**
+```
+Creation: score=0.5 (neutral baseline)
+After 1st use (worked): score=0.7 (+0.2)
+After 2nd use (worked): score=0.9 (+0.2)
+After 3rd use (failed): score=0.6 (-0.3)
+```
 
 ### Learning Mechanisms
 
@@ -239,28 +459,34 @@ exchange_doc_id = await memory.store(
 
 The system uses LLM intelligence for outcome detection only. All scoring, promotion, and deletion decisions follow fixed, predictable rules based on accumulated outcomes.
 
-**LLM Service Injection:** The LLM client is injected into the memory system after initialization via `memory.set_llm_service(llm_client)` ([main.py:295-298](../main.py#L295-L298)). This allows the `OutcomeDetector` to access the LLM for analyzing conversation outcomes.
+**LLM Service Injection (Internal System Only):** The LLM client is injected into the memory system after initialization via `memory.set_llm_service(llm_client)` ([main.py:295-298](../main.py#L295-L298)). This allows the `OutcomeDetector` to access the LLM for analyzing conversation outcomes. **Note**: MCP system does not use automatic detection - external LLMs provide outcomes **explicitly** via the `outcome` parameter (optional, defaults to "unknown" if not provided).
 
 **The Clean Flow:**
 
 1. **User:** "What's an IRA?"
-2. **Assistant responds:** "An IRA is a retirement account..."
+2. **Assistant searches memory** (if relevant) → returns doc_id_X, doc_id_Y from patterns/history
+   - System caches: [doc_id_X, doc_id_Y] for outcome scoring
+3. **Assistant responds:** "An IRA is a retirement account..."
    - Stores exchange in memory: `"User: What's an IRA?\nAssistant: An IRA is..."`
    - doc_id: "working_abc123"
    - Initial score: 0.5
 
-3. **User provides feedback:** "that didn't help"
+4. **User provides feedback:** "that didn't help"
    - **BEFORE** generating response, system:
      - Reads session file to get previous assistant message
      - Gets doc_id: "working_abc123"
      - Analyzes: [previous assistant answer, current user feedback]
      - LLM detects: outcome = "failed"
-     - Updates memory fragment score: 0.5 - 0.3 = **0.2**
+     - **Updates previous exchange score**: 0.5 - 0.3 = **0.2**
+     - **Updates cached memories** (doc_id_X, doc_id_Y) with same outcome ("failed")
+     - Clears cache
 
-4. **Assistant responds:** "Let me explain better..."
+5. **Assistant responds:** "Let me explain better..."
    - Stores NEW exchange with doc_id: "working_xyz456", score: 0.5
 
-**Key Principle:** The outcome detection scores the PREVIOUS exchange that the user is reacting to, NOT the current exchange.
+**Key Principle:** The outcome detection scores BOTH:
+- The PREVIOUS exchange that the user is reacting to
+- Any retrieved memories (working/history/patterns) that were used in that response
 
 **Scoring Rules:**
 - `worked` → +0.2 to score
@@ -269,9 +495,74 @@ The system uses LLM intelligence for outcome detection only. All scoring, promot
 - `unknown` → no change
 
 **Automatic Promotion/Deletion** (threshold-based):
-- score ≥ 0.7, uses ≥ 2 → working → history
-- score ≥ 0.9, uses ≥ 3 → history → patterns
-- score < 0.2 → deleted
+- score ≥ 0.7 AND uses ≥ 2 → working → history
+- score ≥ 0.9 AND uses ≥ 3 → history → patterns
+- score < 0.2 → deleted (or score < 0.1 for items < 7 days old)
+
+### MCP (External LLM) Memory Scoring Flow
+
+**MCP Integration** uses **semantic learning storage** and **external LLM outcome assessment**:
+
+**Turn 1:**
+1. External LLM calls `search_memory("IRA accounts")` → returns doc_id_A (working), doc_id_B (history)
+   - System caches: [doc_id_A, doc_id_B] for this session
+2. External LLM responds using those memories: "An IRA is a retirement account..."
+3. External LLM calls `record_response(key_takeaway="User asked about IRA accounts. I explained they are retirement accounts.", outcome="unknown")`
+   - **Store CURRENT learning** (semantic summary) → doc_id_1, score: 0.5
+   - **Score PREVIOUS learning** → none exists (first turn)
+   - **Score cached memories** → skipped (outcome="unknown")
+   - **Write CURRENT to session file** with doc_id_1
+   - **Clear cache**
+
+**Turn 2:**
+1. External LLM calls `search_memory("more details")` → returns doc_id_C (patterns)
+   - System caches: [doc_id_C]
+2. External LLM analyzes user message "that didn't help" → determines outcome="failed"
+3. External LLM responds: "Here are more details..."
+4. External LLM calls `record_response(key_takeaway="User said explanation didn't help. I provided more detailed information.", outcome="failed")`
+   - **Store CURRENT learning** (semantic summary) → doc_id_2, initial_score: 0.2 (failed)
+   - **Score previously SEARCHED memories** → [doc_id_C] using same outcome ("failed")
+     - doc_id_C score updated (was used in failed response, gets downvoted)
+   - **Write CURRENT to session file** with doc_id_2
+   - **Clear cache**
+   - Note: doc_id_1 from Turn 1 is NOT re-scored (MCP scores CURRENT learning at creation time, not retroactively)
+
+**Key Differences from Internal System:**
+
+| Aspect | Internal System | MCP System |
+|--------|----------------|------------|
+| **Outcome Detection** | Automatic - internal LLM analyzes conversation | Manual - external LLM provides outcome via parameter |
+| **Who Judges** | Roampal's internal LLM | External LLM (Claude, Cursor, etc.) |
+| **Storage Format** | Verbatim transcripts | Semantic summaries (key_takeaway) |
+| **LLM Calls** | Extra call for outcome detection | No extra call - external LLM provides outcome |
+| **Trust Model** | System decides outcome | System trusts external LLM completely |
+| **Memory Tracking** | Session-scoped cache | Session-scoped cache (same) |
+| **What Gets Scored** | Previous exchange + retrieved memories | **CURRENT learning + retrieved memories** (both scored immediately) |
+
+**Why Different:**
+- **Semantic storage:** LLMs excel at summarization, avoids verbatim copy errors, better for search
+- **Score CURRENT not PREVIOUS:** MCP scores the learning being recorded immediately, allowing optional tool calling (LLM only calls when clear outcomes)
+- **Explicit outcome scoring:** External LLM provides outcome explicitly based on user feedback (more reliable than auto-detection for external contexts)
+- **No automatic detection:** MCP system uses explicit `outcome` parameter - defaults to "unknown" if not provided, no internal LLM verification
+
+**Implementation Details:**
+- `search_memory` tool:
+  - Returns **full content** for all results (no truncation)
+  - Caches doc_ids from working/history/patterns collections for outcome scoring
+  - **Caches search query** for KG routing updates (stores in `last_search_query_cache[session_id]`)
+- `record_response` tool:
+  - **Parameters:** `key_takeaway` (semantic summary, required) + `outcome` (explicit scoring, optional, defaults to "unknown")
+  - **Storage:** Stores semantic summary to ChromaDB with **initial score calculated from outcome** (worked=0.7, failed=0.2, partial=0.55, unknown=0.5)
+  - **Scores CURRENT learning:** Unlike internal system (scores previous), MCP scores the learning being recorded immediately
+  - **Scores retrieved memories:** Also scores all cached memories from the last search with the same outcome (upvote helpful memories, downvote bad advice)
+  - **Metadata includes cached query:** Retrieves last search query from cache and stores as `metadata["query"]`
+  - **Why query caching:** Enables KG routing to learn "query X → collection Y worked" even though MCP stores semantic summaries, not verbatim transcripts
+  - **Scoring:** Uses explicit outcome directly - no automatic detection, no internal LLM call
+  - **Trust model:** System trusts provided outcome completely (caller responsibility to assess accurately)
+- key_takeaway: 1-2 sentence summary of what was learned (semantic, not verbatim)
+- Outcome parameter: Enum ["worked", "failed", "partial", "unknown"] - **explicitly provided by external LLM or user**, defaults to "unknown"
+- Session file: Stores learning with doc_id linking to ChromaDB
+- ChromaDB: Stores semantic learning content with metadata (including cached search query)
 
 **What We DON'T Do:**
 - ❌ NO propagation to cited fragments (removed for simplicity)
@@ -283,7 +574,7 @@ The system uses LLM intelligence for outcome detection only. All scoring, promot
 - ✅ `history` - Past conversations (outcome-scored, promotable)
 - ✅ `patterns` - Proven solutions (outcome-scored, permanent)
 - ❌ `books` - Reference material (distance-ranked, never scored)
-- ❌ `memory_bank` - User facts (distance-ranked, never scored)
+- ❌ `memory_bank` - User facts/Useful information (uses importance×confidence for ranking, NOT outcome-scored)
 
 **Implementation:** Single outcome detection in streaming endpoint ([agent_chat.py:1113-1154](../app/routers/agent_chat.py#L1113-L1154))
 
@@ -306,7 +597,7 @@ def _estimate_context_limit(query: str) -> int:
     # Broad queries ("show me all...") → 20 results
     # Specific queries ("my name") → 5 results
     # Medium complexity ("how to...") → 12 results
-    # Default → 10 results
+    # Default → 5 results
 
 # All fetched results shown to LLM (no arbitrary slicing)
 for memory in relevant_memories:  # Use ALL intelligently-fetched results
@@ -390,7 +681,7 @@ The system uses **LLM-only** outcome detection that distinguishes between enthus
 - **LLM-only** - No heuristic fallbacks
 - **Degree-based** - Distinguishes enthusiastic vs lukewarm positive feedback
 - **Critical insight** - Follow-up questions ≠ success (often indicate confusion/criticism)
-- **Plain text format** - Concise bullet points, model-agnostic
+- **Structured JSON output** - Returns `{outcome, confidence, indicators, reasoning}` for automated score updates
 
 **Outcome Categories:**
 
@@ -438,12 +729,23 @@ Return JSON: {outcome, confidence, indicators, reasoning}
 - **2025-10-06**: Was too lenient - any positive word → "worked"
 - **2025-10-06**: Now requires ENTHUSIASTIC satisfaction, not just polarity
 **Additional Safety Improvements (2025-10-04):**
-1. **Book Protection Safeguard** ([unified_memory_system.py:826-829](modules/memory/unified_memory_system.py#L826-L829))
-   - Explicit check prevents scoring book chunks
-   - Books remain read-only reference material
+1. **Book & Memory Bank Safeguards** ([unified_memory_system.py:861-907](modules/memory/unified_memory_system.py#L861-L907))
+   - **KG routing updates FIRST** - Books/memory_bank searches update Routing KG patterns (learning which queries → those collections)
+   - **Then safeguard blocks outcome-based scoring** - Books and memory_bank are never outcome-scored
+   - **Why:** Routing KG learns from all collections, but books/memory_bank shouldn't be promoted/demoted based on conversation outcomes
    ```python
+   # UPDATE KG ROUTING FIRST - even for books/memory_bank
+   if problem_text and collection_name:
+       await self._update_kg_routing(problem_text, collection_name, outcome)
+
+   # SAFEGUARD: Books are reference material, not scorable memories
    if doc_id.startswith("books_"):
-       logger.warning("Cannot score book chunks - they are static reference material")
+       logger.info("[KG] Learned routing pattern for books, but skipping score update")
+       return
+
+   # SAFEGUARD: Memory bank is user identity/facts, not scorable patterns
+   if doc_id.startswith("memory_bank_"):
+       logger.info("[KG] Learned routing pattern for memory_bank, but skipping score update")
        return
    ```
 
@@ -452,9 +754,11 @@ Return JSON: {outcome, confidence, indicators, reasoning}
    - LLM sees learned success rates: "This pattern succeeded 90% of the time (8 uses)"
    - Routing hints: "Similar queries (python async) had 85% success rate"
    - Enables LLM to leverage system's learned knowledge
-   - **Success Rate Calculation** (v0.1.6): `successes / (successes + failures)` - excludes partial outcomes from denominator
+   - **Success Rate Calculation** (v0.1.6, fully implemented in v0.1.7): `successes / (successes + failures)` - excludes partial outcomes from denominator
+     - Implementation: Lines 1049-1110 (fragment stats), 1353-1362 (routing patterns), 1639 (solution patterns)
      - Partial results tracked separately as contextual data (still useful but not counted in rate)
      - Provides more accurate confidence metrics for routing decisions
+     - Example: 2 successes, 11 failures, 10 partials = 15% success rate (2/13, not 2/23)
 
 3. **Score Update Logging** ([unified_memory_system.py:883-887](modules/memory/unified_memory_system.py#L883-L887))
    - Transparent logging of all score changes
@@ -483,53 +787,239 @@ The system runs automated maintenance tasks to keep memory healthy:
 2. Clean history older than 30 days
 3. Clean dead KG references
 
+**Automatic Cleanup on Deletion** (v0.2.0 - Prevents Stale Data):
+- **Content KG cleanup** - Automatically called on ALL memory_bank deletions:
+  - `archive_memory_bank()` → `content_graph.remove_entity_mention(doc_id)` [unified_memory_system.py:2703](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L2703)
+  - `user_delete_memory()` → `content_graph.remove_entity_mention(doc_id)` [unified_memory_system.py:2833](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L2833)
+  - `delete_by_conversation()` → batch cleanup for all deleted memory_bank items [unified_memory_system.py:877-889](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L877-L889)
+- **Routing KG cleanup** - Called on bulk deletions:
+  - `delete_by_conversation()` → `_cleanup_kg_dead_references()` [unified_memory_system.py:892](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L892)
+- **Fallback protection** - Cold-start has fallback to vector search when Content KG has stale data [unified_memory_system.py:964-976](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L964-L976)
+
 **Auto-Promotion** (fires every 20 messages, non-blocking):
 - Triggered after 20 messages in working memory
 - Fire-and-forget (doesn't block chat responses)
 - Moved to background task in 2025-10-01 update
 
-#### Direct LLM Memory Control (Updated 2025-10-09)
+#### Dual Knowledge Graph System (v0.2.0)
 
-**LLM Has Direct Control - No Gatekeeping**
+**Learning-Based Routing KG** (Implemented 2025-11-05)
 
-The system gives the LLM direct, ungated control over memory search collection selection:
+The system uses a learning-based Knowledge Graph router that intelligently selects memory tiers based on past search success patterns. **Zero hardcoded keywords** - learns entirely from usage.
 
 **Key Principles:**
-- Direct control: LLM specifies exact collections via tool parameters
-- No gatekeeping: Removed broken autonomous router that was overriding LLM choices
-- Full transparency: LLM decisions are logged and respected exactly as specified
-- Clean architecture: No intermediate routing layer or emergency fallbacks
+1. **Learn from outcomes** - Tracks which tiers (books, working, history, patterns, memory_bank) successfully answer which types of queries
+2. **Static stopword filtering** - Extracts n-grams (unigrams, bigrams, trigrams) with ~40 hardcoded stopwords for concept extraction
+3. **Confidence-based routing** - Evolves from exploration (all tiers) → focused (1-2 best tiers)
+4. **Safety fallback** - Expands to all tiers if <3 results found
+5. **LLM override** - LLM can still explicitly specify collections to bypass routing
 
 **How It Works:**
-1. LLM receives search_memory tool with collections parameter
-2. LLM explicitly chooses which collections to search
-3. System executes search exactly as specified
-4. No routing overrides, no validation, no gatekeeping
-5. Collections parameter directly controls search scope
 
-**Technical Changes (2025-10-09):**
+*Phase 1: Cold Start (First 3-10 queries)*
 ```python
-# Removed components (unified_memory_system.py):
-- AutonomousRouter class (was causing async errors)
-- Emergency fallback patterns (was overriding LLM choices)
-- Router initialization and KG updates
-
-# Direct control (agent_chat.py:1625-1656):
-async def _search_memory_with_collections(
-    collections: Optional[List[str]] = None,  # LLM specifies
-    ...
-):
-    # Direct pass-through to memory.search()
-    # No overrides, no gatekeeping
+# No patterns learned yet → Search all tiers
+query = "show me books about investing"
+concepts = ["show", "me", "books", "about", "investing", "show_me", "me_books", ...]
+total_score = 0  # No patterns exist
+→ Routes to: ["working", "patterns", "history", "books", "memory_bank"]
 ```
 
-**Trust Philosophy:**
-"The LLM knows what it needs. The system executes exactly what the LLM asks for."
+*Phase 2: Learning (After 10+ queries)*
+```python
+# System has learned patterns
+query = "show me books about investing"
+concepts = ["books", "investing", "books_about", ...]
 
-**Simplified Architecture:**
-- No router layer between LLM and memory
-- Direct tool parameter → memory search
-- Clean, predictable, debuggable
+# Calculate tier scores from learned patterns:
+routing_patterns["books"] = {
+  "collections_used": {
+    "books": {"successes": 8, "failures": 2, "total": 10},
+    "working": {"successes": 1, "failures": 3, "total": 4}
+  }
+}
+
+# Scoring:
+books_tier: (8/10) * min(10/10, 1.0) = 0.8 * 1.0 = 0.8
+working_tier: (1/4) * min(4/10, 1.0) = 0.25 * 0.4 = 0.1
+total_score = 0.9
+
+→ Routes to: ["books", "working"]  # Top 2 tiers
+```
+
+*Phase 3: Confident (After 20+ queries)*
+```python
+# High confidence in routing
+total_score = 2.4  # Multiple concepts with strong patterns
+→ Routes to: ["books"]  # Single best tier
+```
+
+**N-gram Concept Extraction** ([unified_memory_system.py:1140-1193](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L1140-L1193)):
+- Unigrams: `["books", "investing", "show", "me"]`
+- Bigrams: `["show_me", "me_books", "books_about", "about_investing"]`
+- Trigrams: `["show_me_books", "me_books_about", "books_about_investing"]`
+- Technical patterns: `CamelCase`, `snake_case`, `ErrorTypes`
+- **Static stopword filtering** - Uses ~40 hardcoded English stopwords ("the", "a", "is", "are", "was", "were", etc.)
+- Additional stopwords available in [config/settings.py:408-423](../ui-implementation/src-tauri/backend/config/settings.py#L408-L423) (~120 words for keyword search fallback)
+
+**Confidence Formula** ([unified_memory_system.py:896-908](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L896-L908)):
+```python
+# Success rate calculation (v0.2.0 fix)
+total_with_feedback = successes + failures
+if total_with_feedback > 0:
+    success_rate = successes / total_with_feedback  # Actual percentage
+else:
+    success_rate = 0.5  # 50% neutral baseline (no feedback yet)
+
+confidence = min(total_uses / 10.0, 1.0)  # Grows with usage
+tier_score = success_rate * confidence
+```
+
+**Note:** "partial" outcomes are tracked but excluded from success_rate calculation. Concepts without explicit "worked"/"failed" feedback default to 50% (neutral/unknown).
+
+**Routing Thresholds** ([unified_memory_system.py:909-928](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L909-L928)):
+- `total_score < 0.5`: **Exploration** - Search all 5 tiers
+- `0.5 ≤ total_score < 2.0`: **Medium confidence** - Select top 2-3 tiers
+- `total_score ≥ 2.0`: **High confidence** - Focus on top 1-2 tiers
+
+**Fallback Safety Net** ([unified_memory_system.py:664-690](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L664-L690)):
+```python
+if len(results) < 3 and not_searching_all_tiers:
+    # Expand to remaining tiers
+    # Prevents over-aggressive routing from missing results
+```
+
+**Outcome Learning** ([unified_memory_system.py:1207-1321](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L1207-L1321)):
+- Tracks `successes`, `failures`, and `total` per tier per concept
+- Updates on `record_outcome(worked/failed/partial)`
+- Partial outcomes tracked but don't affect success rate
+- Builds concept relationships for knowledge graph
+
+---
+
+## 🔮 FUTURE FEATURE: Adaptive Stopword Learning
+
+**Status:** Planned enhancement - not currently implemented
+
+The system currently uses static stopword lists. A future enhancement would add dynamic learning to automatically classify words as noise vs. semantic concepts based on usage patterns.
+
+**Proposed Implementation:**
+
+**4-Phase Learning Process:**
+
+*Phase 1: Bootstrap (Queries 1-10)*
+- Start with minimal hardcoded stopwords (core 29: "a", "an", "the", "is", "are", etc.)
+- Track ALL words in `knowledge_graph["word_statistics"]`
+- Record: frequency, tier distribution, outcome correlation, timestamps
+
+*Phase 2: Statistical Collection (Queries 10-50)*
+```python
+# Track full statistics per word
+"investing": {
+    "total_queries": 45,
+    "tier_distribution": {"books": 40, "working": 5, ...},
+    "outcome_correlation": {"successes": 35, "failures": 10},
+    "discrimination_score": 0.85,  # Shannon entropy-based
+    "is_stopword": False
+}
+```
+
+*Phase 3: Automatic Classification (Every 50 queries)*
+- Calculate Shannon entropy discrimination scores across tiers
+- Auto-classify stopwords: high frequency (>10%) + low discrimination (<0.3) + neutral outcomes (45-55%)
+- Prune rare words: frequency <3 AND not seen in 100 queries
+
+*Phase 4: Dynamic Re-evaluation (Continuous)*
+- Words can transition between useful ↔ stopword based on evolving patterns
+- Domain-specific adaptation (e.g., "kubernetes" = meaningful in tech context, stopword elsewhere)
+
+**Benefits:**
+- Auto-adapts to user's vocabulary and domain
+- Learns project-specific jargon and acronyms
+- Reduces KG bloat without manual tuning
+- Bilingual/multilingual support potential
+
+**Storage Impact:**
+- ~50-80 bytes per word × 5,000 words = ~300-400KB
+- Saves in existing `knowledge_graph.json`
+
+**Implementation Note:** Would not affect `memory_bank` (user bookmarks are protected from auto-modification)
+
+---
+
+**Content Knowledge Graph** (✅ FULLY INTEGRATED - v0.2.0)
+
+**⚠️ CRITICAL FEATURE - DO NOT DISABLE OR REMOVE ⚠️**
+This provides entity relationship mapping for the user's personal knowledge graph and enables green/purple node visualization in the KG UI.
+
+Complements the routing KG with a **content-based entity graph** that indexes relationships from memory_bank content.
+
+**Implementation Status:**
+- ✅ Core class: [content_graph.py](../ui-implementation/src-tauri/backend/modules/memory/content_graph.py)
+- ✅ Integration: [unified_memory_system.py:20,149-154,160-172](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py)
+- ✅ Entity extraction: Automatic on memory_bank store/update/archive [lines 2456-2466,2528-2537,2569-2575](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py)
+- ✅ Dual KG merge: [get_kg_entities():2645-2725](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L2645-L2725), [get_kg_relationships():2727-2776](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L2727-L2776)
+- ✅ Persistence: Saved atomically with routing KG [_save_kg_sync():212-238](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L212-L238)
+- ✅ Visualization: Green (content-only) and Purple (both graphs) nodes in KG UI
+
+**Dual Graph Architecture:**
+- **Routing KG**: Learns which collections to search based on query patterns
+  - Data source: User search queries + outcome feedback
+  - Purpose: Optimize search routing (blue nodes)
+  - Storage: `knowledge_graph.json`
+  - Implementation: [unified_memory_system.py:146-147](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L146-L147)
+- **Content KG**: Builds user's personal knowledge graph from stored content
+  - Data source: memory_bank text + entity extraction
+  - Purpose: Map entity relationships - who you are, what you do (green nodes)
+  - Storage: `content_graph.json`
+  - Implementation: [content_graph.py](../ui-implementation/src-tauri/backend/modules/memory/content_graph.py), [unified_memory_system.py:149-154](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L149-L154)
+
+**Key Difference:**
+- **Routing KG**: "benjamin_graham" query → route to books collection (routing decision)
+- **Content KG**: "Logan works at EverBright" → creates logan ↔ everbright relationship (knowledge representation)
+
+**Features:**
+- Entity extraction from memory_bank content
+- Co-occurrence based relationship strength
+- Document tracking per entity
+- BFS path finding between entities
+- Automatic relationship updates on new content
+- Metadata tracking (first_seen, last_seen, mentions)
+- **Automatic cleanup on memory deletion** (v0.2.0 - prevents stale data)
+
+**Benefits:**
+- Enables real entity connections in MCP integration
+- Supports `get_kg_path("logan", "everbright")` to find relationships
+- Creates "turbo user profile graph" - visual representation of user's knowledge
+- Foundation for NER, fact extraction, semantic network features
+
+**Full Implementation Details:** See [docs/KG_UPGRADE.md](KG_UPGRADE.md) Appendix C
+
+**UI Visualization:**
+- 🔵 Blue nodes = routing patterns (query-based, what you search for)
+- 🟢 Green nodes = memory entities (content-based, who you are)
+- 🟣 Purple nodes = both (intersection of queries and content)
+
+**MCP Integration** ([main.py:753-1048](../ui-implementation/src-tauri/backend/main.py#L753-L1048)):
+- Fixed: `collections=["all"]` bug - now passes `None` to trigger hybrid KG routing
+- **Hybrid Routing** (v0.2.0): LLM can override OR use KG's learned patterns
+- External LLMs (Claude Desktop) benefit from automatic intelligent routing
+- **External LLM Outcome Judgment** (v0.2.0 - [main.py:960-1048](../ui-implementation/src-tauri/backend/main.py#L960-L1048)):
+  - `record_response` tool requires TWO parameters: `key_takeaway` (required) + `outcome` (required)
+  - **Key Principle**: External LLM judges its own previous response based on user feedback
+  - When user provides feedback, external LLM passes `outcome: "worked"/"failed"/"partial"/"unknown"`
+  - Server scores the **PREVIOUS** learning (not the current one being recorded)
+  - Example: `record_response({key_takeaway: "User thanked me for explaining IRAs. I provided retirement account details.", outcome: "worked"})`
+    - Scores the previous learning (from last turn)
+    - Stores current learning summary to working memory
+- **Why External LLM Judges**: Each AI (internal or external) evaluates its own conversation quality for consistency
+- **Outcome Flow** (v0.2.0 - [main.py:968-1009](../ui-implementation/src-tauri/backend/main.py#L968-L1009)):
+  1. Receive `key_takeaway` and `outcome` from external LLM
+  2. If `outcome` is "worked"/"failed"/"partial", find previous learning's doc_id
+  3. Score that previous learning via `record_outcome(prev_doc_id, outcome)`
+  4. Store current `key_takeaway` to working memory with cached search query in metadata
+  5. Update KG routing patterns with success/failure
+  6. Check promotion thresholds (working → history → patterns)
 
 #### Score-Based Promotion
 - Items with high success rates get promoted
@@ -585,7 +1075,7 @@ Handles all chat interactions and orchestrates memory operations.
 
 **WebSocket Streaming (Updated 2025-10-10):**
 - Token-by-token streaming via WebSocket connection (migrated from SSE for chat)
-- **Note**: SSE (Server-Sent Events) still used for specific progress tracking (model downloads, book processing) where one-way updates are appropriate
+- **Note**: SSE (Server-Sent Events) still used for model download progress tracking where one-way updates are appropriate
 - WebSocket events:
   - `type: "stream_start"` - Streaming begins (no message created yet)
   - `type: "token"` - Text chunks as generated (creates assistant message on first token)
@@ -620,8 +1110,7 @@ Roampal uses **adaptive streaming architecture** that selects the appropriate te
 
 3. **SSE (Server-Sent Events)** - One-way progress streaming
    - **Use cases**:
-     - Model downloads (dev mode only)
-     - Book processing progress
+     - Model downloads (Ollama pull progress)
    - **Media type**: `text/event-stream`
    - **Direction**: Unidirectional (server → client only)
    - **Limitation**: Doesn't work in Tauri production due to webview restrictions
@@ -678,7 +1167,27 @@ Two critical fixes implemented to improve UX:
    - **Fix**: Extract `toolExecutions` from `msg.metadata.toolResults` when loading messages
    - **Result**: Tool indicators correctly show ✓ checkmark with result count after page refresh
 
-### 3. Book Processor (`modules/memory/smart_book_processor.py`)
+### 3. Session Cleanup Manager (`modules/memory/session_cleanup.py`)
+
+Manages session file lifecycle and prevents disk bloat.
+
+**Implementation:** [main.py:156-161](../ui-implementation/src-tauri/backend/main.py#L156-L161)
+
+**Features:**
+- Automatic cleanup of old session files (configurable max sessions)
+- FIFO (First In, First Out) deletion strategy
+- Prevents unlimited session file growth
+- Configurable retention policy
+- Async initialization and cleanup
+
+**Configuration:**
+- `max_sessions`: Maximum number of sessions to retain (default varies by environment)
+- Session directory: `{DATA_PATH}/sessions/`
+- Each session stored as JSON with conversation history and metadata
+
+**Purpose:** Ensures session storage doesn't grow unbounded while preserving recent conversation history.
+
+### 4. Book Processor (`modules/memory/smart_book_processor.py`)
 
 Processes uploaded documents for the knowledge base.
 
@@ -688,7 +1197,7 @@ Processes uploaded documents for the knowledge base.
   - Unicode 6.1 full-text search via SQLite FTS5
   - Intelligent boundary detection (respects paragraphs, sentences, structure)
 - Batch embedding generation via EmbeddingService (10 chunks in parallel)
-  - Uses nomic-embed-text model (100+ languages supported)
+  - Uses bundled paraphrase-multilingual-mpnet-base-v2 (50+ languages, 768 dimensions)
 - Dual storage: SQLite (full-text search) and ChromaDB (semantic search)
   - Content stored in both metadata and documents for retrieval
 - **Context expansion** via `get_surrounding_chunks(chunk_id, radius=2)`
@@ -732,14 +1241,16 @@ User Message → Backend searches all collections → Top 5 results → Injected
 - **Second Stream**: Conversation history + tool results sent back to LLM, final response generated and streamed
 - **No Pre-Search**: Backend does NOT search memory before LLM request (Phase 3)
 
-### search_memory Tool Definition
+### search_memory Tool Definition (Internal System - v0.2.0)
+
+**Note**: This is the internal system's tool definition. For MCP tool definition, see [Available MCP Tools](#available-mcp-tools-5) section.
 
 ```python
 {
     "type": "function",
     "function": {
         "name": "search_memory",
-        "description": "Search the 5-tier memory system (books, working, history, patterns, memory_bank) for relevant information",
+        "description": "Search the 5-tier memory system with semantic search and optional metadata filtering",
         "parameters": {
             "type": "object",
             "properties": {
@@ -759,6 +1270,11 @@ User Message → Backend searches all collections → Top 5 results → Injected
                     "default": 5,
                     "minimum": 1,
                     "maximum": 20
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Optional metadata filters for exact field matching. Examples: {\"title\": \"architecture\"} for books by title, {\"author\": \"Smith\"} for books by author, {\"has_code\": true} for code chunks, {\"source\": \"mcp_claude\"} for MCP learnings, {\"last_outcome\": \"worked\"} for successful learnings",
+                    "additionalProperties": true
                 }
             },
             "required": ["query"]
@@ -769,6 +1285,7 @@ User Message → Backend searches all collections → Top 5 results → Injected
 
 ### Benefits
 - **Selective Search**: LLM can search specific collections (e.g., "check memory_bank for user preferences")
+- **Metadata Filtering** (v0.2.0): LLM can filter by exact metadata fields (title, author, outcome, source, etc.)
 - **Iterative Refinement**: Can refine searches based on initial results
 - **Token Efficiency**: Only retrieves relevant memories (30-50% reduction in context size)
 - **Better Control**: LLM decides when memory search is needed vs when current context is sufficient
@@ -788,6 +1305,25 @@ search_memory(query="React documentation hooks", collections=["books"], limit=10
 
 # Comprehensive search
 search_memory(query="authentication best practices", collections=["all"], limit=5)
+
+# Metadata filtering examples (v0.2.0)
+# Find specific book by title
+search_memory(query="chromadb vector database", collections=["books"], metadata={"title": "architecture"}, limit=10)
+
+# Find code examples from books
+search_memory(query="python async examples", collections=["books"], metadata={"has_code": True}, limit=10)
+
+# Find successful MCP learnings
+search_memory(query="user preferences", collections=["working", "history"], metadata={"source": "mcp_claude", "last_outcome": "worked"}, limit=5)
+
+# Find specific author's work
+search_memory(query="design patterns", collections=["books"], metadata={"author": "Gang of Four"}, limit=5)
+
+# Find recent memories (last 7 days)
+search_memory(query="recent discussions", collections=["working", "history"], metadata={"timestamp": {"$gte": "2025-11-01T00:00:00"}}, limit=10)
+
+# Find books uploaded this month
+search_memory(query="new documentation", collections=["books"], metadata={"upload_timestamp": {"$gte": "2025-11-01T00:00:00"}}, limit=10)
 ```
 
 ### Result Format (Enhanced with Metadata - 2025-10-06)
@@ -858,6 +1394,12 @@ The prompting system builds structured, secure prompts with personality, memory 
 
 **Single Source of Truth**: All prompts are built by `_build_complete_prompt()` method ([agent_chat.py:1181-1293](../app/routers/agent_chat.py))
 
+**Provider Consistency** (Updated 2025-11-06):
+- Both Ollama and LM Studio use identical system prompts (~130 lines)
+- Previous "condensed prompt" for LM Studio removed (lines 1038-1040 disabled)
+- Ensures consistent behavior across all providers
+- Generic placeholder examples prevent small LLMs from assuming concrete facts (e.g., `[name]` instead of "Alex")
+
 **Prompt Components (in order):**
 
 **1. Current Date & Time** ([agent_chat.py:1195-1199](../app/routers/agent_chat.py))
@@ -866,7 +1408,7 @@ The prompting system builds structured, secure prompts with personality, memory 
 - Explicit instruction: "When asked about the date or time, use this information directly - do not search memory or claim lack of access"
 - Prevents models from hallucinating lack of access
 
-**2. Tool Usage Instructions** ([agent_chat.py:1201-1272](../app/routers/agent_chat.py))
+**2. Tool Usage Instructions** ([agent_chat.py:1031-1048](../app/routers/agent_chat.py))
 - Comprehensive `search_memory` tool documentation
 - **WHEN TO USE search_memory:**
   - User asks about past conversations or personal information
@@ -874,6 +1416,18 @@ The prompting system builds structured, secure prompts with personality, memory 
   - User asks about preferences, context, or uploaded documents
   - Query could benefit from learned patterns or proven solutions
   - Ambiguous questions that might have relevant history
+- **COLD START BEHAVIOR (v0.2.0 - Content KG Enhanced):**
+  - **What**: Automatic user profile injection on message 1 of new conversations
+  - **Why**: Enables personalized greetings and context-aware first responses
+  - **How**: Uses Content KG to find most important entities, retrieves their memory_bank documents
+  - **When**: **ALWAYS** on message 1 (internal) or first tool call (external) - no conditions
+  - **Result**: Conversations feel continuous even after long breaks, 100% consistent behavior
+  - **Implementation**: See detailed documentation in [MCP Integration section #7](#available-mcp-tools-5)
+  - **Internal LLM**: System message injection before first user message ([agent_chat.py:576-603](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py#L576-L603))
+  - **External LLM (MCP)**: Prepended to first tool response ([main.py:956-1008](../ui-implementation/src-tauri/backend/main.py#L956-L1008))
+  - **Shared Logic**: `memory.get_cold_start_context()` ([unified_memory_system.py:875-979](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L875-L979))
+  - **Protection**: Layer 4 injection filtering built-in
+  - **Simplicity**: No tracking logic - just always injects on first message/tool call
 - **WHEN NOT TO USE search_memory:**
   - General knowledge questions (use training data)
   - Current conversation continuation (context already present)
@@ -887,7 +1441,7 @@ The prompting system builds structured, secure prompts with personality, memory 
 - **Response Format**: Optional `<think>` tags for reasoning
 - **Formatting**: Markdown support (bold, italic, code, headings, etc.)
 - **Outcome Detection**: System learns from user reactions (worked/failed/partial/unknown)
-- **Memory Notebook**: MEMORY_BANK tags for storing user facts (REQUIRED protocol with enforcement)
+- **Memory Notebook**: MEMORY_BANK tags for storing user facts/useful information (REQUIRED protocol with enforcement)
 
 **3. Personality (User-Customizable via UI)** ([agent_chat.py:1274-1279](../app/routers/agent_chat.py))
 - Loaded from `backend/templates/personality/active.txt`
@@ -912,13 +1466,34 @@ The prompting system builds structured, secure prompts with personality, memory 
 
 ### Security Features
 
-**Prompt Injection Protection** ([agent_chat.py:2271-2277](../app/routers/agent_chat.py))
+**Prompt Injection Protection** (Multi-layer defense - v0.2.0)
 
-**Memory Content** (lines 2271-2277):
-- Sanitizes memory results before injection
-- Replaces `[MEMORY_BANK:` → `[MEMORY_CONTENT:`
-- Replaces `[Current Question]` → `[MEMORY_TEXT]`
-- Prevents malicious memory from injecting fake context
+**Layer 3: Output Validation** ([agent_chat.py:83-131,905-911](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py))
+- `ResponseValidator` class detects hijacked LLM responses
+- Checks for suspicious patterns:
+  - Short responses with malicious keywords ("HACK", "PWNED")
+  - Role change admissions ("I am now a pirate")
+  - System tag injection attempts (`<system>`)
+  - Hijack payloads in final sentence
+- Replaces compromised responses with safe fallback
+- Logs all injection attempts with `[INJECTION DETECTED]`
+- **Result**: Prevents stored injection attacks from reaching users
+
+**Layer 4: Cold-Start Filtering** ([unified_memory_system.py:954-979](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L954-L979))
+- Filters memory_bank results before auto-injection (Content KG or vector search)
+- Implemented in `_format_cold_start_results()` helper method
+- Blocks content containing:
+  - "ignore all previous instructions"
+  - "ignore instructions"
+  - "hacked", "pwned"
+  - Other instruction override patterns
+- Limits to top 10 facts after filtering, smart-truncated at sentence/word boundaries (max 250 chars)
+- Logs filtered attempts with `[COLD-START] All results filtered by Layer 4 injection protection`
+- **Result**: Cold-start auto-trigger won't inject malicious data (both internal + external LLMs)
+
+**Legacy Memory Content Sanitization** (Deprecated):
+- Old approach replaced `[MEMORY_BANK:` → `[MEMORY_CONTENT:`
+- No longer needed with Layer 3+4 protection
 
 **Prompt Length Validation** ([agent_chat.py:2368-2448](../app/routers/agent_chat.py))
 - Estimates tokens: `1 token ≈ 4 characters`
@@ -929,7 +1504,7 @@ The prompting system builds structured, secure prompts with personality, memory 
     - Llama 3.1 8B: 65,536 tokens (50% of 131k context)
     - GPT-OSS 20B: 64,000 tokens (50% of 128k context)
   - Respects user-configured overrides via UI
-  - Fallback: 4,096 tokens (50% of 8k default for unknown models)
+  - Fallback: 8,192 tokens (safe default for unknown models)
 - **Truncation strategy** if exceeded:
   1. Remove conversation history first
   2. Keep personality + core instructions + memory context
@@ -1371,6 +1946,22 @@ DELETE /api/model/context/{model_name} # Reset to default
 
 ## API Endpoints
 
+### Security & Rate Limiting
+
+**Rate Limiting** ([main.py:532-564](../ui-implementation/src-tauri/backend/main.py#L532-L564))
+- **Limit**: 100 requests per minute per session
+- **Scope**: Session-based (tracked by `X-Session-Id` header or client IP)
+- **Exemptions**: Health checks, metrics, WebSocket endpoints
+- **Response**: HTTP 429 (Too Many Requests) when exceeded
+- **Implementation**: In-memory sliding window using `defaultdict(deque)`
+- **Purpose**: Prevent abuse and ensure fair resource allocation
+
+**CORS Configuration** ([main.py:456-467](../ui-implementation/src-tauri/backend/main.py#L456-L467))
+- **Origins**: All origins allowed (`*`) for Tauri WebSocket compatibility
+- **Methods**: GET, POST, PUT, DELETE, OPTIONS, PATCH
+- **Credentials**: Enabled
+- **Headers**: All headers allowed
+
 ### Core Chat Operations
 ```
 POST /api/agent/chat              # Main chat endpoint
@@ -1389,6 +1980,27 @@ GET  /api/memory/stats            # Memory system statistics
 GET  /api/memory/search           # Search memories
 POST /api/memory/feedback         # Record user feedback on memory usefulness
 
+# Knowledge Graph Visualization (NEW - v0.2.0)
+GET  /api/memory/knowledge-graph  # Get graph data (nodes/edges)
+  Response: {
+    nodes: [{id, label, type, best_collection, success_rate, usage_count}],
+    edges: [{source, target, weight, success_rate}]
+  }
+
+GET  /api/memory/knowledge-graph/concept/{concept_id}/definition
+  Response: {
+    concept: string,
+    definition: string,
+    related_concepts: string[],
+    collections_breakdown: {
+      [collection]: {successes, failures, total}
+    },
+    outcome_breakdown: {worked, failed, partial},
+    total_searches: number,
+    best_collection: string,
+    related_concepts_with_stats: [{concept, co_occurrence, success_rate}]
+  }
+
 # Memory Bank Operations (NEW - For MCP Bridge Integration)
 GET  /api/memory-bank/list        # List memories (with pagination)
 GET  /api/memory-bank/search      # Semantic search in memory bank
@@ -1401,11 +2013,321 @@ DELETE /api/memory-bank/delete/{doc_id} # User hard delete memory
 GET  /api/memory-bank/archived    # List archived memories
 ```
 
-**MCP Bridge Integration** (Planned)
-- Create/Update/Archive endpoints enable MCP protocol integration
-- Allows external tools (Claude Desktop, Cursor) to access Roampal's memory
-- See: [roampal-bridge repository](https://github.com/roampal-ai/roampal-bridge)
-- Tool definitions in [tool_definitions.py](../utils/tool_definitions.py)
+### MCP (Model Context Protocol) Server
+
+**Status**: ✅ Production (v0.2.0 - Full Learning Support)
+
+Roampal functions as a native MCP server, enabling external LLMs (Claude Desktop, Cursor, etc.) to access Roampal's memory system with **full learning capabilities** - external LLM outcome judgment, score-based promotion, and cross-client knowledge sharing.
+
+#### Architecture (v0.2.0 - External LLM Outcome Judgment)
+
+```
+┌──────────────────────────────────────────────────────┐
+│  MCP Client (Claude Desktop, Cursor, etc.)          │
+│  Calls record_response(key_takeaway, outcome)       │
+│  External LLM provides BOTH parameters              │
+└────────────────────┬─────────────────────────────────┘
+                     │ stdio (JSON-RPC)
+┌────────────────────▼─────────────────────────────────┐
+│  Roampal MCP Server (main.py --mcp)                  │
+│  ├─ Receives key_takeaway (semantic summary)        │
+│  ├─ Receives outcome from external LLM              │
+│  ├─ Stores current learning to working memory       │
+│  ├─ Scores PREVIOUS learning using external outcome │
+│  └─ NO internal LLM call for outcome detection      │
+└────────────────────┬─────────────────────────────────┘
+                     │
+┌────────────────────▼─────────────────────────────────┐
+│  UnifiedMemorySystem (SHARED)                        │
+│  ├─ Same memory used by internal + external LLMs    │
+│  ├─ Different outcome sources:                      │
+│  │   • Internal: detect_conversation_outcome()      │
+│  │   • MCP: External LLM provides outcome           │
+│  ├─ Same score updates (record_outcome)             │
+│  └─ Same automatic promotion (30-min background)     │
+└──────────────────────────────────────────────────────┘
+```
+
+#### Key Features
+
+1. **External LLM Outcome Judgment** (v0.2.0)
+   - External LLM analyzes user feedback and provides outcome directly
+   - NO automatic detection - system trusts external LLM's judgment completely
+   - User's current message serves as feedback for previous response
+   - **Different from internal system**: Internal uses automatic LLM-based detection ([agent_chat.py:743-822](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py#L743-L822)), MCP relies on external LLM's explicit `outcome` parameter
+
+2. **Two-Parameter Design** (v0.2.0)
+   - `record_response(key_takeaway, outcome)` requires TWO parameters
+   - `key_takeaway`: Semantic summary of current exchange (1-2 sentences)
+   - `outcome`: External LLM's judgment of PREVIOUS response ("worked", "failed", "partial", "unknown")
+   - External LLM must call tool after EVERY response with both parameters
+
+3. **Unified Learning**
+   - All exchanges stored in same ChromaDB collections
+   - Cross-client knowledge sharing (Claude → Cursor → Roampal)
+   - Memories visible in Roampal UI with source metadata
+   - Promotion works identically for all LLMs
+
+4. **Zero Dependencies**
+   - No Ollama or LM Studio required for MCP functionality
+   - Bundled `paraphrase-multilingual-mpnet-base-v2` model (1.1GB)
+   - 50+ language support
+
+5. **Cross-Platform Support**
+   - Auto-detects platform (Windows .exe, macOS .app, Linux binary)
+   - Stdio communication (JSON-RPC protocol)
+
+6. **Auto-Discovery** ([mcp.py:109-210](../ui-implementation/src-tauri/backend/app/routers/mcp.py#L109-L210))
+   - Scans home directory root and common config directories for MCP client configs
+   - **Windows**: `%USERPROFILE%`, `%APPDATA%`, `%LOCALAPPDATA%`, `.config`
+   - **macOS**: `~`, `~/Library/Application Support`, `~/.config`
+   - **Linux**: `~`, `~/.config`, `~/.local/share`
+   - Discovers MCP clients via pattern matching: `*mcp*.json`, `config.json`, `*_config.json`
+   - Pure discovery approach - no hardcoded tool names (finds `.cursor`, `.vscode`, `.claude`, etc.)
+   - Only shows tools with valid `mcpServers` configuration key
+   - Detects connection status by checking if `roampal` server is configured
+   - **Manual Path Support**: Users can add custom MCP client paths via "Add Custom MCP Client" button
+   - Custom paths are saved to `mcp_custom_paths.json` and persist across restarts
+   - Scanner automatically includes both auto-discovered and manually-added paths
+   - Security: Manual paths must be within user's home directory
+   - **Claude Desktop Fix** ([mcp.py:399-404, 282-288](../ui-implementation/src-tauri/backend/app/routers/mcp.py)):
+     - Claude Desktop uses TWO config files: `config.json` (UI settings) and `claude_desktop_config.json` (MCP servers)
+     - Connect endpoint auto-redirects: If connecting to `Claude/config.json`, writes to `claude_desktop_config.json` instead
+     - Scanner skips `config.json` if `claude_desktop_config.json` exists (prevents wrong file detection)
+     - Fix is Claude-specific (checks `parent.name == "Claude"`), doesn't affect other MCP tools
+
+7. **Cold-Start Auto-Trigger** (v0.2.0 - Content KG Enhanced)
+
+   **Problem**: LLMs don't consistently search memory_bank on first message, missing user context
+
+   **Solution**: Automatic user profile injection from Content KG on message 1
+
+   **Implementation** (Both Internal + External LLMs):
+
+   - **Shared Helper** ([unified_memory_system.py:875-979](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L875-L979))
+     - `get_cold_start_context(limit=5)` - retrieves user profile from Content KG
+     - Gets top 10 entities by mention count (most important concepts)
+     - Retrieves memory_bank documents containing those entities
+     - Layer 4 injection protection (filters suspicious content)
+     - Fallback to vector search if Content KG empty
+     - Returns formatted string: "📋 **User Profile** (auto-loaded):\n• [top facts]"
+
+   - **Internal LLM** ([agent_chat.py:576-603](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py#L576-L603))
+     - Tracks user messages per conversation (not tool calls)
+     - **ALWAYS** injects on message 1 (no conditions, no tracking)
+     - Injects as system message BEFORE user message in conversation history
+     - LLM can still search memory_bank if it wants (won't conflict)
+     - Guarantees 100% cold-start compliance for internal chat
+
+   - **External LLM (MCP)** ([main.py:92-94,956-1008](../ui-implementation/src-tauri/backend/main.py#L92-L94))
+     - Tracks message count per MCP session
+     - **ALWAYS** injects on first tool call (no conditions, no tracking)
+     - Works with ANY first tool (search_memory, create_memory, etc.)
+     - Prepends user profile to tool response with visual separators
+     - Format: `═══ USER PROFILE (auto-loaded) ═══\n[profile]\n\n═══ Search Results ═══\n[results]`
+     - LLM can still search memory_bank if it wants (both context sources combine)
+     - Simplified MCP prompt - explains auto-inject instead of demanding search
+
+   **Why Content KG?**
+   - Vector search might miss important facts if query doesn't match keywords
+   - Content KG knows which entities are most frequently mentioned
+   - Provides truly important user context based on actual data patterns
+   - Example: If "roampal" mentioned 10x, "logan" 8x → those facts are prioritized
+
+   **Result**: Both internal and external LLMs receive personalized user profile automatically on first message
+
+#### Available MCP Tools (5)
+
+**1. record_response** (v0.2.0 - External LLM Judgment)
+```json
+{
+  "name": "record_response",
+  "description": "Store semantic learning summary with initial score based on explicit outcome",
+  "parameters": {
+    "key_takeaway": "string (required) - 1-2 sentence summary of current exchange",
+    "outcome": "enum (optional, default: 'unknown') - worked|failed|partial|unknown - explicit outcome for THIS response"
+  },
+  "behavior": [
+    "1. Receives key_takeaway (semantic summary) and outcome from external LLM",
+    "2. Stores CURRENT key_takeaway to working memory with initial score based on outcome (worked=0.7, failed=0.2, partial=0.55, unknown=0.5)",
+    "3. Scores previously SEARCHED memories (from last search_memory call) with the same outcome",
+    "4. Updates KG routing patterns with query → collection → outcome",
+    "5. Clears search cache",
+    "6. Records to session file for tracking"
+  ]
+}
+```
+
+**2. search_memory** (v0.2.0 - Metadata Filtering Support)
+```json
+{
+  "name": "search_memory",
+  "description": "Search 5-tier memory system with semantic search and optional metadata filtering",
+  "parameters": {
+    "query": "string (required) - Semantic search query for content matching",
+    "collections": ["books", "working", "history", "patterns", "memory_bank", "all"],
+    "limit": "integer (1-20, default: 5)",
+    "metadata": "object (optional) - Exact metadata filters (ChromaDB where syntax)"
+  },
+  "metadata_examples": {
+    "books": {
+      "title": "Search by exact book title",
+      "author": "Search by author name",
+      "has_code": "Boolean - chunks containing code blocks",
+      "source_context": "Search by section/chapter name",
+      "book_id": "Search specific book by ID"
+    },
+    "learnings": {
+      "source": "Filter by source (e.g., 'mcp_claude')",
+      "last_outcome": "Filter by outcome (worked|failed|partial|unknown)",
+      "type": "Filter by type (e.g., 'key_takeaway')",
+      "conversation_id": "Filter by conversation/session ID"
+    },
+    "combined": "Multiple filters use AND logic: {\"title\": \"architecture\", \"has_code\": true}"
+  },
+  "returns": "Up to 20 results with full content (no truncation since v0.1.6)"
+}
+```
+
+**3. add_to_memory_bank**
+```json
+{
+  "name": "add_to_memory_bank",
+  "description": "Store permanent user facts/useful information",
+  "parameters": {
+    "content": "string (required)",
+    "tags": "array of strings - Categories (e.g., identity, preference, goal, context)",
+    "importance": "number (0.0-1.0, default: 0.7) - How critical is this memory",
+    "confidence": "number (0.0-1.0, default: 0.7) - How certain about this fact"
+  }
+}
+```
+
+**4. update_memory**
+```json
+{
+  "name": "update_memory",
+  "description": "Update existing memory_bank entries",
+  "parameters": {
+    "old_content": "string (required - text to find)",
+    "new_content": "string (required - replacement text)"
+  }
+}
+```
+
+**5. archive_memory**
+```json
+{
+  "name": "archive_memory",
+  "description": "Soft delete memory_bank entries",
+  "parameters": {
+    "content": "string (required - finds by semantic match)"
+  }
+}
+```
+
+**Removed Tools** (v0.2.0):
+- `list_memory_bank` - Redundant (use `search_memory` with `collections=["memory_bank"]` instead)
+- `query_kg_entities`, `query_kg_relationships`, `get_kg_path` - Users explore KG via Roampal UI
+
+n#### User Interface Integration
+
+**Integrations Panel** ([IntegrationsPanel.tsx](../ui-implementation/src/components/IntegrationsPanel.tsx)):
+- **Auto-Scan**: Automatically discovers MCP clients on modal open
+- **Tool Cards**: Shows each detected tool with connection status (Connected/Available/Not Installed)
+- **Connect/Disconnect**: One-click connection management
+- **Manual Path Addition**: "Add Custom MCP Client" button for non-standard locations
+- **Hide/Unhide Tools** (v0.2.0+):
+  - Hide button on each tool card (eye icon)
+  - Hidden tools moved to collapsible "Discover More Tools" section
+  - "Show in List" button to unhide tools
+  - localStorage persistence across app restarts
+  - Stored in `hiddenMCPTools` key as JSON array of tool names
+- **Toast Notifications**: Real-time feedback for all actions
+- **Status Indicators**: Color-coded dots (green=connected, yellow=available, gray=not installed)
+- **Info Box**: Explains how MCP works and restart requirements
+#### Embedding Model
+
+**Embedding Model** (v0.2.0 - Bundled):
+- **Model**: `paraphrase-multilingual-mpnet-base-v2`
+- **License**: Apache 2.0 (commercial-safe, bundled with distribution)
+- **Dimensions**: 768 (native, no padding)
+- **Quality**: Higher accuracy than previous model (all-MiniLM-L6-v2)
+- **Languages**: 50+ (see THIRD_PARTY_LICENSES.md for full list)
+- **Deployment**: Bundled in `binaries/models/` - no Ollama or internet required
+- **Usage**: All users get consistent embeddings (chat + MCP server)
+- **Location**: `binaries/models/paraphrase-multilingual-mpnet-base-v2/`
+- **Loading**: [embedding_service.py:35-56](../ui-implementation/src-tauri/backend/modules/embedding/embedding_service.py#L35-L56)
+
+**Why Bundled Embedding Model?**
+1. **MCP server usage**: Works without Ollama installation
+2. **Consistency**: All users get identical embeddings regardless of setup
+3. **Offline-first**: No internet connection required for embeddings
+4. **Commercial**: Apache 2.0 license allows bundling and redistribution
+5. **Quality**: Better than previous all-MiniLM-L6-v2 (384 dim)
+- Previous model (all-MiniLM-L6-v2) was trained on MS MARCO dataset (non-commercial license)
+- Bundling creates redistribution liability if model has commercial restrictions
+- New model trained on commercial-friendly datasets (no MS MARCO)
+- Enables offline MCP usage (no internet downloads)
+
+#### Configuration Example (Claude Desktop)
+
+```json
+{
+  "mcpServers": {
+    "roampal": {
+      "command": "C:\\Program Files\\Roampal\\Roampal.exe",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+**Auto-Detection**: See [mcp.py](../ui-implementation/src-tauri/backend/app/routers/mcp.py) for platform-specific paths
+
+#### Implementation Details
+
+**Main Entry Point**: [main.py:640-759](../ui-implementation/src-tauri/backend/main.py#L640)
+```python
+async def run_mcp_server():
+    # Initialize with embedded ChromaDB (no server needed)
+    memory = UnifiedMemorySystem(data_dir=str(DATA_PATH), use_server=False)
+    await memory.initialize()
+
+    # Force HuggingFace embeddings (no Ollama dependency)
+    memory.embedding_service.use_ollama = False
+
+    # Create MCP server with 3 tools
+    server = Server("roampal-memory")
+    # ... tool registration ...
+```
+
+**Architecture Independence**:
+- Chat (Ollama/LM Studio) and MCP (HuggingFace) are decoupled
+- Users can run MCP without any LLM installed
+- Embedding service has `use_ollama` flag (forced False for MCP)
+
+#### Use Cases
+
+1. **Claude Desktop Integration**
+   - Search Roampal's memory during Claude conversations
+   - Store important context in memory_bank
+   - Access uploaded books/documents
+
+2. **Cursor IDE**
+   - Semantic search across project documentation
+   - Multi-language code context retrieval
+
+3. **Offline Workflows**
+   - No internet required after initial installation
+   - All embeddings generated locally with bundled model
+
+#### Performance
+
+- **First Load**: 2-5 seconds (model initialization)
+- **Memory Usage**: +1.5GB RAM (model loaded)
+- **Inference**: ~5x slower than all-MiniLM-L6-v2 (quality vs speed tradeoff)
+- **Caching**: Embeddings cached (200 entry LRU, significant speedup for repeated queries)
 
 ### Session Management
 ```
@@ -1508,7 +2430,7 @@ DELETE /api/model/context/{model_name} # Reset to default context size
 
 **Embedding Model Protection** (Added 2025-10-09)
 
-Chat models and embedding models serve different purposes. Embedding models (like `nomic-embed-text`, `mxbai-embed-large`, `all-minilm`) cannot be used for chat conversations.
+Chat models and embedding models serve different purposes. Roampal uses bundled `paraphrase-multilingual-mpnet-base-v2` for all embeddings. Ollama embedding models (like `nomic-embed-text`, `mxbai-embed-large`, `all-minilm`) are not used and should not be selected as chat models.
 
 **Protection Layers:**
 
@@ -1748,7 +2670,7 @@ DELETE /api/personality/custom/{id}   # Delete custom template (protects active 
 ```bash
 # Core Settings
 ROAMPAL_WORKSPACE=C:\ROAMPAL
-ROAMPAL_PORT=8000
+ROAMPAL_PORT=8000  # Note: Hardcoded in main.py, not configurable via env
 ROAMPAL_HOST=127.0.0.1
 
 # LLM Configuration
@@ -1767,7 +2689,7 @@ CHROMADB_PERSIST_DIRECTORY=./data/chromadb
 
 # Security
 ROAMPAL_REQUIRE_AUTH=false
-ROAMPAL_RATE_LIMIT=false
+# Note: Rate limiting is always enabled at 100 req/min, not configurable
 ```
 
 ### Memory Retention Policies
@@ -1782,16 +2704,32 @@ ROAMPAL_RATE_LIMIT=false
 
 ## Storage Layout
 
-**Data Location Strategy (Updated 2025-10-16):**
-- **Hybrid Approach**: AppData-first with local fallback for seamless updates
-- Checks `%APPDATA%\Roaming\Roampal\data\` first
-- Falls back to `backend\data\` if AppData doesn't exist
-- Enables zero-downtime updates (data survives app reinstalls)
-- Implementation: [settings.py:16-19](../config/settings.py)
+**Data Location Strategy (Automatic Detection):**
+- **3-Tier Automatic Path Selection** - No manual migration required
+- System automatically detects environment and chooses appropriate data location
+- Implementation: [settings.py:18-48](../ui-implementation/src-tauri/backend/config/settings.py)
 
+**Priority Order:**
+1. **Environment Variable Override** (Advanced users)
+   - If `ROAMPAL_DATA_DIR` is set → uses custom path
+   - Allows explicit control over data location
+
+2. **Development Mode** (Auto-detected)
+   - Checks if `ui-implementation/` folder exists
+   - If YES → uses `PROJECT_ROOT/data/`
+   - For developers running from source
+
+3. **Production Mode** (Auto-created)
+   - If no `ui-implementation/` folder → bundled .exe detected
+   - Windows: `%APPDATA%\Roaming\Roampal\data\`
+   - macOS: `~/Library/Application Support/Roampal/data/`
+   - Linux: `~/.local/share/roampal/data/`
+   - Directory automatically created if it doesn't exist
+   - Data survives app reinstalls and updates
+
+**Directory Structure (Same for all modes):**
 ```
-# Default (Development/First Install)
-backend/data/
+data/
 ├── chroma_db/                # Vector embeddings (ChromaDB collections)
 │   ├── roampal_books/        # Reference documents
 │   ├── roampal_working/      # Current context
@@ -1802,16 +2740,6 @@ backend/data/
 ├── sessions/                 # Conversation logs (JSONL)
 │   └── *.jsonl              # Conversation history with citations
 └── vector_store/             # Legacy compatibility path
-
-# Production (User chooses to migrate)
-%APPDATA%\Roaming\Roampal\data\
-├── chroma_db/                # Same structure as above
-├── uploads/
-├── sessions/
-└── vector_store/
-
-# When AppData exists, it takes precedence
-# Updates to app binary don't touch user data
 ```
 
 ## UI Features
@@ -2065,12 +2993,12 @@ When the AI is processing queries, it shows real-time status:
 - No authentication required
 - All localhost origins allowed
 - Debug logging enabled
-- Rate limiting disabled
+- Rate limiting: 100 req/min (always enabled)
 
 ### Production Mode
 - API key authentication
 - IP whitelisting (localhost only)
-- Rate limiting (100 req/min)
+- Rate limiting: 100 req/min (always enabled)
 - Sanitized logging
 - CORS restrictions
 
@@ -2084,7 +3012,7 @@ When the AI is processing queries, it shows real-time status:
 ### Bounded Collections
 - Working memory: Max 100 items
 - History per conversation: 20 messages
-- LLM context: 8 messages (4 exchanges)
+- LLM context: Last 4 exchanges (8 messages)
 
 ### Lazy Loading
 - Memory search on-demand
@@ -4122,7 +5050,10 @@ User sends first message
    - Before: Card-style with borders, emoji icons
    - After: Tree-view with bracket notation `[5] references`
    - Indented structure with border-left, no backgrounds
-   - Full text display (removed 150-char truncation)
+   - **Full text display**: All truncation removed
+     - Frontend: Removed 150-char UI limit
+     - Backend: Removed 200-char citation limit (agent_chat.py:271)
+     - Citations now show complete memory content
 
 4. **Visual Hierarchy**
    - Removed all button backgrounds/borders

@@ -49,9 +49,7 @@ class EmbeddingClient:
         # Initialize local fallback if needed
         if self.fallback_to_local and not self.service_available:
             logger.info("Embedding service not available, initializing local fallback")
-            from backend.config.settings import settings
-            model_name = settings.embedding.model_name or settings.embedding.huggingface_model_name
-            self.local_service = EmbeddingService(model_name=model_name)
+            self.local_service = EmbeddingService()
     
     async def _check_service_health(self) -> bool:
         """Check if the embedding service is healthy"""
@@ -106,9 +104,7 @@ class EmbeddingClient:
         # Fallback to local if configured
         if self.fallback_to_local:
             if not self.local_service:
-                from backend.config.settings import settings
-                model_name = settings.embedding.model_name or settings.embedding.huggingface_model_name
-                self.local_service = EmbeddingService(model_name=model_name)
+                self.local_service = EmbeddingService()
             
             logger.debug("Using local embedding generation")
             return await self.local_service.embed_text(text)
@@ -139,9 +135,7 @@ class EmbeddingClient:
         # Fallback to local sequential processing
         if self.fallback_to_local:
             if not self.local_service:
-                from backend.config.settings import settings
-                model_name = settings.embedding.model_name or settings.embedding.huggingface_model_name
-                self.local_service = EmbeddingService(model_name=model_name)
+                self.local_service = EmbeddingService()
             
             logger.debug(f"Using local batch embedding for {len(texts)} texts")
             embeddings = []

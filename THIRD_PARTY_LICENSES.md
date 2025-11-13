@@ -238,7 +238,15 @@ Roampal uses the following open-source software. We are grateful to the maintain
 - **License**: Apache-2.0
 - **Copyright**: Copyright (c) 2024 Nomic AI
 - **URL**: https://huggingface.co/nomic-ai/nomic-embed-text-v1.5
-- **Note**: Used for text embeddings
+- **Note**: Used for text embeddings via Ollama
+
+### Paraphrase Multilingual MPNet Base v2 (Apache License 2.0)
+- **License**: Apache-2.0
+- **Copyright**: Copyright (c) 2021 Sentence-Transformers
+- **URL**: https://huggingface.co/sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+- **Model**: Bundled embedding model for MCP (Model Context Protocol) server
+- **Languages**: Supports 50+ languages including English, Spanish, French, German, Chinese, Japanese, Arabic, and more
+- **Note**: This pre-trained model is bundled with Roampal for offline embedding generation. Users do not need to download Ollama or LM Studio to use MCP features.
 
 ---
 
@@ -260,5 +268,5 @@ If you have questions about third-party licenses or compliance, please contact: 
 
 ---
 
-*This file was last updated: 2025-10-13*
-*Roampal version: 1.0.0*
+*This file was last updated: 2025-11-04*
+*Roampal version: 0.1.7-dev*

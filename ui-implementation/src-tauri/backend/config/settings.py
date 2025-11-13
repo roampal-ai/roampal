@@ -21,12 +21,14 @@ ROAMPAL_DATA_DIR = os.getenv("ROAMPAL_DATA_DIR")
 if ROAMPAL_DATA_DIR:
     # Explicitly set via environment variable
     DATA_PATH = ROAMPAL_DATA_DIR
-    print(f"[Roampal] Using ROAMPAL_DATA_DIR from environment: {DATA_PATH}")
+    if "--mcp" not in sys.argv:
+        print(f"[Roampal] Using ROAMPAL_DATA_DIR from environment: {DATA_PATH}")
 
 elif (PROJECT_ROOT / "ui-implementation").exists():
     # Development mode - project structure includes ui-implementation folder
     DATA_PATH = str(PROJECT_ROOT / "data")
-    print(f"[Roampal] Development mode detected, using local data: {DATA_PATH}")
+    if "--mcp" not in sys.argv:
+        print(f"[Roampal] Development mode detected, using local data: {DATA_PATH}")
 
 else:
     # Production/bundled mode - use platform-specific user data directory
@@ -40,7 +42,9 @@ else:
 
     # Ensure directory exists
     os.makedirs(DATA_PATH, exist_ok=True)
-    print(f"[Roampal] Production mode detected, using AppData: {DATA_PATH}")
+    # Only log to console if not in MCP mode (MCP uses stdio for protocol)
+    if "--mcp" not in sys.argv:
+        print(f"[Roampal] Production mode detected, using AppData: {DATA_PATH}")
 
 ROAMPAL_DATA_PATH = DATA_PATH
 
@@ -73,7 +77,7 @@ class LLMSettings(BaseSettings):
     provider: Literal["ollama", "openchat", "lmstudio"] = "ollama"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "mistral-nemo:12b-instruct-2407-q4_0"  # Using Mistral Nemo for better performance
-    ollama_request_timeout_seconds: int = 300  # 5 minutes for large models like codestral:22b
+    ollama_request_timeout_seconds: int = 30  # 30 seconds - fail fast for MCP (was 300)
     ollama_keep_alive_seconds: int = 120
     max_keepalive_connections: int = Field(5, description="Max keepalive connections for httpx.")
     max_connections: int = Field(10, description="Max connections for httpx.")

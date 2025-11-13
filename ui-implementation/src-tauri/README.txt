@@ -1,4 +1,4 @@
-ROAMPAL v1.0.0 - Your Private Intelligence
+ROAMPAL v0.2.0 - Your Private Intelligence
 =====================================
 
 INSTALLATION
@@ -18,17 +18,25 @@ System Requirements
 -------------------
 - Windows 10/11 (64-bit)
 - 8GB RAM minimum (16GB recommended)
-- Ollama installed with at least one model
+- For chat features: Ollama OR LM Studio with at least one model
+- For MCP server: No additional requirements (embedding model bundled)
 
 First Time Setup
 ----------------
-1. Install Ollama from https://ollama.com if not already installed
-2. Pull required models:
-   - Open Command Prompt/PowerShell
-   - Run: ollama pull qwen2.5:0.5b (minimum required for chat)
-   - Run: ollama pull nomic-embed-text (required for embeddings)
+For Chat Features:
+1. Install either:
+   - Ollama from https://ollama.com, OR
+   - LM Studio from https://lmstudio.ai
+2. Pull/download at least one chat model:
+   - Ollama: ollama pull qwen2.5:7b
+   - LM Studio: Download from built-in model browser
 3. Right-click Roampal.exe and select "Run as administrator"
 4. The app will auto-start the backend and open in your browser
+
+For MCP Server Only (No Chat):
+1. Right-click Roampal.exe and select "Run as administrator"
+2. Configure MCP client (Claude Desktop, Cursor, etc.) to use Roampal
+3. No additional setup needed - embedding model bundled (paraphrase-multilingual-mpnet-base-v2)
 
 Troubleshooting
 ---------------
@@ -44,8 +52,10 @@ Features
 - Real-time chat with memory context
 - Book/document upload and processing
 - Memory visualization and search
-- Multiple AI model support
+- Multiple AI model support (Ollama + LM Studio)
+- MCP (Model Context Protocol) server for AI tool integrations
 - Automatic session management
+- Multilingual embeddings (50+ languages)
 
 Data Storage
 ------------

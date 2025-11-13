@@ -41,6 +41,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
   const [view, setView] = useState<'active' | 'archived' | 'stats'>('active');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [showFilters, setShowFilters] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -153,10 +154,10 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex justify-between items-center p-6 border-b border-zinc-800">
-          <div className="flex items-center gap-3">
-            <SparklesIcon className="w-6 h-6 text-cyan-400" />
-            <h2 className="text-xl font-bold">Memory Bank</h2>
+        <div className="flex justify-between items-center p-3 border-b border-zinc-800 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <SparklesIcon className="w-5 h-5 text-cyan-400" />
+            <h2 className="text-lg font-bold">Memory Bank</h2>
           </div>
           <button
             onClick={onClose}
@@ -170,10 +171,10 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-2 px-6 pt-4 border-b border-zinc-800">
+        <div className="flex gap-1 px-3 py-1 border-b border-zinc-800 flex-shrink-0">
           <button
             onClick={() => setView('active')}
-            className={`px-4 py-2 rounded-t-lg transition-colors ${
+            className={`px-3 py-1.5 rounded-t-lg transition-colors ${
               view === 'active'
                 ? 'bg-zinc-800 text-zinc-100 border-t border-x border-zinc-700'
                 : 'text-zinc-400 hover:text-zinc-200'
@@ -183,7 +184,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
           </button>
           <button
             onClick={() => setView('archived')}
-            className={`px-4 py-2 rounded-t-lg transition-colors ${
+            className={`px-3 py-1.5 rounded-t-lg transition-colors ${
               view === 'archived'
                 ? 'bg-zinc-800 text-zinc-100 border-t border-x border-zinc-700'
                 : 'text-zinc-400 hover:text-zinc-200'
@@ -193,7 +194,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
           </button>
           <button
             onClick={() => setView('stats')}
-            className={`px-4 py-2 rounded-t-lg transition-colors ${
+            className={`px-3 py-1.5 rounded-t-lg transition-colors ${
               view === 'stats'
                 ? 'bg-zinc-800 text-zinc-100 border-t border-x border-zinc-700'
                 : 'text-zinc-400 hover:text-zinc-200'
@@ -206,25 +207,36 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
 
         {/* Search & Filters (only for active view) */}
         {view === 'active' && (
-          <div className="p-4 border-b border-zinc-800 space-y-3">
-            <div className="relative">
-              <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-              <input
-                type="text"
-                placeholder="Search memories..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-cyan-600"
-              />
+          <div className="p-2 border-b border-zinc-800 space-y-2 flex-shrink-0">
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+                <input
+                  type="text"
+                  placeholder="Search memories..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-cyan-600"
+                />
+              </div>
+              {allTags.length > 0 && (
+                <button
+                  onClick={() => setShowFilters(!showFilters)}
+                  className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors flex items-center gap-1"
+                >
+                  <TagIcon className="w-4 h-4" />
+                  {selectedTags.length > 0 && <span className="text-cyan-400">({selectedTags.length})</span>}
+                </button>
+              )}
             </div>
 
-            {allTags.length > 0 && (
-              <div className="flex flex-wrap gap-2">
+            {showFilters && allTags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
                 {allTags.map(tag => (
                   <button
                     key={tag}
                     onClick={() => toggleTag(tag)}
-                    className={`px-2 py-1 text-xs rounded-lg transition-colors ${
+                    className={`px-2.5 py-1 text-xs rounded flex-shrink-0 transition-colors ${
                       selectedTags.includes(tag)
                         ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-600/30'
                         : 'bg-zinc-800 text-zinc-400 border border-zinc-700 hover:border-zinc-600'
@@ -239,7 +251,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
         )}
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-4">
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />

@@ -5,10 +5,14 @@ interface GraphNode {
   id: string;
   label: string;
   type: string;
+  source?: 'routing' | 'content' | 'both';  // v0.2.0: Dual KG system
   best_collection?: string;
   success_rate?: number;
   usage_count?: number;
+  mentions?: number;  // v0.2.0: From content KG
   hybridScore?: number; // Calculated: √usage × √(quality + 0.1)
+  last_used?: string;   // ISO timestamp
+  created_at?: string;  // ISO timestamp
 }
 
 interface GraphEdge {
@@ -32,6 +36,8 @@ interface ConceptDefinition {
   success_rate?: number;
   usage_count?: number;
   related_concepts?: string[];
+  last_used?: string;   // ISO timestamp
+  created_at?: string;  // ISO timestamp
 
   // Enhanced detail fields
   total_searches?: number;
@@ -73,11 +79,18 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
   const [selectedConcept, setSelectedConcept] = useState<ConceptDefinition | null>(null);
   const [conceptDefinition, setConceptDefinition] = useState<string>('');
   const [loadingDefinition, setLoadingDefinition] = useState(false);
+  const [sortBy, setSortBy] = useState<'hybrid' | 'recent' | 'oldest'>('hybrid');
+  const [timeFilter, setTimeFilter] = useState<'all' | 'today' | 'week' | 'session'>('all');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>();
   const nodesRef = useRef<Map<string, { x: number; y: number; vx: number; vy: number }>>(new Map());
 
   useEffect(() => {
+    // Track session start time for "This Session" filter
+    if (!sessionStorage.getItem('kg_session_start')) {
+      sessionStorage.setItem('kg_session_start', new Date().toISOString());
+    }
+
     fetchGraphData();
     return () => {
       if (animationRef.current) {
@@ -99,23 +112,8 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
         hybridScore: Math.sqrt(node.usage_count || 0) * Math.sqrt((node.success_rate || 0) + 0.1)
       }));
 
-      // Sort by hybrid score (best first), take top N
-      const topNodes = nodesWithScore
-        .sort((a: any, b: any) => b.hybridScore - a.hybridScore)
-        .slice(0, MAX_NODES_DISPLAYED);
-
-      // Filter edges to only show connections between displayed nodes
-      const topNodeIds = new Set(topNodes.map((n: any) => n.id));
-      const filteredEdges = (data.edges || []).filter((edge: any) =>
-        topNodeIds.has(edge.source) && topNodeIds.has(edge.target)
-      );
-
-      const graphData = {
-        nodes: topNodes,
-        edges: filteredEdges
-      };
-      setGraphData(graphData);
-      setFilteredData(graphData);
+      // Store all nodes (will filter/sort later based on user controls)
+      setGraphData({ nodes: nodesWithScore, edges: data.edges || [] });
       setLoading(false);
       if (graphData.nodes && graphData.nodes.length > 0) {
         initializeNodePositions(graphData.nodes);
@@ -126,10 +124,77 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
     }
   };
 
+  // Apply time filter and sorting
+  const applyFilters = (data: GraphData) => {
+    if (!data.nodes || data.nodes.length === 0) {
+      setFilteredData({ nodes: [], edges: [] });
+      return;
+    }
+
+    const now = new Date();
+    const sessionStart = new Date(sessionStorage.getItem('kg_session_start') || now);
+
+    // Step 1: Apply time filter
+    const filteredByTime = data.nodes.filter((node: GraphNode) => {
+      if (timeFilter === 'all') return true;
+      if (!node.last_used) return false;
+
+      const lastUsed = new Date(node.last_used);
+
+      if (timeFilter === 'today') {
+        return lastUsed.toDateString() === now.toDateString();
+      } else if (timeFilter === 'week') {
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        return lastUsed >= weekAgo;
+      } else if (timeFilter === 'session') {
+        return lastUsed >= sessionStart;
+      }
+      return true;
+    });
+
+    // Step 2: Sort based on selected method
+    const sorted = [...filteredByTime].sort((a: GraphNode, b: GraphNode) => {
+      if (sortBy === 'hybrid') {
+        return (b.hybridScore || 0) - (a.hybridScore || 0);
+      } else if (sortBy === 'recent') {
+        const aTime = a.last_used ? new Date(a.last_used).getTime() : 0;
+        const bTime = b.last_used ? new Date(b.last_used).getTime() : 0;
+        return bTime - aTime;
+      } else if (sortBy === 'oldest') {
+        const aTime = a.created_at ? new Date(a.created_at).getTime() : Date.now();
+        const bTime = b.created_at ? new Date(b.created_at).getTime() : Date.now();
+        return aTime - bTime;
+      }
+      return 0;
+    });
+
+    // Step 3: Take top 20
+    const topNodes = sorted.slice(0, MAX_NODES_DISPLAYED);
+
+    // Step 4: Filter edges to only show connections between displayed nodes
+    const topNodeIds = new Set(topNodes.map((n: GraphNode) => n.id));
+    const filteredEdges = data.edges.filter((edge: GraphEdge) =>
+      topNodeIds.has(edge.source) && topNodeIds.has(edge.target)
+    );
+
+    const result = { nodes: topNodes, edges: filteredEdges };
+    setFilteredData(result);
+
+    // Initialize node positions if this is the first render
+    if (topNodes.length > 0) {
+      initializeNodePositions(topNodes);
+    }
+  };
+
+  // Re-filter when sort or time filter changes
+  useEffect(() => {
+    applyFilters(graphData);
+  }, [sortBy, timeFilter, graphData]);
+
   // Apply search filter
   useEffect(() => {
     if (!searchQuery) {
-      setFilteredData(graphData);
+      applyFilters(graphData);
       if (graphData.nodes && graphData.nodes.length > 0) {
         initializeNodePositions(graphData.nodes);
       }
@@ -382,14 +447,17 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
       ctx.beginPath();
       ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
 
-      // Color based on success rate
-      const successRate = node.success_rate || 0;
-      if (successRate > 0.7) {
-        ctx.fillStyle = '#22c55e'; // Green
-      } else if (successRate > 0.4) {
-        ctx.fillStyle = '#f59e0b'; // Orange
+      // Color based on source (v0.2.0: Dual KG system)
+      const source = node.source || 'routing';  // Default to routing for backward compatibility
+      if (source === 'both') {
+        // Purple: Exists in BOTH routing + content graphs
+        ctx.fillStyle = '#a855f7';  // Purple-500
+      } else if (source === 'content') {
+        // Green: Content KG only (memory-based entities)
+        ctx.fillStyle = '#22c55e';  // Green-500
       } else {
-        ctx.fillStyle = '#ef4444'; // Red
+        // Blue: Routing KG only (query-based patterns)
+        ctx.fillStyle = '#3b82f6';  // Blue-500
       }
       ctx.fill();
 
@@ -426,43 +494,45 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
       }
     });
 
-    // Legend - positioned at bottom of canvas
+    // Legend - positioned at bottom of canvas (v0.2.0: Dual KG system)
     const legendY = height - 50;
 
     // Semi-transparent background for legend
     ctx.fillStyle = 'rgba(24, 24, 27, 0.8)';
-    ctx.fillRect(5, legendY - 5, 200, 45);
+    ctx.fillRect(5, legendY - 5, 280, 45);
 
     // Title on its own line
     ctx.fillStyle = '#a1a1aa';
     ctx.font = '10px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('Success Rate:', 10, legendY + 8);
+    ctx.fillText('Entity Source:', 10, legendY + 8);
 
     // Color boxes on the next line with more vertical space
     const boxY = legendY + 20;
 
-    // Green
-    ctx.fillStyle = '#22c55e';
+    // Blue (routing)
+    ctx.fillStyle = '#3b82f6';
     ctx.fillRect(10, boxY, 12, 12);
     ctx.fillStyle = '#a1a1aa';
-    ctx.fillText('>70%', 26, boxY + 9);
+    ctx.fillText('Query', 26, boxY + 9);
 
-    // Orange
-    ctx.fillStyle = '#f59e0b';
-    ctx.fillRect(65, boxY, 12, 12);
+    // Green (content)
+    ctx.fillStyle = '#22c55e';
+    ctx.fillRect(80, boxY, 12, 12);
     ctx.fillStyle = '#a1a1aa';
-    ctx.fillText('40-70%', 81, boxY + 9);
+    ctx.fillText('Memory', 96, boxY + 9);
 
-    // Red
-    ctx.fillStyle = '#ef4444';
-    ctx.fillRect(130, boxY, 12, 12);
+    // Purple (both)
+    ctx.fillStyle = '#a855f7';
+    ctx.fillRect(165, boxY, 12, 12);
     ctx.fillStyle = '#a1a1aa';
-    ctx.fillText('<40%', 146, boxY + 9);
+    ctx.fillText('Both', 181, boxY + 9);
   };
 
   useEffect(() => {
-    const handleResize = () => {
+    let resizeTimeout: NodeJS.Timeout;
+
+    const handleResize = (forceReinit = false) => {
       const canvas = canvasRef.current;
       const container = canvas?.parentElement;
       if (canvas && container) {
@@ -489,8 +559,8 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
 
         console.log('Canvas resized to:', width, 'x', height, 'DPR:', dpr);
 
-        // Reinitialize node positions if needed
-        if (nodesRef.current.size === 0 && filteredData.nodes.length > 0) {
+        // Reinitialize positions on initial load or when forced
+        if ((filteredData.nodes.length > 0 && nodesRef.current.size === 0) || forceReinit) {
           initializeNodePositions(filteredData.nodes);
         } else {
           draw();
@@ -498,13 +568,36 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
       }
     };
 
-    // Multiple attempts to ensure proper sizing
-    handleResize();
-    setTimeout(handleResize, 100);
-    setTimeout(handleResize, 500);
+    const debouncedResize = () => {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => handleResize(true), 300);
+    };
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    // Initial sizing with forced reinit
+    handleResize(true);
+    setTimeout(() => handleResize(true), 100);
+    setTimeout(() => handleResize(true), 500);
+
+    // Use ResizeObserver to catch panel dragging (not just window resize)
+    const canvas = canvasRef.current;
+    const container = canvas?.parentElement;
+    let resizeObserver: ResizeObserver | null = null;
+
+    if (container) {
+      resizeObserver = new ResizeObserver(() => {
+        debouncedResize();
+      });
+      resizeObserver.observe(container);
+    }
+
+    window.addEventListener('resize', debouncedResize);
+    return () => {
+      clearTimeout(resizeTimeout);
+      window.removeEventListener('resize', debouncedResize);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+    };
   }, [filteredData]);
 
   if (loading) {
@@ -523,52 +616,108 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
     );
   }
 
-  if (!filteredData.nodes || filteredData.nodes.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full space-y-4">
-        <svg className="w-16 h-16 text-zinc-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1}
-            d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-        </svg>
-        <div className="text-center">
-          <p className="text-sm text-zinc-500">No knowledge graph data yet</p>
-          <p className="text-xs text-zinc-600 mt-1">Concepts will appear as the system learns</p>
-        </div>
-      </div>
-    );
-  }
+  const hasNoData = !filteredData.nodes || filteredData.nodes.length === 0;
+
+  const getSubtitle = () => {
+    const sortText = sortBy === 'hybrid' ? 'most important' :
+                     sortBy === 'recent' ? 'most recent' : 'oldest';
+    const timeText = timeFilter === 'all' ? 'concepts' :
+                     timeFilter === 'today' ? 'concepts from today' :
+                     timeFilter === 'week' ? 'concepts from this week' :
+                     'concepts from this session';
+    return `Top 20 ${sortText} ${timeText} • Node size = usage × quality`;
+  };
 
   return (
     <div className="flex flex-col h-full">
-      <div className="mb-2 flex-shrink-0">
-        <h3 className="text-xs font-medium text-zinc-500">Knowledge Graph - Top 20 Patterns</h3>
-        <p className="text-xs text-zinc-600">
-          Larger nodes = better quality + more usage
+      {/* Header - Improved hierarchy */}
+      <div className="mb-3 flex-shrink-0">
+        <h3 className="text-sm font-semibold text-zinc-300">Knowledge Graph</h3>
+        <p className="text-xs text-zinc-500 mt-0.5">
+          {getSubtitle()}
         </p>
       </div>
-      <div className="flex-1 relative min-h-[300px]">
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-0 w-full h-full"
-          style={{ cursor: 'grab' }}
-        />
+
+      {/* Filter Controls - Icon-based with hierarchy */}
+      <div className="mb-4 flex gap-3 items-center flex-shrink-0">
+        {/* Sort Dropdown - Primary control */}
+        <div className="flex-[1.2] flex items-center gap-2">
+          <svg className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
+          </svg>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            className="flex-1 bg-zinc-800 text-zinc-200 text-xs px-3 py-2 rounded-lg border border-zinc-700 hover:border-zinc-600 focus:outline-none focus:border-cyan-600 transition-colors"
+            title="Sort concepts by importance, recency, or age"
+          >
+            <option value="hybrid">Importance</option>
+            <option value="recent">Recent</option>
+            <option value="oldest">Oldest</option>
+          </select>
+        </div>
+
+        {/* Time Filter Dropdown - Secondary control */}
+        <div className="flex-1 flex items-center gap-2">
+          <svg className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <select
+            value={timeFilter}
+            onChange={(e) => setTimeFilter(e.target.value as any)}
+            className="flex-1 bg-zinc-800 text-zinc-200 text-xs px-3 py-2 rounded-lg border border-zinc-700 hover:border-zinc-600 focus:outline-none focus:border-cyan-600 transition-colors"
+            title="Filter by time period"
+          >
+            <option value="all">All Time</option>
+            <option value="today">Today</option>
+            <option value="week">This Week</option>
+            <option value="session">This Session</option>
+          </select>
+        </div>
       </div>
 
-      {/* Concepts Summary */}
-      <div className="mt-3 p-3 bg-zinc-900 rounded-lg border border-zinc-800 flex-shrink-0">
-        <h4 className="text-xs font-medium text-zinc-400 mb-2">
-          Active Concepts ({filteredData.nodes?.length || 0})
-        </h4>
+      {/* Canvas Area */}
+      <div className="flex-1 relative min-h-[300px]">
+        {hasNoData ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center space-y-4">
+            <svg className="w-16 h-16 text-zinc-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1}
+                d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            <div className="text-center">
+              <p className="text-sm text-zinc-500">No concepts found</p>
+              <p className="text-xs text-zinc-600 mt-1">
+                {timeFilter === 'session' ? 'Search memory and provide feedback ("that worked!", "thanks!") to build the graph' :
+                 timeFilter === 'today' ? 'No activity today yet' :
+                 timeFilter === 'week' ? 'No activity this week' :
+                 'Search memory and provide feedback to create concepts'}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 w-full h-full"
+          />
+        )}
+      </div>
+
+      {/* Concepts Summary - Improved clarity */}
+      {!hasNoData && (
+        <div className="mt-4 p-3 bg-zinc-900 rounded-lg border border-zinc-800 flex-shrink-0">
+          <h4 className="text-xs font-medium text-zinc-300 mb-2">
+            Active Concepts ({filteredData.nodes?.length || 0}) <span className="text-zinc-500 font-normal">• Click to view details</span>
+          </h4>
         <div className="max-h-32 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap gap-1.5">
             {filteredData.nodes.map(node => (
               <button
                 key={node.id}
                 onClick={() => fetchConceptDefinition(node)}
-                className="flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-all cursor-pointer"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-all cursor-pointer border border-zinc-700/50 hover:border-zinc-600"
                 title={`Click to see routing info | Success: ${Math.round((node.success_rate || 0) * 100)}% | Used: ${node.usage_count || 0}x`}
               >
-                <div className={`w-2 h-2 rounded-full ${
+                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
                   node.success_rate && node.success_rate > 0.7 ? 'bg-green-500' :
                   node.success_rate && node.success_rate > 0.4 ? 'bg-amber-500' : 'bg-red-500'
                 }`} />
@@ -577,7 +726,8 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
             ))}
           </div>
         </div>
-      </div>
+        </div>
+      )}
 
       {/* Concept Definition Modal */}
       {selectedConcept && (
@@ -642,6 +792,19 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
                   </span>
                 )}
               </div>
+
+              {/* Timestamp info */}
+              {(selectedConcept.last_used || selectedConcept.created_at) && (
+                <div className="text-xs text-zinc-500 mt-2">
+                  {selectedConcept.last_used && (
+                    <span>Last used: {new Date(selectedConcept.last_used).toLocaleString()}</span>
+                  )}
+                  {selectedConcept.last_used && selectedConcept.created_at && <span> • </span>}
+                  {selectedConcept.created_at && (
+                    <span>Created: {new Date(selectedConcept.created_at).toLocaleString()}</span>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Concept Info - Scrollable - MINIMAL DESIGN */}

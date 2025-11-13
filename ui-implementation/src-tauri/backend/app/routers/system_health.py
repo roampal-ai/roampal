@@ -225,3 +225,53 @@ async def get_data_sizes():
         return {
             "error": str(e)
         }
+
+
+@router.get("/migration-notice")
+async def get_migration_notice():
+    """
+    Check if there's a pending embedding migration notice for v0.1.7
+    Returns migration info if notice exists, null otherwise
+    """
+    try:
+        from config.settings import DATA_PATH
+        notice_path = Path(DATA_PATH) / ".embedding_migration_notice"
+
+        if notice_path.exists():
+            import json
+            notice_data = json.loads(notice_path.read_text())
+            return {
+                "has_notice": True,
+                "notice": notice_data
+            }
+
+        return {"has_notice": False}
+
+    except Exception as e:
+        logger.error(f"Error checking migration notice: {e}")
+        return {"has_notice": False, "error": str(e)}
+
+
+@router.post("/migration-notice/dismiss")
+async def dismiss_migration_notice():
+    """
+    Dismiss the embedding migration notice after user acknowledges it
+    """
+    try:
+        from config.settings import DATA_PATH
+        notice_path = Path(DATA_PATH) / ".embedding_migration_notice"
+        flag_path = Path(DATA_PATH) / ".embedding_migration_v017"
+
+        # Remove notice
+        if notice_path.exists():
+            notice_path.unlink()
+
+        # Mark migration as acknowledged
+        flag_path.touch()
+
+        logger.info("[Migration] User acknowledged embedding migration notice")
+        return {"success": True, "message": "Migration notice dismissed"}
+
+    except Exception as e:
+        logger.error(f"Error dismissing migration notice: {e}")
+        return {"success": False, "error": str(e)}

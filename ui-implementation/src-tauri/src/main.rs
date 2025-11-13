@@ -263,7 +263,77 @@ async fn check_backend() -> Result<bool, String> {
     }
 }
 
+fn run_mcp_backend() -> ! {
+    // NOTE: MCP uses stdio for JSON-RPC protocol
+    // All debug output MUST go to stderr to avoid corrupting the protocol
+    eprintln!("[MCP] Starting Roampal MCP server (headless mode)...");
+
+    let exe_dir = std::env::current_exe()
+        .expect("Failed to get executable path")
+        .parent()
+        .expect("Failed to get executable directory")
+        .to_path_buf();
+
+    let python_exe = exe_dir.join("binaries").join("python").join("python.exe");
+    let main_py = exe_dir.join("backend").join("main.py");
+    let backend_dir = exe_dir.join("backend");
+
+    eprintln!("[MCP] Python: {:?}", python_exe);
+    eprintln!("[MCP] Main.py: {:?}", main_py);
+    eprintln!("[MCP] Working dir: {:?}", backend_dir);
+
+    if !python_exe.exists() {
+        eprintln!("[MCP] ERROR: Python executable not found at {:?}", python_exe);
+        std::process::exit(1);
+    }
+
+    if !main_py.exists() {
+        eprintln!("[MCP] ERROR: main.py not found at {:?}", main_py);
+        std::process::exit(1);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // NOTE: Don't use CREATE_NO_WINDOW for MCP mode - it breaks stdio pipes
+        // MCP requires proper stdin/stdout for JSON-RPC communication
+        let mut child = Command::new(&python_exe)
+            .arg(&main_py)
+            .arg("--mcp")
+            .current_dir(&backend_dir)
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .expect("Failed to start MCP server");
+
+        let status = child.wait().expect("MCP server wait failed");
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut child = Command::new(&python_exe)
+            .arg(&main_py)
+            .arg("--mcp")
+            .current_dir(&backend_dir)
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .expect("Failed to start MCP server");
+
+        let status = child.wait().expect("MCP server wait failed");
+        std::process::exit(status.code().unwrap_or(1));
+    }
+}
+
 fn main() {
+    // Check for MCP mode before launching GUI
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--mcp") {
+        run_mcp_backend();
+    }
+
     tauri::Builder::default()
         .manage(BackendProcess(Arc::new(Mutex::new(None))))
         .setup(|app| {
