@@ -142,7 +142,7 @@ Roampal includes advanced memory features:
 **Learning Capabilities:**
 - Semantic confusion resistance: 80% precision under 4:1 noise ratio
 - Outcome-based score adaptation: +0.2 (worked), -0.3 (failed)
-- Automatic promotion: Score ≥0.7 + 2 uses → History → Patterns
+- Smart promotion: Working → History (score ≥0.7, 2+ uses), History → Patterns (score ≥0.9, 3+ uses)
 
 **Memory System:**
 - 5-tier architecture: Books, Working, History, Patterns, Memory Bank
@@ -155,7 +155,7 @@ Roampal includes advanced memory features:
 
 ## Latest Release: v0.2.0
 
-**Learning-Based Knowledge Graph Routing + Enhanced MCP Integration** (Released November 10, 2025)
+**Learning-Based Knowledge Graph Routing + Enhanced MCP Integration** 
 
 ### Major Features
 
@@ -244,6 +244,8 @@ The LLM autonomously controls memory via tools (search_memory, create_memory, up
 1. Open **Settings → Integrations** in Roampal
 2. Click **"Connect"** next to Claude Desktop or Cursor
 3. Restart your tool - memory tools are available immediately
+
+**⚠️ Windows Admin Note**: If MCP connections fail, run both Roampal AND the connected application (Claude Desktop/Cursor) as administrator. Windows may block inter-process communication without elevated permissions.
 
 Roampal auto-discovers MCP clients and writes the config for you. No manual JSON editing required.
 
