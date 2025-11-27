@@ -1,0 +1,457 @@
+{
+  "routing_patterns": {
+    "user_prefers_docker": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "prefers_docker_development": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "docker_development": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "user_prefers": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "prefers_docker": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "prefers": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "user": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "docker": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "development": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "prefers_python_backend": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "python_backend_development": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "user_prefers_python": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "backend_development": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "python_backend": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "prefers_python": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "backend": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "python": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "postgresql_indexing": {
+      "collections_used": {},
+      "best_collection": "books",
+      "success_rate": 0.5
+    },
+    "postgresql": {
+      "collections_used": {},
+      "best_collection": "books",
+      "success_rate": 0.5
+    },
+    "indexing": {
+      "collections_used": {},
+      "best_collection": "books",
+      "success_rate": 0.5
+    },
+    "nonexistent_query": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "query": {
+      "collections_used": {
+        "working": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 1
+        },
+        "patterns": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 1
+        },
+        "history": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 1
+        },
+        "books": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 1
+        },
+        "memory_bank": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 1
+        }
+      },
+      "best_collection": "patterns",
+      "success_rate": 0.5,
+      "last_used": "2025-11-26T18:18:25.511709"
+    },
+    "nonexistent": {
+      "collections_used": {
+        "working": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 1
+        },
+        "patterns": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 1
+        },
+        "history": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 1
+        },
+        "books": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 1
+        },
+        "memory_bank": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 1
+        }
+      },
+      "best_collection": "patterns",
+      "success_rate": 0.5,
+      "last_used": "2025-11-26T18:18:25.511709"
+    },
+    "backend_engineer_techcorp": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "user_senior_backend": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "senior_backend_engineer": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "backend_engineer": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "senior_backend": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "engineer_techcorp": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "user_senior": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "engineer": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "senior": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "techcorp": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "likes_backend_work": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "user_likes_backend": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "maybe_user_likes": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "maybe_user": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "user_likes": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "likes_backend": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "backend_work": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "likes": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "maybe": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "work": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "test": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "docker_networking_fix": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "docker_networking": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "networking_fix": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "networking": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "docker_compose_local": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "compose_local_development": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "prefers_docker_compose": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "docker_compose": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "compose_local": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "local_development": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "compose": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "local": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "project_uses_postgresql": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "uses_postgresql_database": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "postgresql_database": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "project_uses": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "uses_postgresql": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "database": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "uses": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "project": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "important_user_fact": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "important_user": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "user_fact": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "important": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "fact": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "xyzabc123nonexistent_totally_fake_query_12345": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "nonexistent_totally_fake_query": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "xyzabc": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "fake": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "totally": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    }
+  },
+  "success_rates": {
+    "working_543f11a4_1764206305.186134": {
+      "success_count": 0,
+      "failure_count": 1,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "history_6c728f11_1764206305.368387": {
+      "success_count": 0,
+      "failure_count": 2,
+      "partial_count": 0,
+      "success_rate": 0.0
+    }
+  },
+  "failure_patterns": {},
+  "problem_categories": {},
+  "problem_solutions": {},
+  "solution_patterns": {},
+  "context_action_effectiveness": {}
+}

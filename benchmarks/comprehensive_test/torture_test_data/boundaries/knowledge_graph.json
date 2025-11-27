@@ -1,0 +1,28 @@
+{
+  "routing_patterns": {},
+  "success_rates": {
+    "working_fb941bdb_1764204811.132764": {
+      "success_count": 0,
+      "failure_count": 5,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "working_b029ca17_1764204937.711712": {
+      "success_count": 0,
+      "failure_count": 5,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "working_d37bfbd1_1764205101.069056": {
+      "success_count": 0,
+      "failure_count": 5,
+      "partial_count": 0,
+      "success_rate": 0.0
+    }
+  },
+  "failure_patterns": {},
+  "problem_categories": {},
+  "problem_solutions": {},
+  "solution_patterns": {},
+  "context_action_effectiveness": {}
+}

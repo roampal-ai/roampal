@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch } from '../utils/fetch';
 import { Toast } from './Toast';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface MCPTool {
   name: string;
@@ -55,7 +56,7 @@ export const IntegrationsPanel: React.FC<IntegrationsPanelProps> = ({ isOpen, on
   const scanForTools = async () => {
     setLoading(true);
     try {
-      const response = await apiFetch('http://localhost:8000/api/mcp/scan');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/mcp/scan`);
       if (response.ok) {
         const data = await response.json();
         setTools(data.tools || []);
@@ -70,7 +71,7 @@ export const IntegrationsPanel: React.FC<IntegrationsPanelProps> = ({ isOpen, on
   const handleConnect = async (configPath: string) => {
     setActionLoading(configPath);
     try {
-      const response = await apiFetch('http://localhost:8000/api/mcp/connect', {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/mcp/connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ config_path: configPath }),
@@ -97,7 +98,7 @@ export const IntegrationsPanel: React.FC<IntegrationsPanelProps> = ({ isOpen, on
   const handleDisconnect = async (configPath: string) => {
     setActionLoading(configPath);
     try {
-      const response = await apiFetch('http://localhost:8000/api/mcp/disconnect', {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/mcp/disconnect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ config_path: configPath }),

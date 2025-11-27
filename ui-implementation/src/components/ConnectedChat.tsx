@@ -102,7 +102,7 @@ export const ConnectedChat: React.FC = () => {
   // Check if Ollama is available (no longer shows modal)
   const checkOllamaStatus = async () => {
     try {
-      const response = await apiFetch('http://localhost:8000/api/model/ollama/status');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/ollama/status`);
       if (response.ok) {
         const data = await response.json();
         return data.available;
@@ -118,7 +118,7 @@ export const ConnectedChat: React.FC = () => {
   const fetchProviders = async () => {
     try {
       // Fetch available models first to know which providers have chat models
-      const modelsRes = await apiFetch('http://localhost:8000/api/model/available');
+      const modelsRes = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/available`);
       let ollamaHasModels = false;
       let lmstudioHasModels = false;
 
@@ -130,8 +130,8 @@ export const ConnectedChat: React.FC = () => {
       }
 
       const [ollamaRes, lmstudioRes] = await Promise.all([
-        apiFetch('http://localhost:8000/api/model/ollama/status').catch(() => null),
-        apiFetch('http://localhost:8000/api/model/lmstudio/status').catch(() => null)
+        apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/ollama/status`).catch(() => null),
+        apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/lmstudio/status`).catch(() => null)
       ]);
 
       // Build providers array - includes ALL providers regardless of models (for detection banners)
@@ -160,7 +160,7 @@ export const ConnectedChat: React.FC = () => {
   // Fetch registry metadata for installed models
   const fetchRegistryMetadata = async () => {
     try {
-      const response = await apiFetch('http://localhost:8000/api/model/registry?tool_capable_only=true');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/registry?tool_capable_only=true`);
       if (response.ok) {
         const data = await response.json();
         setInstalledModelsMetadata(data.models || []);
@@ -172,7 +172,7 @@ export const ConnectedChat: React.FC = () => {
 
   const fetchModels = async () => {
     try {
-      const response = await apiFetch('http://localhost:8000/api/model/available');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/available`);
       if (response.ok) {
         const data = await response.json();
         // Store models with provider info for accurate "Installed" detection
@@ -258,7 +258,7 @@ export const ConnectedChat: React.FC = () => {
   // Function to get current model from backend
   const fetchCurrentModel = async () => {
     try {
-      const response = await apiFetch('http://localhost:8000/api/model/current');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/current`);
       if (response.ok) {
         const data = await response.json();
 
@@ -339,7 +339,7 @@ export const ConnectedChat: React.FC = () => {
       const modelInfo = availableModels.find((m: any) => m.name === modelName);
       const actualModelId = modelInfo?.lmstudio_id || modelName; // Use lmstudio_id if available
 
-      const response = await apiFetch('http://localhost:8000/api/model/switch', {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/switch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_name: actualModelId })
@@ -396,7 +396,7 @@ export const ConnectedChat: React.FC = () => {
 // 
 //     const pollPermissions = async () => {
 //       try {
-//         const response = await fetch('http://localhost:8000/api/permissions/pending');
+//         const response = await fetch(`${ROAMPAL_CONFIG.apiUrl}/api/permissions/pending`);
 //         if (response.ok) {
 //           const data = await response.json();
 //           // Handle both formats - router returns {pending: []} or main.py returns {request: ...}
@@ -477,7 +477,7 @@ export const ConnectedChat: React.FC = () => {
 //     if (!pendingPermission) return;
 // 
 //     try {
-//       const response = await fetch('http://localhost:8000/api/permissions/respond', {
+//       const response = await fetch(`${ROAMPAL_CONFIG.apiUrl}/api/permissions/respond`, {
 //         method: 'POST',
 //         headers: { 'Content-Type': 'application/json' },
 //         body: JSON.stringify({
@@ -691,8 +691,8 @@ export const ConnectedChat: React.FC = () => {
       // Route to correct endpoint based on which provider tab user is viewing
       // (NOT selectedProvider - that's the active model, viewProvider is which library tab they're on)
       const endpoint = viewProvider === 'lmstudio'
-        ? 'http://localhost:8000/api/model/download-gguf-stream'
-        : 'http://localhost:8000/api/model/pull-stream';
+        ? `${ROAMPAL_CONFIG.apiUrl}/api/model/download-gguf-stream`
+        : `${ROAMPAL_CONFIG.apiUrl}/api/model/pull-stream`;
 
       console.log(`[Model Install] View Provider: ${viewProvider}, Endpoint: ${endpoint}`);
 
@@ -844,7 +844,7 @@ export const ConnectedChat: React.FC = () => {
     setUninstallConfirmModel(null); // Close modal
 
     try {
-      const response = await apiFetch(`http://localhost:8000/api/model/uninstall/${encodeURIComponent(modelName)}?provider_hint=${provider}`, {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/uninstall/${encodeURIComponent(modelName)}?provider_hint=${provider}`, {
         method: 'DELETE',
       });
 
@@ -889,7 +889,7 @@ export const ConnectedChat: React.FC = () => {
     // Call backend to cancel the download
     if (installingModelName && installingProvider) {
       try {
-        await apiFetch('http://localhost:8000/api/model/cancel-download', {
+        await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/cancel-download`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ model: installingModelName }),
@@ -1438,7 +1438,7 @@ export const ConnectedChat: React.FC = () => {
 
       for (const collectionType of collections) {
         try {
-          const response = await apiFetch(`http://localhost:8000/api/memory/enhanced/collections/${collectionType}`);
+          const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory/enhanced/collections/${collectionType}`);
           if (response.ok) {
             const data = await response.json();
             const items = data.memories || [];  // API returns 'memories' not 'items'
@@ -1515,7 +1515,7 @@ export const ConnectedChat: React.FC = () => {
       console.log('[Knowledge Graph] Fetching from Roampal backend');
 
       // Roampal has a unified knowledge graph
-      const response = await apiFetch('http://localhost:8000/api/memory/knowledge-graph');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory/knowledge-graph`);
 
       if (!response.ok) {
         console.error('[Knowledge Graph] API error:', response.status);

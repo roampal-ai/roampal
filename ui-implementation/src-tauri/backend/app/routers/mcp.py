@@ -398,8 +398,11 @@ async def connect_to_tool(request: ConnectRequest):
         config_path = config_path.expanduser().resolve()
         # Must be in user's home directory for security
         home_dir = Path.home().resolve()
-        if not str(config_path).startswith(str(home_dir)):
+        # Use os.sep to prevent path traversal attacks (e.g., /home/alice-evil when home is /home/alice)
+        if not str(config_path).startswith(str(home_dir) + os.sep) and config_path != home_dir:
             raise HTTPException(status_code=400, detail="Config file must be in your home directory")
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         logger.error(f"[MCP] Invalid path: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid path: {str(e)}")
@@ -431,6 +434,8 @@ async def connect_to_tool(request: ConnectRequest):
 
         roampal_cmd = get_roampal_command()
 
+        # Check if roampal already exists (for informational message)
+        was_update = "roampal" in config["mcpServers"]
         config["mcpServers"]["roampal"] = roampal_cmd
 
         # Write back
@@ -439,12 +444,18 @@ async def connect_to_tool(request: ConnectRequest):
         config_path.write_text(json.dumps(config, indent=2))
 
         tool_name = config_path.parent.name
-        logger.info(f"[MCP] Connected Roampal to {tool_name}")
-
-        return {
-            "success": True,
-            "message": f"Connected to {tool_name}. Restart the tool to use Roampal memory."
-        }
+        if was_update:
+            logger.info(f"[MCP] Updated Roampal connection for {tool_name}")
+            return {
+                "success": True,
+                "message": f"Updated Roampal connection for {tool_name}. Restart the tool to apply changes."
+            }
+        else:
+            logger.info(f"[MCP] Connected Roampal to {tool_name}")
+            return {
+                "success": True,
+                "message": f"Connected to {tool_name}. Restart the tool to use Roampal memory."
+            }
 
     except Exception as e:
         logger.error(f"[MCP] Error connecting to config: {e}")

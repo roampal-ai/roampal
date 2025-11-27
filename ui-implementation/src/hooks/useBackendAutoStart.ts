@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 export const useBackendAutoStart = () => {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'starting' | 'ready' | 'error'>('checking');
@@ -10,6 +11,7 @@ export const useBackendAutoStart = () => {
       const isTauri = window.__TAURI__ !== undefined;
 
       console.log('[BackendAutoStart] Is Tauri?', isTauri);
+      console.log('[BackendAutoStart] API URL:', ROAMPAL_CONFIG.apiUrl);
 
       if (!isTauri) {
         // In dev mode, assume backend is already running
@@ -21,7 +23,7 @@ export const useBackendAutoStart = () => {
         // First check if backend is already accessible via HTTP
         console.log('[BackendAutoStart] Checking if backend is already running via HTTP...');
         try {
-          const healthCheck = await apiFetch('http://localhost:8000/health', {
+          const healthCheck = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/health`, {
             method: 'GET',
             signal: AbortSignal.timeout(2000)
           });

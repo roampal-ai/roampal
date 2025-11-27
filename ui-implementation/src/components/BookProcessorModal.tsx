@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { X, Upload, FileText, BookOpen, AlertCircle, CheckCircle, Loader2, Trash2, XCircle } from 'lucide-react';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface BookProcessorModalProps {
   isOpen: boolean;
@@ -32,7 +33,7 @@ interface WebSocketMessage {
 }
 
 // Get the base URL from environment or default to localhost
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE_URL = ROAMPAL_CONFIG.apiUrl;
 const WS_BASE_URL = API_BASE_URL.replace('http://', 'ws://').replace('https://', 'wss://');
 
 interface ExistingBook {

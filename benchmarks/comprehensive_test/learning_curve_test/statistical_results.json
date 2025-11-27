@@ -1,0 +1,317 @@
+{
+  "design": {
+    "sample_size": 12,
+    "control": "No memory system",
+    "treatment": "Roampal memory system",
+    "alpha": 0.05
+  },
+  "control_condition": {
+    "results": [
+      {
+        "story": "The Knitting Circle Cipher",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Mycelium Consensus",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Voice in the Walls",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "Support Group for Impossible Bodies",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Bullets Remember",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "Memory Thieves Don't Cry",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Recursive Podcast",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Memory Diver",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Geometry of Dreams",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "Pan de Memoria (Bread of Memory)",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Playground",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Compiled Histories",
+        "condition": "control",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      }
+    ],
+    "mean_learning_gain": 0.0,
+    "std_learning_gain": 0.0,
+    "mean_final_accuracy": 0.0,
+    "ci_95": [
+      0.0,
+      0.0
+    ]
+  },
+  "treatment_condition": {
+    "results": [
+      {
+        "story": "The Knitting Circle Cipher",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Mycelium Consensus",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Voice in the Walls",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "Support Group for Impossible Bodies",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Bullets Remember",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "Memory Thieves Don't Cry",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0,
+          "13": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Recursive Podcast",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Memory Diver",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Geometry of Dreams",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "Pan de Memoria (Bread of Memory)",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Playground",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      },
+      {
+        "story": "The Compiled Histories",
+        "condition": "treatment",
+        "checkpoints": {
+          "3": 0.0,
+          "6": 0.0,
+          "9": 0.0
+        },
+        "final_accuracy": 0.0,
+        "learning_gain": 0.0
+      }
+    ],
+    "mean_learning_gain": 0.0,
+    "std_learning_gain": 0.0,
+    "mean_final_accuracy": 0.0,
+    "ci_95": [
+      0.0,
+      0.0
+    ]
+  },
+  "statistical_tests": {
+    "cohens_d": 0.0,
+    "t_statistic": 0.0,
+    "p_value": 0.0,
+    "significance": "HIGHLY SIGNIFICANT"
+  },
+  "verdict": {
+    "statistically_significant": true,
+    "large_effect_size": false,
+    "conclusion": "INCONCLUSIVE"
+  }
+}

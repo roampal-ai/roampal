@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface GraphNode {
   id: string;
   label: string;
   type: string;
-  source?: 'routing' | 'content' | 'both';  // v0.2.0: Dual KG system
+  source?: 'routing' | 'content' | 'both' | 'action';  // v0.2.1: Triple KG system
   best_collection?: string;
   success_rate?: number;
   usage_count?: number;
@@ -101,7 +102,7 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
 
   const fetchGraphData = async () => {
     try {
-      const response = await apiFetch('http://localhost:8000/api/memory/knowledge-graph');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory/knowledge-graph`);
       if (!response.ok) throw new Error('Failed to fetch graph data');
       const data = await response.json();
 
@@ -262,7 +263,7 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
 
     try {
       // Fetch actual definition from the API
-      const response = await apiFetch(`http://localhost:8000/api/memory/knowledge-graph/concept/${concept.id}/definition`);
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory/knowledge-graph/concept/${concept.id}/definition`);
       if (response.ok) {
         const data = await response.json();
         console.log('[KG] API response for', concept.id, ':', data);
@@ -447,9 +448,12 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
       ctx.beginPath();
       ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
 
-      // Color based on source (v0.2.0: Dual KG system)
+      // Color based on source (v0.2.1: Triple KG system)
       const source = node.source || 'routing';  // Default to routing for backward compatibility
-      if (source === 'both') {
+      if (source === 'action') {
+        // Orange: Action effectiveness patterns (context|action|collection)
+        ctx.fillStyle = '#f97316';  // Orange-500
+      } else if (source === 'both') {
         // Purple: Exists in BOTH routing + content graphs
         ctx.fillStyle = '#a855f7';  // Purple-500
       } else if (source === 'content') {
@@ -494,12 +498,12 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
       }
     });
 
-    // Legend - positioned at bottom of canvas (v0.2.0: Dual KG system)
+    // Legend - positioned at bottom of canvas (v0.2.1: Triple KG system)
     const legendY = height - 50;
 
     // Semi-transparent background for legend
     ctx.fillStyle = 'rgba(24, 24, 27, 0.8)';
-    ctx.fillRect(5, legendY - 5, 280, 45);
+    ctx.fillRect(5, legendY - 5, 350, 45);
 
     // Title on its own line
     ctx.fillStyle = '#a1a1aa';
@@ -527,6 +531,12 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
     ctx.fillRect(165, boxY, 12, 12);
     ctx.fillStyle = '#a1a1aa';
     ctx.fillText('Both', 181, boxY + 9);
+
+    // Orange (action effectiveness)
+    ctx.fillStyle = '#f97316';
+    ctx.fillRect(225, boxY, 12, 12);
+    ctx.fillStyle = '#a1a1aa';
+    ctx.fillText('Action', 241, boxY + 9);
   };
 
   useEffect(() => {

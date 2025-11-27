@@ -6,6 +6,7 @@ from typing import List, Dict, Any
 import sys
 import os
 from pathlib import Path
+import threading
 
 # Add the backend directory to sys.path if not already there
 backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -109,7 +110,29 @@ class EmbeddingService(EmbeddingServiceInterface):
                 text = text[:2000]
                 logger.warning(f"Truncated text to 2000 characters for embedding")
 
-            embedding = self.model.encode(text).tolist()
+            # Add timeout protection to prevent indefinite hangs
+            result = [None]
+            error = [None]
+
+            def encode_with_timeout():
+                try:
+                    result[0] = self.model.encode(text).tolist()
+                except Exception as e:
+                    error[0] = e
+
+            thread = threading.Thread(target=encode_with_timeout)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=30)  # 30 second timeout
+
+            if thread.is_alive():
+                logger.error("Embedding generation timed out after 30 seconds, returning zero vector")
+                return [0.0] * self._embedding_dim
+
+            if error[0]:
+                raise error[0]
+
+            embedding = result[0]
 
             # Verify dimension (should be 768 natively)
             if len(embedding) != self._embedding_dim:

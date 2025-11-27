@@ -730,9 +730,9 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                 </p>
               </div>
 
-              {/* Dual Knowledge Graph System */}
+              {/* Triple Knowledge Graph System (v0.2.1) */}
               <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-100">Two Types of Learning</h4>
+                <h4 className="text-sm font-semibold text-zinc-100">Three Types of Learning</h4>
                 <div className="space-y-2">
                   <div className="p-3 bg-zinc-800/50 rounded-lg">
                     <p className="text-xs font-medium text-blue-400 mb-1">Routing Graph (Query-based)</p>
@@ -748,32 +748,46 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                       appear together in your saved knowledge.
                     </p>
                   </div>
+                  <div className="p-3 bg-zinc-800/50 rounded-lg">
+                    <p className="text-xs font-medium text-orange-400 mb-1">Action Effectiveness Graph</p>
+                    <p className="text-xs text-zinc-400">
+                      Tracks which actions (search, add, update) work best in different contexts (recall, learning, analysis).
+                      Helps the system choose smarter actions based on what's worked before.
+                    </p>
+                  </div>
                 </div>
               </div>
 
               {/* Visual Elements */}
               <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-100">Node Colors</h4>
+                <h4 className="text-sm font-semibold text-zinc-100">Node Colors (by Source)</h4>
                 <div className="space-y-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-3 h-3 rounded-full bg-blue-500 mt-1"></div>
+                    <div>
+                      <p className="text-sm text-zinc-300 font-medium">Blue (Query Routing)</p>
+                      <p className="text-sm text-zinc-500">Concepts learned from your search queries — knows which collections answer best</p>
+                    </div>
+                  </div>
                   <div className="flex items-start gap-3">
                     <div className="w-3 h-3 rounded-full bg-green-500 mt-1"></div>
                     <div>
-                      <p className="text-sm text-zinc-300 font-medium">Green (&gt;70% success)</p>
-                      <p className="text-sm text-zinc-500">Queries with this concept find helpful answers most of the time</p>
+                      <p className="text-sm text-zinc-300 font-medium">Green (Memory Content)</p>
+                      <p className="text-sm text-zinc-500">Entities extracted from your memory_bank — tracks which ideas appear together</p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
-                    <div className="w-3 h-3 rounded-full bg-amber-500 mt-1"></div>
+                    <div className="w-3 h-3 rounded-full bg-purple-500 mt-1"></div>
                     <div>
-                      <p className="text-sm text-zinc-300 font-medium">Amber (40-70% success)</p>
-                      <p className="text-sm text-zinc-500">Moderate success rate — sometimes works, sometimes doesn't</p>
+                      <p className="text-sm text-zinc-300 font-medium">Purple (Both Graphs)</p>
+                      <p className="text-sm text-zinc-500">Concepts found in both routing and content graphs — strong signals</p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
-                    <div className="w-3 h-3 rounded-full bg-red-500 mt-1"></div>
+                    <div className="w-3 h-3 rounded-full bg-orange-500 mt-1"></div>
                     <div>
-                      <p className="text-sm text-zinc-300 font-medium">Red (&lt;40% success)</p>
-                      <p className="text-sm text-zinc-500">Low success rate — queries for this concept often don't find good answers</p>
+                      <p className="text-sm text-zinc-300 font-medium">Orange (Action Patterns)</p>
+                      <p className="text-sm text-zinc-500">Action effectiveness patterns — which operations work in which contexts</p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">

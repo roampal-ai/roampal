@@ -3,20 +3,6 @@
 **Release Date:** November 5, 2025
 **Build:** `Roampal_0.2.0_x64-setup.exe`
 
-## 🏆 Benchmark Achievement: 100% on LOCOMO (November 11, 2025)
-
-**After v0.2.0 release, Roampal achieved perfect score on industry-standard LOCOMO benchmark:**
-
-- **100% accuracy** (1542/1542 correct) on LOCOMO conversational memory benchmark
-- **+33.1 points** ahead of Mem0 (66.9%)
-- **+47.1 points** ahead of OpenAI Memory (52.9%)
-- First system to achieve perfect recall on ACL 2024 industry-standard benchmark
-
-**What this proves**: Roampal's 5-tier architecture + vector embeddings provide perfect long-term conversational memory recall out of the box, with no training required.
-
-[See full benchmark results →](BENCHMARKS.md)
-
----
 
 ## 🚀 Major Features
 
@@ -245,57 +231,6 @@ Success rates improve over time:
 - **Expected Impact**: Significantly improved outcome tracking accuracy (target: 95%+)
 - **Implementation**: `main.py:818-993` - Complete rewrite of `record_response` tool description
 
-### Competitive Performance Benchmarks (v0.2.0)
-- **NEW**: Comprehensive benchmark suite comparing Roampal against Mem0, ChatGPT Memory, and Claude Projects
-- **Reproducible Tests**: All benchmarks use industry-standard metrics and are fully reproducible via `pytest`
-- **Results Summary**:
-
-| Metric | Mem0 | ChatGPT | Claude | **Roampal** | Improvement |
-|--------|------|---------|--------|-------------|-------------|
-| **Memory Recall Accuracy** | 66.9% | 62.5% | - | **90.0%** | **+34.5%** |
-| **Search Latency (p95)** | 1.44s | - | - | **0.037s** | **39x faster** |
-| **Context Retention** | - | - | Multi-session | **100%** | **Perfect** |
-| **Relevance Precision@5** | 67% | - | - | **80%** | **+19%** |
-| **Token Efficiency** | 1,800 | - | - | **112** | **94% better** |
-| **KG Routing Accuracy** | N/A | N/A | N/A | **100%** | **Unique** |
-
-- **Key Achievements**:
-  - **39x faster retrieval** than Mem0's optimized selective retrieval pipeline (0.037s vs 1.44s p95 latency)
-  - **34% higher accuracy** than Mem0 on LOCOMO-style single-hop questions (90% vs 66.9%)
-  - **19% better precision** than Mem0 on relevance ranking (80% vs 67%)
-  - **94% more token-efficient** than Mem0 (112 vs 1,800 tokens per retrieval)
-  - **100% knowledge graph routing accuracy** on all 7 test cases (feature competitors don't have)
-  - **Perfect cross-session retention** (100% recall across simulated restarts)
-
-- **PROOF: KG Routing Actually Learns (HARD MODE TEST)**:
-  - **Test Strategy**: Created semantic confusion attack to force routing to matter
-    - 5 Python docs in memory_bank (CORRECT answers)
-    - 20 other language docs in working/history (WRONG answers)
-    - All 25 docs match "async programming" semantically (4:1 noise ratio)
-    - Without smart routing: System gets confused, returns mixed results
-    - With learned routing: System ignores semantic noise, routes to correct collection
-  - **Result**: **80% precision from query 1** - system figured it out IMMEDIATELY
-  - **No learning curve needed**: So good it didn't need to learn, just worked perfectly
-  - **Maintained 80% for all 20 queries**: Perfect consistency, zero degradation
-  - **What this proves**:
-    - Routing KG + Content KG coordination is REAL, not placebo
-    - System can distinguish signal from semantic noise
-    - Works even when we try to break it with confusing data
-  - **Why this matters**: Real users have messy data with semantic overlap
-  - Test: `benchmarks/test_learning_curve_REAL.py` - Passes with 80% precision throughout
-- **Methodology**: Tests use identical evaluation criteria as competitor benchmarks
-  - Mem0: LOCOMO benchmark (arXiv:2504.19413v1) for recall accuracy and latency
-  - ChatGPT: SimpleQA benchmark for factual accuracy
-  - Claude Projects: Multi-session retention testing
-- **Benchmark Suite**: Test infrastructure in `benchmarks/` folder
-  - `test_standard_metrics.py` - Core competitive benchmarks (6 tests, all passing)
-  - `test_kg_routing.py` - KG routing accuracy (7 tests, 100% pass rate)
-  - `test_learning_curve_REAL.py` - Learning effectiveness under semantic confusion (passing)
-  - `test_natural_conversation.py` - Natural feedback simulation (experimental)
-  - **Note**: Several tests deprecated post-v0.2.0 due to API changes (see benchmarks/README.md)
-  - `COMPETITIVE_ANALYSIS.md` - Detailed methodology and results
-- **Reproducibility**: Run `pytest benchmarks/test_standard_metrics.py -v` to verify results
-- **Impact**: Provides objective evidence that Roampal outperforms industry leaders on standard metrics
 
 ## 🐛 Bug Fixes
 

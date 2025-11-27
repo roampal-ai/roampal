@@ -5,6 +5,21 @@ import sys
 import os
 from chromadb.config import Settings as ChromaSettings
 
+# BM25 for hybrid search (v2.1 Enhanced Retrieval)
+try:
+    from rank_bm25 import BM25Okapi
+    import nltk
+    # Download punkt tokenizer silently if needed
+    try:
+        nltk.data.find('tokenizers/punkt')
+    except LookupError:
+        nltk.download('punkt', quiet=True)
+    BM25_AVAILABLE = True
+except ImportError:
+    BM25_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("BM25 not available (pip install rank-bm25 nltk)")
+
 # Add the backend directory to sys.path if not already there
 backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if backend_dir not in sys.path:
@@ -43,6 +58,14 @@ class ChromaDBAdapter:
         self._auto_init_lock = False
         self._current_path = None
         self.user_id = user_id  # Add user context
+
+        # BM25 index for hybrid search (v2.1)
+        self.bm25_index = None
+        self.bm25_docs = []
+        self.bm25_ids = []
+        self.bm25_metadatas = []
+        self._bm25_needs_rebuild = True
+
         # Only create local dirs if not using server
         if not self.use_server:
             os.makedirs(self.db_path, exist_ok=True)
@@ -156,6 +179,9 @@ class ChromaDBAdapter:
                 documents=documents  # ChromaDB needs documents to persist properly
             )
 
+            # Mark BM25 index as needing rebuild (v2.1 hybrid search)
+            self._bm25_needs_rebuild = True
+
             # ChromaDB now handles persistence automatically in both modes
             # The reconnection workaround has been removed as of 2024-09-17
             # Data is persisted on write with proper transaction handling
@@ -256,6 +282,130 @@ class ChromaDBAdapter:
             logger.error(f"[ChromaDB] Critical error in query_vectors: {e}")
             return []
 
+    async def _build_bm25_index(self):
+        """Build BM25 index from all documents (v2.1 Hybrid Search)"""
+        if not BM25_AVAILABLE:
+            return
+
+        await self._ensure_initialized()
+
+        if self.collection.count() == 0:
+            logger.debug("[BM25] Collection empty, skipping index build")
+            return
+
+        try:
+            # Get all documents
+            all_data = self.collection.get(include=["documents", "metadatas"])
+            self.bm25_ids = all_data.get("ids", [])
+            self.bm25_docs = all_data.get("documents", [])
+            self.bm25_metadatas = all_data.get("metadatas", [])
+
+            # Tokenize documents for BM25
+            tokenized_docs = [doc.lower().split() for doc in self.bm25_docs]
+
+            # Build BM25 index
+            self.bm25_index = BM25Okapi(tokenized_docs)
+            self._bm25_needs_rebuild = False
+
+            logger.debug(f"[BM25] Index built with {len(self.bm25_docs)} documents")
+        except Exception as e:
+            logger.warning(f"[BM25] Index build failed: {e}")
+            self.bm25_index = None
+
+    async def hybrid_query(
+        self,
+        query_vector: List[float],
+        query_text: str,
+        top_k: int = 5,
+        filters: Optional[Dict] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Hybrid search combining vector (semantic) + BM25 (lexical) with RRF fusion.
+        Based on industry best practices (Elastic, Weaviate, Microsoft Azure, 2025).
+
+        Args:
+            query_vector: Dense embedding for semantic search
+            query_text: Text query for BM25 lexical search
+            top_k: Number of results to return
+            filters: Optional metadata filters
+
+        Returns:
+            Fused results ranked by Reciprocal Rank Fusion (RRF)
+        """
+        # 1. Vector search (semantic similarity)
+        vector_results = await self.query_vectors(query_vector, top_k=top_k*2, filters=filters)
+
+        # If BM25 not available, fall back to pure vector search
+        if not BM25_AVAILABLE or not self.bm25_index:
+            return vector_results[:top_k]
+
+        try:
+            # 2. Rebuild BM25 index if needed
+            if self._bm25_needs_rebuild:
+                await self._build_bm25_index()
+
+            if not self.bm25_index:
+                # BM25 build failed, use vector only
+                return vector_results[:top_k]
+
+            # 3. BM25 search (lexical matching)
+            tokenized_query = query_text.lower().split()
+            bm25_scores = self.bm25_index.get_scores(tokenized_query)
+
+            # Get top BM25 results
+            top_bm25_indices = sorted(
+                range(len(bm25_scores)),
+                key=lambda i: bm25_scores[i],
+                reverse=True
+            )[:top_k*2]
+
+            bm25_results = []
+            for idx in top_bm25_indices:
+                if idx < len(self.bm25_ids):
+                    bm25_results.append({
+                        "id": self.bm25_ids[idx],
+                        "text": self.bm25_docs[idx],
+                        "metadata": self.bm25_metadatas[idx] if idx < len(self.bm25_metadatas) else {},
+                        "bm25_score": float(bm25_scores[idx]),
+                        "distance": max(0.0, 1.0 - (bm25_scores[idx] / 100.0))  # Normalize to distance
+                    })
+
+            # 4. Reciprocal Rank Fusion (RRF) with k=60 (research-backed constant)
+            rrf_scores = {}
+
+            # Add vector search rankings
+            for rank, result in enumerate(vector_results):
+                doc_id = result["id"]
+                rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + 1.0 / (rank + 60)
+
+            # Add BM25 rankings
+            for rank, result in enumerate(bm25_results):
+                doc_id = result["id"]
+                rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + 1.0 / (rank + 60)
+
+            # 5. Merge results and add RRF scores
+            merged = {}
+            for r in vector_results + bm25_results:
+                doc_id = r["id"]
+                if doc_id not in merged:
+                    merged[doc_id] = r
+                    merged[doc_id]["rrf_score"] = rrf_scores.get(doc_id, 0.0)
+                    # Keep original distance, but add RRF for ranking
+
+            # 6. Sort by RRF score and return top-k
+            final_results = sorted(
+                merged.values(),
+                key=lambda x: x.get("rrf_score", 0.0),
+                reverse=True
+            )[:top_k]
+
+            logger.debug(f"[HYBRID] Merged {len(vector_results)} vector + {len(bm25_results)} BM25 → {len(final_results)} results")
+            return final_results
+
+        except Exception as e:
+            logger.warning(f"[HYBRID] Hybrid search failed, falling back to vector only: {e}")
+            return vector_results[:top_k]
+
     async def get_collection_count(self) -> int:
         """Get the total number of items in the collection"""
         await self._ensure_initialized()
@@ -273,7 +423,7 @@ class ChromaDBAdapter:
     ) -> Dict[str, Any]:
         await self._ensure_initialized()
         try:
-            result = self.collection.get(ids=ids, include=["embeddings", "metadatas"])
+            result = self.collection.get(ids=ids, include=["documents", "embeddings", "metadatas"])
             return result
         except Exception as e:
             logger.error(f"Failed to get vectors by ids: {e}", exc_info=True)
@@ -315,7 +465,7 @@ class ChromaDBAdapter:
     def get_fragment(self, fragment_id: str) -> Optional[Dict[str, Any]]:
         if self.collection is None:
             raise RuntimeError("ChromaDB collection not initialized. Cannot get fragment.")
-        result = self.collection.get(ids=[fragment_id], include=["embeddings", "metadatas"])
+        result = self.collection.get(ids=[fragment_id], include=["embeddings", "metadatas", "documents"])
         if not result or not result.get("ids"):
             return None
         embeddings = result.get("embeddings", [])
@@ -326,10 +476,13 @@ class ChromaDBAdapter:
             vector = embeddings[0]
         metadatas = result.get("metadatas", [])
         metadata = metadatas[0] if isinstance(metadatas, (list, tuple)) and len(metadatas) > 0 else {}
+        documents = result.get("documents", [])
+        content = documents[0] if isinstance(documents, (list, tuple)) and len(documents) > 0 else ""
         return {
             "id": result["ids"][0],
             "vector": vector,
             "metadata": metadata,
+            "content": content,
         }
 
     def update_fragment_metadata(self, fragment_id: str, metadata_updates: Dict[str, Any]):
@@ -375,6 +528,41 @@ class ChromaDBAdapter:
             metadatas=[metadata]
         )
         logger.info(f"Fragment {fragment_id} composite_score updated to {new_score}")
+
+    async def update_metadata(self, doc_id: str, metadata: Dict[str, Any]):
+        """Update metadata for existing document without re-embedding.
+
+        Used by deduplication system to increment counters (e.g., mentioned_count)
+        or update quality metrics without regenerating embeddings.
+        """
+        await self._ensure_initialized()
+        if self.collection is None:
+            raise RuntimeError("ChromaDB collection not initialized")
+
+        try:
+            # Get existing document to preserve embedding
+            frag = self.get_fragment(doc_id)
+            if not frag:
+                logger.warning(f"update_metadata: No document with id={doc_id}")
+                return
+
+            if frag.get("vector") is None:
+                logger.warning(
+                    f"Skipping metadata update for {doc_id} "
+                    "because it has no associated vector."
+                )
+                return
+
+            # Update with new metadata while preserving embedding
+            self.collection.update(
+                ids=[doc_id],
+                metadatas=[metadata]
+            )
+            logger.info(f"Metadata updated for document {doc_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to update metadata for {doc_id}: {e}")
+            raise
 
     async def cleanup(self):
         """Gracefully cleanup ChromaDB connections"""

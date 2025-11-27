@@ -1,0 +1,95 @@
+{
+  "routing_patterns": {
+    "development_and_uses": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "user_prefers_python": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "and_uses_projects": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "backend_development_and": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "prefers_python_backend": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "uses_projects_detail": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "python_backend_development": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "development_and": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "user_prefers": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "backend_development": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "projects_detail": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "prefers_python": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "and_uses": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "uses_projects": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "python_backend": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "backend": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    },
+    "python": {
+      "collections_used": {},
+      "best_collection": "memory_bank",
+      "success_rate": 0.5
+    }
+  },
+  "success_rates": {},
+  "failure_patterns": {},
+  "problem_categories": {},
+  "problem_solutions": {},
+  "solution_patterns": {},
+  "context_action_effectiveness": {}
+}

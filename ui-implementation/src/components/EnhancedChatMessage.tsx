@@ -4,6 +4,7 @@ import { EnhancedMessageDisplay } from './EnhancedMessageDisplay';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolExecutionDisplay } from './ToolExecutionDisplay';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface EnhancedChatMessageProps {
   message: {
@@ -58,7 +59,7 @@ export const EnhancedChatMessage: React.FC<EnhancedChatMessageProps> = ({
   useEffect(() => {
     const fetchAssistantName = async () => {
       try {
-        const response = await apiFetch('http://localhost:8000/api/personality/current');
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/personality/current`);
         if (response.ok) {
           const data = await response.json();
           // Parse YAML properly - handle quoted and unquoted values

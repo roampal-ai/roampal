@@ -7,6 +7,7 @@ import {
   XMarkIcon
 } from '@heroicons/react/24/outline';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface MemoryStats {
   conversation_id: string;
@@ -52,7 +53,7 @@ const MemoryStatsPanel: React.FC<MemoryStatsPanelProps> = ({ isOpen, onClose }) 
     const fetchStats = async () => {
       try {
         setLoading(true);
-        const response = await apiFetch('http://localhost:8000/api/chat/stats');
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/chat/stats`);
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }

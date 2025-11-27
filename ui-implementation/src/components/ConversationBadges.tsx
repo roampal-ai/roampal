@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { TrashIcon, ChatBubbleLeftIcon, ClockIcon } from '@heroicons/react/24/outline';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface Conversation {
   id: string;
@@ -32,7 +33,7 @@ export const ConversationBadges: React.FC<ConversationBadgesProps> = ({
 
   const fetchConversations = async () => {
     try {
-      const response = await apiFetch('http://localhost:8000/api/conversations');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/conversations`);
       if (response.ok) {
         const data = await response.json();
         setConversations(data);

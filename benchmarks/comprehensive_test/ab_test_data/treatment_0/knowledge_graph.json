@@ -1,0 +1,22 @@
+{
+  "routing_patterns": {},
+  "success_rates": {
+    "working_d93b39e2_1764257323.736233": {
+      "success_count": 0,
+      "failure_count": 2,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "working_592a9047_1764257323.920582": {
+      "success_count": 0,
+      "failure_count": 2,
+      "partial_count": 0,
+      "success_rate": 0.0
+    }
+  },
+  "failure_patterns": {},
+  "problem_categories": {},
+  "problem_solutions": {},
+  "solution_patterns": {},
+  "context_action_effectiveness": {}
+}

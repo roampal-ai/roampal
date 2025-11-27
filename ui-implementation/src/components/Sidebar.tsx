@@ -4,6 +4,7 @@ import { useChatStore, ChatSession as StoreChatSession } from '../stores/useChat
 import { modelContextService } from '../services/modelContextService';
 import { apiFetch } from '../utils/fetch';
 import { DeleteSessionModal } from './DeleteSessionModal';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface SidebarProps {
   activeShard: string;
@@ -76,7 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     const fetchAssistantName = async () => {
       try {
-        const response = await apiFetch('http://localhost:8000/api/personality/current');
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/personality/current`);
         if (response.ok) {
           const data = await response.json();
           // Parse YAML properly - handle quoted and unquoted values

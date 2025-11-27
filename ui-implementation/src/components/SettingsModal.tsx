@@ -4,6 +4,7 @@ import { MemoryBankModal } from './MemoryBankModal';
 import { ModelContextSettings } from './ModelContextSettings';
 import { IntegrationsPanel } from './IntegrationsPanel';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -30,7 +31,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
   useEffect(() => {
     const fetchCurrentModel = async () => {
       try {
-        const response = await apiFetch('http://localhost:8000/api/model/current');
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/current`);
         if (response.ok) {
           const data = await response.json();
           setCurrentModel(data.model || '');
@@ -42,7 +43,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
 
     const fetchProviders = async () => {
       try {
-        const response = await apiFetch('http://localhost:8000/api/model/providers/detect');
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/providers/detect`);
         if (response.ok) {
           const data = await response.json();
           setProviders(data.providers || []);

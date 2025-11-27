@@ -1,0 +1,121 @@
+{
+  "routing_patterns": {
+    "python_async": {
+      "collections_used": {
+        "working": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "patterns": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "history": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "books": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "memory_bank": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        }
+      },
+      "best_collection": "patterns",
+      "success_rate": 0.5,
+      "last_used": "2025-11-26T17:58:21.920671"
+    },
+    "python": {
+      "collections_used": {
+        "working": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "patterns": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "history": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "books": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "memory_bank": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        }
+      },
+      "best_collection": "patterns",
+      "success_rate": 0.5,
+      "last_used": "2025-11-26T17:58:21.920671"
+    },
+    "async": {
+      "collections_used": {
+        "working": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "patterns": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "history": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "books": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        },
+        "memory_bank": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 2
+        }
+      },
+      "best_collection": "patterns",
+      "success_rate": 0.5,
+      "last_used": "2025-11-26T17:58:21.920671"
+    }
+  },
+  "success_rates": {},
+  "failure_patterns": {},
+  "problem_categories": {},
+  "problem_solutions": {},
+  "solution_patterns": {},
+  "context_action_effectiveness": {}
+}

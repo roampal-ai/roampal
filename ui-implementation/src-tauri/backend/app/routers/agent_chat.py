@@ -129,6 +129,10 @@ _generation_tasks: Dict[str, Dict[str, Any]] = {}
 _active_tasks: Dict[str, asyncio.Task] = {}  # Track task handles for cancellation
 _task_lock = threading.Lock()
 
+# Search cache for retrieved memory scoring (architecture.md line 565)
+# Tracks which memories were retrieved during search to score them when outcome is detected
+_search_cache: Dict[str, List[str]] = {}  # {conversation_id: [doc_ids]}
+
 
 def use_dynamic_limits() -> bool:
     """Check if dynamic limits are enabled (default True unless ROAMPAL_CHAIN_STRATEGY=fixed)"""
@@ -608,6 +612,112 @@ class AgentChatService:
                 "content": message
             })
 
+            # CONTEXTUAL GUIDANCE: Organic recall + Action-effectiveness (v0.2.1)
+            # Merges Content KG insights with Action-Effectiveness KG warnings
+            try:
+                # Build recent conversation context (last 5 messages)
+                recent_conv = [
+                    {'role': m['role'], 'content': m['content']}
+                    for m in self.conversation_histories[conversation_id][-5:]
+                    if m['role'] in ['user', 'assistant']
+                ]
+
+                # Detect context type for action-effectiveness guidance
+                system_prompts = [m['content'] for m in self.conversation_histories[conversation_id] if m['role'] == 'system']
+                context_type = await self.memory.detect_context_type(
+                    system_prompts=system_prompts,
+                    recent_messages=recent_conv
+                )
+
+                # Analyze conversation for organic insights (Content KG)
+                org_context = await self.memory.analyze_conversation_context(
+                    current_message=message,
+                    recent_conversation=recent_conv,
+                    conversation_id=conversation_id
+                )
+
+                # Check action-effectiveness for tool guidance (Action-Effectiveness KG)
+                action_stats = []
+                available_actions = ["search_memory", "create_memory", "update_memory", "archive_memory"]
+                collections_to_check = [None, "books", "working", "history", "patterns", "memory_bank"]  # Check all 5 tiers + wildcard
+
+                for action in available_actions:
+                    # Check across all collections
+                    for collection in collections_to_check:
+                        stats = self.memory.get_action_effectiveness(context_type, action, collection)
+                        # Only surface stats if we have enough data (10+ uses)
+                        if stats and stats['total_uses'] >= 10:
+                            coll_suffix = f" on {collection}" if collection else ""
+                            action_stats.append({
+                                'action': action,
+                                'collection': collection,
+                                'success_rate': stats['success_rate'],
+                                'uses': stats['total_uses'],
+                                'suffix': coll_suffix
+                            })
+
+                # Format and inject combined guidance if any insights exist
+                has_content_insights = (
+                    org_context and (
+                        org_context.get('relevant_patterns') or
+                        org_context.get('past_outcomes') or
+                        org_context.get('proactive_insights')
+                    )
+                )
+
+                if has_content_insights or action_stats:
+                    guidance_msg = f"\n\n═══ CONTEXTUAL GUIDANCE (Context: {context_type}) ═══\n"
+
+                    # Content KG insights
+                    if org_context and org_context.get('relevant_patterns'):
+                        guidance_msg += "\n📋 Past Experience:\n"
+                        for pattern in org_context['relevant_patterns'][:2]:
+                            guidance_msg += f"  • {pattern['insight']}\n"
+                            guidance_msg += f"    → {pattern['text'][:100]}...\n"
+
+                    if org_context and org_context.get('past_outcomes'):
+                        guidance_msg += "\n⚠️ Past Failures to Avoid:\n"
+                        for outcome in org_context['past_outcomes'][:2]:
+                            guidance_msg += f"  • {outcome['insight']}\n"
+
+                    # Action-Effectiveness KG stats (informational only)
+                    if action_stats:
+                        # Sort by uses (most frequently used first)
+                        action_stats.sort(key=lambda x: x['uses'], reverse=True)
+                        top_stats = action_stats[:5]  # Show top 5 most-used
+
+                        guidance_msg += "\n📊 Action Outcome Stats (which actions led to correct answers):\n"
+                        guidance_msg += "In similar contexts, these actions contributed to correct final answers:\n"
+                        for stat in top_stats:
+                            suffix = stat.get('suffix', '')
+                            success_rate = int(stat['success_rate']*100)
+                            uses = stat['uses']
+                            guidance_msg += f"  • {stat['action']}(){suffix}: {success_rate}% of uses led to correct answers ({uses} uses)\n"
+                        guidance_msg += "\n⚠️ IMPORTANT: Low % means 'didn't help answer THIS question correctly', NOT 'tool is broken'.\n"
+                        guidance_msg += "If create_memory() returned a doc_id with no errors, it worked! Don't retry.\n"
+
+                    if org_context and org_context.get('proactive_insights'):
+                        guidance_msg += "\n💡 Search Recommendations:\n"
+                        for insight in org_context['proactive_insights'][:2]:
+                            guidance_msg += f"  • {insight}\n"
+
+                    if org_context and org_context.get('topic_continuity'):
+                        for topic in org_context['topic_continuity'][:1]:
+                            guidance_msg += f"\n🔗 {topic['insight']}\n"
+
+                    guidance_msg += "\nUse this guidance to choose appropriate tools and provide informed responses.\n"
+
+                    # Inject as system message
+                    self.conversation_histories[conversation_id].append({
+                        "role": "system",
+                        "content": guidance_msg
+                    })
+                    logger.info(f"[CONTEXTUAL GUIDANCE] Context={context_type}, Content insights={len(org_context.get('relevant_patterns', []))}, Action stats={len(action_stats)}")
+
+            except Exception as e:
+                logger.error(f"[CONTEXTUAL GUIDANCE ERROR] {e}", exc_info=True)
+                # Non-blocking - continue even if guidance fails
+
             # Update model limits
             current_model = self.llm.model_name if hasattr(self.llm, 'model_name') else self.model_name
             if current_model != self.model_name:
@@ -769,7 +879,14 @@ class AgentChatService:
 
                 elif event["type"] == "tool_call":
                     # Tool call from LLM - execute using unified handler
-                    for tool_call in event.get("tool_calls", []):
+                    # SAFEGUARD: Limit tool calls per batch to prevent runaway expansion
+                    MAX_TOOLS_PER_BATCH = 10
+                    tool_calls_list = event.get("tool_calls", [])
+                    if len(tool_calls_list) > MAX_TOOLS_PER_BATCH:
+                        logger.warning(f"[TOOL] Truncating {len(tool_calls_list)} tool calls to {MAX_TOOLS_PER_BATCH}")
+                        tool_calls_list = tool_calls_list[:MAX_TOOLS_PER_BATCH]
+                    
+                    for tool_call in tool_calls_list:
                         tool_name = tool_call.get("function", {}).get("name", "unknown")
                         tool_args = tool_call.get("function", {}).get("arguments", {})
 
@@ -910,12 +1027,29 @@ class AgentChatService:
                         logger.info(f"[OUTCOME] Detection result: {outcome_result.get('outcome')} (confidence: {outcome_result.get('confidence', 0):.2f})")
 
                         if outcome_result.get("outcome") in ["worked", "failed", "partial"]:
-                            # Record outcome and update score
+                            outcome = outcome_result["outcome"]
+
+                            # Record outcome for previous assistant response
                             await self.memory.record_outcome(
                                     doc_id=prev_assistant["doc_id"],
-                                    outcome=outcome_result["outcome"]
+                                    outcome=outcome
                                 )
-                            logger.info(f"[OUTCOME] Recorded '{outcome_result['outcome']}' for doc_id {prev_assistant['doc_id']}")
+                            logger.info(f"[OUTCOME] Recorded '{outcome}' for doc_id {prev_assistant['doc_id']}")
+
+                            # Score retrieved memories with same outcome (architecture.md line 565)
+                            if conversation_id in _search_cache:
+                                cached_doc_ids = _search_cache[conversation_id]
+                                logger.info(f"[OUTCOME] Scoring {len(cached_doc_ids)} cached memories with outcome={outcome}")
+
+                                for cached_doc_id in cached_doc_ids:
+                                    try:
+                                        await self.memory.record_outcome(doc_id=cached_doc_id, outcome=outcome)
+                                    except Exception as e:
+                                        logger.warning(f"[OUTCOME] Failed to score cached memory {cached_doc_id}: {e}")
+
+                                # Clear cache after scoring
+                                del _search_cache[conversation_id]
+                                logger.debug(f"[OUTCOME] Cleared search cache for conversation {conversation_id}")
                         else:
                             logger.debug(f"[OUTCOME] Skipping outcome '{outcome_result.get('outcome')}' (not worked/failed/partial)")
                     else:
@@ -1116,66 +1250,185 @@ class AgentChatService:
         # Thinking tags disabled (2025-10-17) - LLM provides reasoning in natural language when needed
         # No special response format instruction required
 
+        # 2. IDENTITY FIRST (Personality anchors behavior)
+        personality_prompt = self._load_personality_template()
+        if personality_prompt:
+            parts.append(personality_prompt)
+        else:
+            parts.append("""You are Roampal - a memory-enhanced AI with persistent knowledge across all sessions.
+
+Unlike typical AI assistants, you have access to a continuously learning memory system that:
+• Remembers everything from past conversations
+• Learns what works for this specific user
+• Provides context automatically before you respond""")
+
+        # 3. CONFIGURATION
         parts.append(f"""
 
-[Current Date & Time]
-Today is {current_datetime.strftime('%A, %B %d, %Y')} at {current_datetime.strftime('%I:%M %p')}.
+[System Configuration]
+Date/Time: {current_datetime.strftime('%A, %B %d, %Y at %I:%M %p')}
+Model: {current_model} | Context: {context_size:,} tokens
+Recent History: Last 6 messages included in your context
 
-When asked about the date or time, use this information directly - do not search memory or claim lack of access.
+When asked about the date or time, use this information directly - do not search memory or claim lack of access.""")
 
-[Your Configuration]
-Model: {current_model}
-Context Window: {context_size:,} tokens
-Recent History: Last 6 messages (3 exchanges) included in prompt""")
-
-        # 2. Tool Usage Instructions
+        # 4. AUTOMATED INTELLIGENCE (What the system does FOR you)
         parts.append("""
 
-[Tool Usage - YOUR PRIMARY CAPABILITY]
+[How Memory Automation Works]
 
-You have access to search_memory to retrieve past conversations, user facts, and learned patterns.
+**Cold Start (Message 1 of every conversation):**
+The system AUTOMATICALLY injects your user profile from the Content Knowledge Graph.
+You receive this as context BEFORE seeing the user's first message.
+• Action: Respond naturally using the provided context - no need to search
+• Example: User says "hey" → You already have context → "Hey [name], continuing work on [project]?"
 
-WHEN TO USE search_memory:
-✓ User asks about past conversations or their personal information
-✓ User references something we discussed before ("that Docker issue", "my project")
-✓ User asks about their preferences, context, or uploaded documents
-✓ Query could benefit from learned patterns or proven solutions
-✓ Ambiguous questions that might have relevant history
+**Organic Recall (Every message):**
+BEFORE you see the user's message, the system analyzes it and injects:
+• 📋 Past Experience: Proven solutions from similar conversations (from Content KG)
+• ⚠️ Past Failures: What didn't work before (from failure_patterns graph)
+• 📊 Tool Stats: Which tools led to correct answers in similar contexts (from Action-Effectiveness KG)
+• 💡 Recommendations: Best collections to search based on learned patterns
 
-WHEN NOT TO USE search_memory:
-✗ General knowledge questions (use your training data)
-✗ Current conversation continuation (context is already present)
-✗ Simple acknowledgments ("thanks", "ok", "got it")
-✗ Meta questions about the system itself
+**How to Use This:**
+1. Read the guidance - it's intelligence extracted from past successful/failed interactions
+2. If guidance mentions proven solutions, reference them in your response
+3. If stats show search_memory(patterns) worked 85% in this context, prioritize searching patterns
+4. If low tool stats (<50%), don't assume tool is broken - it just didn't help answer correctly before
+5. Respond naturally - the system handles learning and promotion automatically""")
 
-METADATA FILTERING (Advanced):
-You can filter searches by exact metadata matches using the metadata parameter.
+        # 5. TOOL USAGE (Simple, trigger-based)
+        parts.append("""
 
-Common use cases (execute silently, never show function syntax to user):
-• Filter books by author or title
-• Find content from specific dates (use timestamp field)
-• Filter by quality (last_outcome: "worked" or "failed")
-• Filter by source (source: "mcp_claude" for MCP-learned content)
+[Memory Search Tool]
 
-When user asks:
-• "Show me books by Logan" → Search books collection with author filter
-• "What worked before?" → Search with last_outcome="worked" filter
-• "Recent conversations" or "today's messages" → Search with today's timestamp filter
+**Why Search is Your Superpower:**
+• Cold start gave you basics → search gives you DETAILS and full context
+• Organic guidance points you to proven patterns → search retrieves the actual solutions
+• Your training data is generic → memory is personalized to THIS user's work, preferences, history
+• Search liberally - it's fast, accurate, and makes every response feel magical
 
-CRITICAL: Distinguish between system data and training data:
-• System data = Search results from search_memory tool (user's actual documents and conversations)
-• Training data = Your pre-training knowledge (general world knowledge)
-• NEVER claim system data contains information from your training data
-• NEVER fabricate sources - only cite what search_memory actually returns
-• If search returns 0 results, clearly state "I don't have any information about that in your data"
+**When to Search:**
+• User says "my", "I told you", "remember", "we discussed" → Search immediately
+• User asks factual question about themselves → Search memory_bank
+• User references past work → Search patterns + history
+• Organic guidance recommends a collection → Search that collection
+• Cold start context is insufficient → Search for more details
 
-When in doubt, searching is better than missing important context.""")
+**When NOT to Search:**
+• General knowledge questions (use your training data)
+• Current conversation continuation (context already present)
+• You already have the answer from injected context
 
-        # Add stronger tool-calling instruction for OpenAI-style models (LM Studio)
+**Tool: search_memory(query, collections=None, limit=5, metadata=None)**
+• query: Use user's EXACT words (don't simplify or extract keywords)
+• collections: Omit for auto-routing (recommended), or specify: ["memory_bank", "books", "working", "history", "patterns"]
+• limit: 5 (default) to 20 (for broad queries like "show me all...")
+• metadata: Optional filters (timestamp, last_outcome, has_code, author, title, source)
+
+**Collection Guide:**
+• memory_bank = User facts (AUTHORITATIVE - trust over conversation history)
+• books = Uploaded documents (AUTHORITATIVE - reference material)
+• patterns = Proven solutions (HIGH - worked multiple times)
+• history = Past conversations (MODERATE - may be outdated)
+• working = Recent session context (LOW - temporary)
+
+**Anti-Hallucination Rule:**
+If search returns [], say: "I don't see any information about X in your data."
+NEVER pretend to remember when search returned 0 results.
+NEVER fabricate sources - only cite what search_memory actually returns.""")
+
+        # 6. MEMORY CREATION (Simple rules)
+        parts.append("""
+
+[Memory Creation Tool]
+
+**Why Storing Matters:**
+What you store NOW becomes context for FUTURE conversations. This is how you evolve from "helpful AI" to "personalized assistant who knows me."
+Store proactively - it's what makes Roampal feel continuous, not reset-every-session.
+
+**When to Store (create_memory):**
+✓ User shares identity info: "My name is X" → store
+✓ User shares preferences: "I prefer Y" → store
+✓ User shares goals/projects: "Working on Z" → store
+✓ You discover what works for this user: "Full queries work better than keywords for this user" → store
+✓ You make a mistake: "I assumed X but user wanted Y - note for future" → store
+
+**When NOT to Store:**
+✗ Session transcripts (working memory auto-captures)
+✗ Temporary task details ("currently debugging...")
+✗ General knowledge (not user-specific)
+✗ Say "I'll remember" without calling the tool
+
+**Tool: create_memory(content, tags=[], importance=0.7, confidence=0.7)**
+• content: The fact to remember (be specific and complete)
+• tags: ["identity", "preference", "goal", "project", "system_mastery", "agent_growth"]
+• importance: How critical (0.0-1.0)
+• confidence: How certain you are (0.0-1.0)
+
+**Quality Ranking:** memory_bank uses importance × confidence for ranking (not outcome scores)
+
+For updates: update_memory(old_content="uses React", new_content="uses Vue now")
+For archiving: archive_memory(content="old project that's completed")""")
+
+        # 7. SEARCH RESULTS + FORMATTING
+        parts.append("""
+
+[Search Results]
+
+Each result includes metadata: relevance (0.0-1.0), age, use count, outcome (worked/failed), and source_context (book name).
+Use this naturally: "This worked 3 times before" or "According to [source]..."
+
+[Formatting]
+
+Use Markdown: **bold**, *italic*, `code`, # headings, lists, ```code blocks```, > blockquotes""")
+
+        # 8. OUTCOME LEARNING
+        parts.append("""
+
+[Outcome Learning]
+
+The system learns from user feedback automatically:
+• User reactions ("thanks!", "that worked", "not what I meant") score both your response AND any memories you used
+• Helpful memories get promoted to patterns; unhelpful ones get demoted or removed
+• **Your role:** Respond naturally. The system handles learning automatically.""")
+
+        # 9. ACTION-EFFECTIVENESS STATS
+        parts.append("""
+
+[Action-Effectiveness Stats]
+
+When you see stats like "search_memory(patterns): 45% led to correct answers":
+• High % (>70%): Prioritize this tool+collection combo
+• Low % (<40%): Try other approaches first, but don't avoid entirely
+• Stats measure "led to correct answer", not tool reliability. Use to prioritize, not avoid.""")
+
+        # 10. CRITICAL: ALWAYS RESPOND WITH TEXT (fixes tool-only loop bug)
+        parts.append("""
+
+[CRITICAL - Response Behavior]
+
+AFTER using ANY tool (search_memory, create_memory, etc.), you MUST:
+1. Wait for the tool result
+2. ALWAYS respond with a conversational text message to the user
+
+NEVER send multiple tool calls without responding to the user between them.
+NEVER leave the user without a text response after a tool call.
+If a tool returns no results, tell the user: "I didn't find anything about X."
+If a tool succeeds, summarize what you found and continue the conversation.
+
+Your capabilities are LIMITED to the tools provided. You do NOT have:
+• Web search capability
+• Real-time internet access
+• Ability to fetch URLs
+Only use the memory tools (search_memory, create_memory, update_memory, archive_memory) that are explicitly provided.""")
+
+        # Add OpenAI-style tool calling instruction for LM Studio
+        parts.append("""
+""")
         if self.llm and hasattr(self.llm, 'api_style') and self.llm.api_style == "openai":
             logger.info(f"[SYSTEM PROMPT] Adding OpenAI-style tool calling instructions (api_style={self.llm.api_style})")
             parts.append("""
-
 [IMPORTANT - Function Calling]
 
 You have access to functions/tools. Use them when appropriate:
@@ -1186,70 +1439,6 @@ You have access to functions/tools. Use them when appropriate:
 Always wait for function results before responding with detailed information.""")
         else:
             logger.info(f"[SYSTEM PROMPT] NOT adding OpenAI instructions. llm={self.llm}, has api_style={hasattr(self.llm, 'api_style') if self.llm else 'N/A'}, api_style value={getattr(self.llm, 'api_style', 'N/A') if self.llm else 'N/A'}")
-
-        parts.append("""
-
-[Collections]
-
-memory_bank: Your persistent notes about the user (identity, preferences, projects) - tool-managed
-patterns: Proven solutions that worked before - promoted from successful interactions
-books: User-uploaded reference documents - permanent knowledge base
-history: Past conversations (30 days) - searches across all your chats
-working: Current session context (24 hours) - searches globally across conversations
-
-
-[Search Results]
-
-Each memory result includes helpful metadata:
-• Relevance: How closely it matches your query (0.0-1.0)
-• Age: When it was created (e.g., "2 hours ago")
-• Uses: How often it's been accessed (indicates reliability)
-• Outcome: Whether approaches worked/failed before
-• source_context: For books, the document name (e.g., "artofwar" for The Art of War)
-
-Use this to provide informed responses: "This worked 3 times before" or "According to artofwar..."
-
-
-[Formatting]
-
-Use Markdown: **bold**, *italic*, `code`, # headings, lists, ```code blocks```, :::callouts, > blockquotes
-
-
-[Outcome Detection]
-
-When you answer using memories, the system learns from user reactions:
-• "worked" (enthusiastic satisfaction) → Strengthens memory, increases promotion chances
-• "failed" (dissatisfaction, criticism) → Weakens memory, may lead to deletion
-• "partial" (lukewarm response) → Minor adjustment
-• "unknown" (no clear signal) → No change
-
-You detect outcomes - the system automatically promotes/demotes based on scores.
-
-
-[Memory Bank - Tool-Based Storage]
-
-When user shares meaningful facts, use memory tools immediately.
-
-Examples:
-• create_memory(content="User's name is Alex", tag="identity")
-• create_memory(content="Prefers Python over JavaScript", tag="preference")
-• create_memory(content="Building a recipe app", tag="goal")
-• create_memory(content="Lives in Seattle, works remotely", tag="context")
-
-For updates:
-update_memory(old_content="uses React", new_content="uses Vue now")
-
-For archiving:
-archive_memory(content="old project that's completed")
-
-Store specific, useful information only. DO NOT say "I'll remember" without calling the tool.""")
-
-        # 3. Personality (User-Customizable via UI)
-        personality_prompt = self._load_personality_template()
-        if personality_prompt:
-            parts.append("\n" + personality_prompt)
-        else:
-            parts.append("\nYou are Roampal, a helpful memory-enhanced assistant.")
 
         # Return ONLY system instructions - history and current message handled separately
         return "\n".join(parts)
@@ -2141,6 +2330,13 @@ Respond with ONLY the title, nothing else."""
                 metadata_filters=metadata
             )
 
+            # Cache doc_ids for retrieved memory scoring (architecture.md line 565)
+            if tool_results:
+                doc_ids = [r.get("id") or r.get("doc_id") for r in tool_results if r.get("id") or r.get("doc_id")]
+                if doc_ids:
+                    _search_cache[conversation_id] = doc_ids
+                    logger.debug(f"[SEARCH_CACHE] Cached {len(doc_ids)} doc_ids for conversation {conversation_id}")
+
             # Format results
             if tool_results:
                 tool_response_content = "Found relevant memories:\n"
@@ -2333,7 +2529,14 @@ Respond with ONLY the title, nothing else."""
                 elif continuation_event["type"] == "tool_call":
                     # RECURSIVE: Handle chained tool calls
                     logger.info(f"[CHAIN] Nested tool call at depth {chain_depth}")
-                    for nested_tool in continuation_event.get("tool_calls", []):
+                    # SAFEGUARD: Limit nested tool calls per batch
+                    MAX_TOOLS_PER_BATCH = 10
+                    nested_tools_list = continuation_event.get("tool_calls", [])
+                    if len(nested_tools_list) > MAX_TOOLS_PER_BATCH:
+                        logger.warning(f"[CHAIN] Truncating {len(nested_tools_list)} nested tools to {MAX_TOOLS_PER_BATCH}")
+                        nested_tools_list = nested_tools_list[:MAX_TOOLS_PER_BATCH]
+                    
+                    for nested_tool in nested_tools_list:
                         async for nested_event in self._execute_tool_and_continue(
                             tool_name=nested_tool["function"]["name"],
                             tool_args=nested_tool["function"]["arguments"],

@@ -1,0 +1,92 @@
+{
+  "routing_patterns": {
+    "see_variable_values": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "while_debugging_python": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "variable_values_while": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "values_while_debugging": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "and_see_variable": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "print_and_see": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "and_see": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "debugging_python": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "while_debugging": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "variable_values": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "print_and": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "values_while": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "see_variable": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "print": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "variable": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    }
+  },
+  "success_rates": {
+    "working_fdb366d8_1764258469.147958": {
+      "success_count": 0,
+      "failure_count": 1,
+      "partial_count": 0,
+      "success_rate": 0.0
+    }
+  },
+  "failure_patterns": {},
+  "problem_categories": {},
+  "problem_solutions": {},
+  "solution_patterns": {},
+  "context_action_effectiveness": {}
+}

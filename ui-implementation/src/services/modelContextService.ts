@@ -1,9 +1,10 @@
+import { ROAMPAL_CONFIG } from '../config/roampal';
 /**
  * Service for fetching and caching model context window information
  * Uses the new /api/model/contexts endpoint to get dynamic context limits
  */
 
-const API_URL = 'http://localhost:8000';
+const API_URL = ROAMPAL_CONFIG.apiUrl;
 
 interface ModelContextInfo {
   current: number;

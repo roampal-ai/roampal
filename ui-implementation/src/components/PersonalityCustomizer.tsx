@@ -15,6 +15,7 @@ import {
   ClockIcon
 } from '@heroicons/react/24/outline';
 import yaml from 'js-yaml';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface PersonalityTemplate {
   template_id: string;
@@ -151,7 +152,7 @@ const QUICK_SETTINGS = [
 ];
 
 export const PersonalityCustomizer: React.FC<PersonalityCustomizerProps> = ({
-  apiBase = 'http://localhost:8000'
+  apiBase = ROAMPAL_CONFIG.apiUrl
 }) => {
   const [presets, setPresets] = useState<string[]>([]);
   const [selectedPreset, setSelectedPreset] = useState<string>('default');

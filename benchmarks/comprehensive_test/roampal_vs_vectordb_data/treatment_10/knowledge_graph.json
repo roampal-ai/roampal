@@ -1,0 +1,92 @@
+{
+  "routing_patterns": {
+    "column_simplify_queries": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "store_json_data": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "json_data_single": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "single_column_simplify": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "data_single_column": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "store_json": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "data_single": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "json_data": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "column_simplify": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "single_column": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "simplify_queries": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "column": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "simplify": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "single": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    },
+    "store": {
+      "collections_used": {},
+      "best_collection": "history",
+      "success_rate": 0.5
+    }
+  },
+  "success_rates": {
+    "working_d20f9d12_1764258480.894883": {
+      "success_count": 0,
+      "failure_count": 1,
+      "partial_count": 0,
+      "success_rate": 0.0
+    }
+  },
+  "failure_patterns": {},
+  "problem_categories": {},
+  "problem_solutions": {},
+  "solution_patterns": {},
+  "context_action_effectiveness": {}
+}

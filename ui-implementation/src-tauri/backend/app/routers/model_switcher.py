@@ -9,7 +9,13 @@ import logging
 import asyncio
 import json
 import time
+import sys
 from pathlib import Path
+
+# Windows-specific: Hide terminal windows when spawning subprocesses
+_SUBPROCESS_FLAGS = 0
+if sys.platform == "win32":
+    _SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW
 from typing import List, Dict, Any, AsyncGenerator, Optional
 from fastapi import APIRouter, HTTPException, Request, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -366,7 +372,8 @@ async def download_gguf_stream(request_body: Dict[str, Any] = Body(...)):
                 "--copy",
                 "--user-repo", model_info['repo'],
                 str(cache_path)
-            ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+               creationflags=_SUBPROCESS_FLAGS)
 
             # Send Y to answer first-run prompt, then close stdin
             if process.stdin:
@@ -647,7 +654,8 @@ async def get_current_model(request: Request):
                     ["ollama", "list"],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
+                    creationflags=_SUBPROCESS_FLAGS
                 )
                 if result.returncode == 0:
                     available_models = [line.split()[0] for line in result.stdout.strip().split('\n')[1:] if line.strip()]
@@ -729,7 +737,8 @@ async def switch_model(request: Request, model_request: ModelSwitchRequest):
                     [ollama_cmd, "list"],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
+                    creationflags=_SUBPROCESS_FLAGS
                 )
                 if result.returncode == 0:
                     available_models = [line.split()[0] for line in result.stdout.strip().split('\n')[1:] if line.strip()]
@@ -947,7 +956,8 @@ async def pull_model(request_body: Dict[str, Any] = Body(...)):
                 ["ollama", "pull", model_name],
                 capture_output=True,
                 text=True,
-                timeout=600  # 10 minute timeout for large models
+                timeout=600,  # 10 minute timeout for large models
+                creationflags=_SUBPROCESS_FLAGS
             )
 
             if result.returncode == 0:
@@ -1249,7 +1259,8 @@ async def uninstall_model(model_name: str, request: Request, provider_hint: str 
                 ["ollama", "rm", actual_model_name],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
+                creationflags=_SUBPROCESS_FLAGS
             )
         elif provider == "lmstudio":
             # For LM Studio, find and delete the GGUF file
@@ -1314,7 +1325,8 @@ async def uninstall_model(model_name: str, request: Request, provider_hint: str 
                         [str(lms_path), "unload", model_id_to_delete],
                         capture_output=True,
                         text=True,
-                        timeout=10
+                        timeout=10,
+                        creationflags=_SUBPROCESS_FLAGS
                     )
                     logger.info(f"Unloaded {model_id_to_delete} from LM Studio: {unload_result.stdout}")
             except Exception as e:
@@ -1348,7 +1360,8 @@ async def uninstall_model(model_name: str, request: Request, provider_hint: str 
                                 ["ollama", "list"],
                                 capture_output=True,
                                 text=True,
-                                timeout=5
+                                timeout=5,
+                                creationflags=_SUBPROCESS_FLAGS
                             )
                             if list_result.returncode == 0:
                                 lines = list_result.stdout.strip().split('\n')
@@ -1398,7 +1411,8 @@ async def uninstall_model(model_name: str, request: Request, provider_hint: str 
                                     ["ollama", "list"],
                                     capture_output=True,
                                     text=True,
-                                    timeout=5
+                                    timeout=5,
+                                    creationflags=_SUBPROCESS_FLAGS
                                 )
                                 if list_result.returncode == 0:
                                     lines = list_result.stdout.strip().split('\n')
@@ -1708,7 +1722,8 @@ async def download_gguf_websocket(websocket: WebSocket):
                 "--copy",
                 "--user-repo", model_info['repo'],
                 str(cache_path)
-            ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+               creationflags=_SUBPROCESS_FLAGS)
 
             stdout, stderr = process.communicate(input="Y\n", timeout=300)
 

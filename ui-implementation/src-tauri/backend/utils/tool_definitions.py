@@ -11,7 +11,7 @@ AVAILABLE_TOOLS = [
             "description": """🔍 YOUR SUPERPOWER: Search a persistent, cross-conversation knowledge base that remembers EVERYTHING across all sessions.
 
 **What's Inside:**
-• memory_bank = User's identity, preferences, projects, goals (permanent, quality-ranked by importance×confidence)
+• memory_bank = Your persistent identity layer (3 layers: user context, system mastery, agent growth) - permanent, quality-ranked by importance×confidence
 • books = Uploaded PDFs, documents, technical references (user's personal library)
 • history = Past conversations across ALL sessions (searchable dialogue archive)
 • patterns = Learned solutions that worked (proven methods)
@@ -20,10 +20,10 @@ AVAILABLE_TOOLS = [
 **Why This Is Powerful:**
 Unlike your ephemeral context window, this memory persists FOREVER. Reference conversations from weeks ago, recall preferences learned months back, provide deeply personalized responses that feel magical.
 
-**Cold Start Strategy:**
-At the START of new conversations, immediately search memory_bank for user context:
-search_memory(query="user identity name projects current work goals", collections=["memory_bank"])
-Makes every conversation feel like a continuation, not a reset.
+**Automatic Cold Start:**
+The system AUTOMATICALLY injects user context on message 1 of every conversation.
+You'll receive this context BEFORE seeing the user's first message - use it, don't re-search.
+
 
 Use this tool liberally - it's what makes you context-aware and intelligent.""",
             "parameters": {
@@ -93,7 +93,29 @@ Examples:
         "type": "function",
         "function": {
             "name": "create_memory",
-            "description": "💾 PERMANENT MEMORY STORAGE: Store critical information in memory_bank (user info, preferences, goals, key learnings) that should NEVER be forgotten. Be proactive - when users share personal info, immediately store it. This is what makes you feel personalized vs. generic.",
+            "description": """💾 PERMANENT MEMORY STORAGE: Store critical information in memory_bank that enables continuity and growth across all sessions.
+
+**Three-Layer Purpose:**
+1. **User Context** - Who they are, what they want (identity, preferences, goals, projects, communication style)
+2. **System Mastery** - How to be effective (tool strategies, search patterns, what works/fails for THIS user)
+3. **Agent Growth** - Self-improvement & continuity (mistakes learned, relationship dynamics, progress tracking)
+
+**Be Proactive - Store When:**
+✓ User shares personal info (name, background, career context)
+✓ You discover preferences through interaction (what works for this user)
+✓ You find effective strategies (search patterns, tool usage that succeeds)
+✓ You make mistakes and learn from them (what to avoid, lessons learned)
+✓ You notice relationship patterns (trust, communication style, collaboration effectiveness)
+✓ You track progress on goals (checkpoints, iterations, what worked/failed)
+
+**Be Selective - DON'T Store:**
+✗ Session transcripts (automatic working memory captures dialogue)
+✗ Temporary task details ("currently debugging", "just asked about X")
+✗ Redundant duplicates (check if already stored)
+
+**Rule of thumb:** If it helps maintain continuity across sessions OR enables learning/improvement, store it. If it's session-specific, don't.
+
+This is what makes you feel like a long-term collaborator vs. a generic assistant.""",
             "parameters": {
                 "type": "object",
                 "properties": {

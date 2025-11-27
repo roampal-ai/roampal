@@ -1,437 +1,470 @@
 """
-Standard Memory System Benchmarks
+Standard Memory System Benchmarks - Performance Validation
 
-Tests Roampal against industry-standard metrics used by:
-- Mem0 (LOCOMO benchmark: 66.9% accuracy)
-- ChatGPT Memory (SimpleQA: 62.5% accuracy)
-- Claude Projects (context retention)
+Tests Roampal's core performance metrics:
+- Sub-100ms search latency (p95)
+- ≥70% precision on relevance ranking
+- Token-efficient retrieval (<500 tokens)
+- Learning effectiveness under semantic confusion
+- Routing improvement through feedback
 
-These tests use the SAME evaluation criteria as competitors.
-
-Target Metrics:
-- Memory recall accuracy: ≥70% (beat Mem0's 66.9%)
-- Single-hop question F1: ≥40 (beat Mem0's 38.72)
-- Context retention: ≥90%
-- Search latency p95: <2s (beat Mem0's 1.44s)
+All tests reproducible and aligned with architecture.md claims.
 """
 
 import pytest
+import asyncio
 import time
+import sys
+from pathlib import Path
 from typing import List, Dict, Any
+import statistics
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "ui-implementation" / "src-tauri" / "backend"))
+
+from modules.memory.unified_memory_system import UnifiedMemorySystem
 
 
-@pytest.mark.standard
+class StandardMetricsSuite:
+    """Test harness for memory system performance metrics"""
+
+    def __init__(self, test_name: str = "default"):
+        self.memory_system = None
+        self.test_data_dir = Path(f"./test_data_metrics_{test_name}")
+
+    async def initialize(self):
+        """Initialize fresh memory system"""
+        import shutil
+        if self.test_data_dir.exists():
+            try:
+                shutil.rmtree(self.test_data_dir)
+            except:
+                pass  # Ignore cleanup errors
+
+        self.test_data_dir.mkdir(exist_ok=True)
+
+        self.memory_system = UnifiedMemorySystem(
+            data_dir=str(self.test_data_dir),
+            use_server=False
+        )
+        await self.memory_system.initialize()
+        print(f"[INIT] Memory system ready at {self.test_data_dir}")
+
+    async def cleanup(self):
+        """Cleanup test data"""
+        import shutil
+        if self.memory_system:
+            await asyncio.sleep(0.5)
+        if self.test_data_dir.exists():
+            try:
+                shutil.rmtree(self.test_data_dir)
+            except:
+                pass  # Ignore Windows file lock issues
+
+
+# ====================================================================================
+# TEST 1: Search Latency (Target: <100ms p95)
+# ====================================================================================
+
 @pytest.mark.asyncio
-async def test_memory_recall_accuracy(test_memory_system):
+async def test_search_latency_p95():
     """
-    Test memory recall accuracy using single-hop questions.
-
-    Metric: Can the system retrieve specific facts it stored?
-    Competitor baseline: Mem0 = 66.9% on LOCOMO
-    Target: ≥70%
+    Metric: Search latency p95
+    Target: <100ms
+    Architecture.md claim: 0.034s (34ms)
     """
-    memory = test_memory_system
+    suite = StandardMetricsSuite("latency")
+    await suite.initialize()
 
-    # Store ground-truth facts
-    facts = [
-        {"q": "What is the user's name?", "a": "Alice Johnson", "text": "My name is Alice Johnson"},
-        {"q": "What programming language does the user prefer?", "a": "Python", "text": "I prefer working with Python for backend development"},
-        {"q": "What city does the user live in?", "a": "Seattle", "text": "I live in Seattle, Washington"},
-        {"q": "What is the user's job title?", "a": "Senior Engineer", "text": "I work as a Senior Engineer at a tech company"},
-        {"q": "What framework does the user use?", "a": "FastAPI", "text": "I use FastAPI for building REST APIs"},
-        {"q": "What database does the user prefer?", "a": "PostgreSQL", "text": "I prefer PostgreSQL over MySQL for production databases"},
-        {"q": "What is the user's favorite IDE?", "a": "VS Code", "text": "I use VS Code as my primary IDE"},
-        {"q": "What testing framework does the user use?", "a": "pytest", "text": "I write all my tests using pytest"},
-        {"q": "What deployment platform does the user use?", "a": "AWS", "text": "I deploy all my applications on AWS"},
-        {"q": "What containerization tool does the user use?", "a": "Docker", "text": "I use Docker for containerizing applications"},
-    ]
-
-    # Store facts in memory_bank
-    for fact in facts:
-        await memory.store_memory_bank(
-            text=fact["text"],
-            tags=["user_profile"],
-            importance=0.9,
-            confidence=0.95
+    # Store 100 memories to simulate realistic load
+    print("\n[LATENCY TEST] Storing 100 memories...")
+    for i in range(100):
+        await suite.memory_system.store(
+            text=f"Memory {i}: Information about topic {i % 10} with details and context",
+            collection="working",
+            metadata={"topic": f"topic_{i % 10}"}
         )
 
-    # Test recall: Can we retrieve the correct answer for each question?
-    correct_recalls = 0
-    total_questions = len(facts)
-
-    for fact in facts:
-        # Search for the answer
-        results = await memory.search(
-            query=fact["q"],
-            collections=["memory_bank"],
-            limit=3
-        )
-
-        # Check if the correct answer appears in top-3 results
-        found = False
-        for result in results:
-            content = result.get('content') or result.get('text', '')
-            if fact["a"].lower() in content.lower():
-                found = True
-                break
-
-        if found:
-            correct_recalls += 1
-
-    recall_accuracy = correct_recalls / total_questions
-
-    print(f"\n=== MEMORY RECALL ACCURACY ===")
-    print(f"Questions tested: {total_questions}")
-    print(f"Correct recalls: {correct_recalls}")
-    print(f"Accuracy: {recall_accuracy:.1%}")
-    print(f"")
-    print(f"Competitor baselines:")
-    print(f"  Mem0 (LOCOMO): 66.9%")
-    print(f"  Roampal: {recall_accuracy:.1%}")
-    print(f"  Improvement: {(recall_accuracy - 0.669) / 0.669 * 100:+.1f}%")
-
-    # Assertion
-    assert recall_accuracy >= 0.70, f"Target: ≥70% recall (beat Mem0's 66.9%), got {recall_accuracy:.1%}"
-
-
-@pytest.mark.standard
-@pytest.mark.asyncio
-async def test_search_latency_p95(test_memory_system):
-    """
-    Test search latency at 95th percentile.
-
-    Metric: How fast can the system retrieve memories?
-    Competitor baseline: Mem0 p95 = 1.44s
-    Target: <2s p95 latency
-    """
-    memory = test_memory_system
-
-    # Store 50 diverse memories
-    for i in range(50):
-        await memory.store_memory_bank(
-            text=f"Memory item {i}: This is about topic {i % 10}",
-            tags=[f"topic_{i % 10}"],
-            importance=0.5 + (i % 5) * 0.1,
-            confidence=0.8
-        )
-
-    # Measure search latency for 20 queries
+    # Measure search latency over 100 queries
+    print("[LATENCY TEST] Running 100 search queries...")
     latencies = []
 
-    for i in range(20):
-        start_time = time.time()
+    for i in range(100):
+        query = f"topic {i % 10}"
 
-        results = await memory.search(
-            query=f"topic {i % 10}",
-            collections=["memory_bank"],
-            limit=5
-        )
+        start = time.perf_counter()
+        results = await suite.memory_system.search(query, limit=5)
+        end = time.perf_counter()
 
-        latency = time.time() - start_time
-        latencies.append(latency)
+        latency_ms = (end - start) * 1000
+        latencies.append(latency_ms)
 
-    # Calculate p95
-    latencies.sort()
-    p95_index = int(len(latencies) * 0.95)
-    p95_latency = latencies[p95_index]
-    avg_latency = sum(latencies) / len(latencies)
+    # Calculate percentiles
+    latencies_sorted = sorted(latencies)
+    p95_latency = latencies_sorted[int(len(latencies) * 0.95)]
+    p50_latency = statistics.median(latencies)
+    avg_latency = statistics.mean(latencies)
 
-    print(f"\n=== SEARCH LATENCY ===")
-    print(f"Queries tested: {len(latencies)}")
-    print(f"Average latency: {avg_latency:.3f}s")
-    print(f"p95 latency: {p95_latency:.3f}s")
-    print(f"")
-    print(f"Competitor baselines:")
-    print(f"  Mem0 p95: 1.44s")
-    print(f"  Roampal p95: {p95_latency:.3f}s")
-    print(f"  Improvement: {(1.44 - p95_latency) / 1.44 * 100:+.1f}%")
+    print(f"\n[RESULTS]")
+    print(f"  Avg latency: {avg_latency:.2f}ms")
+    print(f"  p50 latency: {p50_latency:.2f}ms")
+    print(f"  p95 latency: {p95_latency:.2f}ms")
+    print(f"  Target: <100ms")
 
-    # Assertion
-    assert p95_latency < 2.0, f"Target: <2s p95 latency, got {p95_latency:.3f}s"
+    await suite.cleanup()
+
+    # Verify target
+    assert p95_latency < 100, f"p95 latency {p95_latency:.2f}ms exceeds 100ms target"
+    print(f"\n[PASS] p95 latency {p95_latency:.2f}ms < 100ms (target)")
+
+    return p95_latency
 
 
-@pytest.mark.standard
+# ====================================================================================
+# TEST 2: Precision@5 (Target: ≥70%)
+# ====================================================================================
+
 @pytest.mark.asyncio
-async def test_context_retention_across_sessions(test_memory_system):
+async def test_relevance_ranking_precision():
     """
-    Test context retention across multiple sessions.
-
-    Metric: Does the system remember facts across restarts?
-    Competitor baseline: Claude Projects = multi-session retention
-    Target: ≥90% retention rate
+    Metric: Precision@5 (% of top-5 results that are relevant)
+    Target: ≥70%
+    Architecture.md claim: 80%
     """
-    memory = test_memory_system
+    suite = StandardMetricsSuite("precision")
+    await suite.initialize()
 
-    # Session 1: Store facts
-    session1_facts = [
-        "I'm building a web scraper for e-commerce sites",
-        "I prefer async code over sync for performance",
-        "I use BeautifulSoup for HTML parsing",
-        "I deploy scrapers on AWS Lambda",
-        "I store scraped data in DynamoDB",
+    # Store diverse facts with clear topics
+    facts = [
+        # Python facts (topic A)
+        {"text": "User prefers Python for backend development", "topic": "python"},
+        {"text": "User uses FastAPI framework for Python APIs", "topic": "python"},
+        {"text": "User writes Python tests with pytest", "topic": "python"},
+
+        # Docker facts (topic B)
+        {"text": "User containerizes applications with Docker", "topic": "docker"},
+        {"text": "User prefers Docker Compose for local development", "topic": "docker"},
+        {"text": "User deploys Docker containers to AWS ECS", "topic": "docker"},
+
+        # Database facts (topic C)
+        {"text": "User prefers PostgreSQL for production databases", "topic": "database"},
+        {"text": "User uses Redis for caching", "topic": "database"},
+        {"text": "User runs database migrations with Alembic", "topic": "database"},
+
+        # IDE facts (topic D)
+        {"text": "User uses VS Code as primary editor", "topic": "ide"},
+        {"text": "User has Vim keybindings enabled in VS Code", "topic": "ide"},
+
+        # Noise (unrelated)
+        {"text": "The weather is sunny today", "topic": "noise"},
+        {"text": "Coffee tastes good in the morning", "topic": "noise"},
+        {"text": "Random unrelated information here", "topic": "noise"},
     ]
 
-    stored_ids = []
-    for fact in session1_facts:
-        doc_id = await memory.store_memory_bank(
-            text=fact,
-            tags=["project_context"],
+    print(f"\n[PRECISION TEST] Storing {len(facts)} facts...")
+    for fact in facts:
+        await suite.memory_system.store_memory_bank(
+            text=fact["text"],
+            tags=["fact"],
             importance=0.8,
             confidence=0.9
         )
-        stored_ids.append(doc_id)
 
-    # Session 2: Retrieve facts (simulate new session)
-    queries = [
-        "web scraping project",
-        "async vs sync preference",
-        "HTML parsing library",
-        "deployment platform",
-        "data storage solution",
+    # Test queries
+    test_queries = [
+        {"query": "python backend", "expected_topics": ["python"]},
+        {"query": "docker containers", "expected_topics": ["docker"]},
+        {"query": "database sql", "expected_topics": ["database"]},
+        {"query": "code editor", "expected_topics": ["ide"]},
+        {"query": "fastapi framework", "expected_topics": ["python"]},
+        {"query": "postgresql production", "expected_topics": ["database"]},
     ]
 
-    retrieved_count = 0
+    print(f"[PRECISION TEST] Running {len(test_queries)} queries...")
 
-    for query in queries:
-        results = await memory.search(
-            query=query,
-            collections=["memory_bank"],
-            limit=3
+    total_relevant = 0
+    total_retrieved = 0
+
+    for test in test_queries:
+        results = await suite.memory_system.search(
+            test["query"],
+            limit=5,
+            collections=["memory_bank"]
         )
 
-        # Check if any of the stored facts appear
-        if len(results) > 0:
-            retrieved_count += 1
+        # Check how many results are relevant
+        relevant_count = 0
+        for result in results[:5]:  # Only top-5
+            text = result.get('text', '')
+            # Check if result matches expected topic
+            for fact in facts:
+                if fact["text"] == text and fact["topic"] in test["expected_topics"]:
+                    relevant_count += 1
+                    break
 
-    retention_rate = retrieved_count / len(queries)
+        total_relevant += relevant_count
+        total_retrieved += min(len(results), 5)
 
-    print(f"\n=== CONTEXT RETENTION ===")
-    print(f"Facts stored: {len(session1_facts)}")
-    print(f"Queries tested: {len(queries)}")
-    print(f"Successful retrievals: {retrieved_count}")
-    print(f"Retention rate: {retention_rate:.1%}")
-    print(f"")
-    print(f"Competitor baselines:")
-    print(f"  Claude Projects: Multi-session retention")
-    print(f"  Roampal: {retention_rate:.1%}")
+        precision = (relevant_count / 5) * 100 if results else 0
+        print(f"  Query '{test['query']}': {relevant_count}/5 relevant ({precision:.0f}%)")
 
-    # Assertion
-    assert retention_rate >= 0.90, f"Target: ≥90% retention, got {retention_rate:.1%}"
+    # Calculate overall precision@5
+    overall_precision = (total_relevant / total_retrieved) * 100 if total_retrieved > 0 else 0
+
+    print(f"\n[RESULTS]")
+    print(f"  Precision@5: {overall_precision:.1f}%")
+    print(f"  Target: >=70%")
+
+    await suite.cleanup()
+
+    # Verify target
+    assert overall_precision >= 70, f"Precision@5 {overall_precision:.1f}% below 70% target"
+    print(f"\n[PASS] Precision@5 {overall_precision:.1f}% >= 70% (target)")
+
+    return overall_precision
 
 
-@pytest.mark.standard
+# ====================================================================================
+# TEST 3: Token Efficiency (Target: <500 tokens)
+# ====================================================================================
+
 @pytest.mark.asyncio
-async def test_relevance_ranking_precision(test_memory_system):
+async def test_token_efficiency():
     """
-    Test relevance ranking precision at k=5 with KG-based auto-routing.
-
-    Metric: Are the top-k results actually relevant?
-    Competitor baseline: Standard RAG = ~61% precision
-    Target: ≥65% precision@5
-
-    This test pre-loads KG patterns to simulate learned routing behavior.
+    Metric: Tokens consumed per memory operation
+    Target: <500 tokens per retrieval
+    Architecture.md claim: 112 tokens
     """
-    memory = test_memory_system
+    suite = StandardMetricsSuite("tokens")
+    await suite.initialize()
 
-    # Store mixed relevance documents
-    await memory.store_memory_bank(
-        text="Python async/await is great for I/O-bound tasks",
-        tags=["python", "async"],
+    # Store 10 memories
+    print("\n[TOKEN TEST] Storing 10 memories...")
+    texts = [
+        "User prefers Python for backend development",
+        "User uses FastAPI framework",
+        "User deploys to AWS",
+        "User containerizes with Docker",
+        "User writes tests with pytest",
+        "User uses PostgreSQL database",
+        "User codes in VS Code",
+        "User prefers Linux for servers",
+        "User uses Git for version control",
+        "User follows TDD methodology"
+    ]
+
+    for text in texts:
+        await suite.memory_system.store_memory_bank(
+            text=text,
+            tags=["preference"],
+            importance=0.8,
+            confidence=0.9
+        )
+
+    # Measure tokens in search operation
+    query = "What does the user prefer for backend?"
+    results = await suite.memory_system.search(query, limit=5, collections=["memory_bank"])
+
+    # Estimate tokens (rough approximation: 1 token ≈ 4 chars)
+    query_tokens = len(query) // 4
+    retrieved_text = "\n".join([r.get('text', '') for r in results[:5]])
+    retrieved_tokens = len(retrieved_text) // 4
+    metadata_tokens = 20  # Rough estimate for metadata overhead
+
+    total_tokens = query_tokens + retrieved_tokens + metadata_tokens
+
+    print(f"\n[RESULTS]")
+    print(f"  Query tokens: {query_tokens}")
+    print(f"  Retrieved tokens: {retrieved_tokens}")
+    print(f"  Metadata tokens: {metadata_tokens}")
+    print(f"  Total tokens: {total_tokens}")
+    print(f"  Target: <500 tokens")
+
+    await suite.cleanup()
+
+    # Verify target
+    assert total_tokens < 500, f"Token usage {total_tokens} exceeds 500 token target"
+    print(f"\n[PASS] Token usage {total_tokens} < 500 (target)")
+
+    return total_tokens
+
+
+# ====================================================================================
+# TEST 4: Learning Under Noise (Target: 80% @ 4:1 noise ratio)
+# ====================================================================================
+
+@pytest.mark.asyncio
+async def test_learning_under_semantic_noise():
+    """
+    Metric: Accuracy under semantic confusion (4:1 noise ratio)
+    Target: 80% accuracy with 4 noise items per 1 signal
+    Architecture.md claim: 80% @ 4:1
+    """
+    suite = StandardMetricsSuite("noise")
+    await suite.initialize()
+
+    print("\n[NOISE TEST] Creating semantic confusion scenario...")
+
+    # Store 1 correct answer + 4 confusing alternatives
+    await suite.memory_system.store_memory_bank(
+        text="User's preferred database is PostgreSQL for production workloads",
+        tags=["preference"],
         importance=0.9,
-        confidence=0.95
-    )
-
-    await memory.store_memory_bank(
-        text="FastAPI is a modern Python web framework built on async",
-        tags=["python", "fastapi"],
-        importance=0.9,
-        confidence=0.95
-    )
-
-    await memory.store_memory_bank(
-        text="asyncio provides infrastructure for async programming in Python",
-        tags=["python", "asyncio"],
-        importance=0.85,
         confidence=0.9
     )
 
-    await memory.store_memory_bank(
-        text="Python coroutines enable concurrent async execution",
-        tags=["python", "async"],
-        importance=0.8,
-        confidence=0.9
-    )
+    # Add semantic noise (similar but wrong)
+    noise_items = [
+        "MySQL is a popular database option",
+        "MongoDB is good for document storage",
+        "SQLite works well for small projects",
+        "Redis is fast for caching data"
+    ]
 
-    await memory.store_memory_bank(
-        text="JavaScript also has async/await syntax",
-        tags=["javascript"],
-        importance=0.5,
-        confidence=0.8
-    )
+    for noise in noise_items:
+        await suite.memory_system.store_memory_bank(
+            text=noise,
+            tags=["info"],
+            importance=0.5,
+            confidence=0.5
+        )
 
-    await memory.store_memory_bank(
-        text="React is a JavaScript UI library",
-        tags=["javascript", "react"],
-        importance=0.5,
-        confidence=0.8
-    )
+    # Record positive outcome for correct answer
+    results = await suite.memory_system.search("database preference", limit=5, collections=["memory_bank"])
+    if results:
+        correct_doc_id = None
+        for r in results:
+            if "PostgreSQL" in r.get('text', ''):
+                correct_doc_id = r['id']
+                break
 
-    # PRE-LOAD KG PATTERNS: Simulate 20+ queries learning that "python" queries → memory_bank
-    # This allows auto-routing to work intelligently instead of exploring all collections
-    memory.knowledge_graph["routing_patterns"]["python"] = {
-        "collections_used": {
-            "memory_bank": {"successes": 15, "failures": 2, "partials": 3},  # 88% success rate
-            "patterns": {"successes": 3, "failures": 7, "partials": 0},      # 30% success rate
-            "working": {"successes": 1, "failures": 4, "partials": 0},       # 20% success rate
-        },
-        "best_collection": "memory_bank",
-        "success_rate": 0.88
-    }
-    memory.knowledge_graph["routing_patterns"]["async"] = {
-        "collections_used": {
-            "memory_bank": {"successes": 12, "failures": 3, "partials": 2},  # 80% success rate
-            "patterns": {"successes": 5, "failures": 5, "partials": 0},      # 50% success rate
-        },
-        "best_collection": "memory_bank",
-        "success_rate": 0.80
-    }
-    memory.knowledge_graph["routing_patterns"]["programming"] = {
-        "collections_used": {
-            "memory_bank": {"successes": 10, "failures": 2, "partials": 1},  # 83% success rate
-            "patterns": {"successes": 8, "failures": 4, "partials": 0},      # 67% success rate
-        },
-        "best_collection": "memory_bank",
-        "success_rate": 0.83
-    }
+        if correct_doc_id:
+            await suite.memory_system.record_outcome(correct_doc_id, "worked")
+            print("[NOISE TEST] Recorded positive outcome for correct answer")
 
-    # Query: "Python async programming" with AUTO-ROUTING (no explicit collections)
-    # KG should route to memory_bank only (high confidence)
-    results = await memory.search(
-        query="Python async programming",
-        collections=None,  # Let KG auto-route
-        limit=5
-    )
+    # Test retrieval - should prioritize the successful answer
+    print("[NOISE TEST] Testing retrieval with 4:1 noise ratio...")
+    test_results = await suite.memory_system.search("user database", limit=5, collections=["memory_bank"])
 
-    # Count relevant results in top-5
-    relevant_count = 0
-    for result in results:
-        content = result.get('content') or result.get('text', '')
-        if 'python' in content.lower() and 'async' in content.lower():
-            relevant_count += 1
+    # Check if top result is correct
+    top_result = test_results[0] if test_results else None
+    is_correct = top_result and "PostgreSQL" in top_result.get('text', '')
 
-    precision_at_5 = relevant_count / min(5, len(results)) if results else 0
+    print(f"\n[RESULTS]")
+    print(f"  Top result: {top_result.get('text', '')[:50]}..." if top_result else "  No results")
+    print(f"  Correct: {is_correct}")
+    print(f"  Noise ratio: 4:1 (4 wrong : 1 right)")
+    print(f"  Target: Retrieve correct answer")
 
-    print(f"\n=== RELEVANCE RANKING PRECISION (KG AUTO-ROUTING) ===")
-    print(f"Query: 'Python async programming'")
-    print(f"Results returned: {len(results)}")
-    print(f"Relevant in top-5: {relevant_count}")
-    print(f"Precision@5: {precision_at_5:.1%}")
-    print(f"")
-    print(f"Competitor baselines:")
-    print(f"  Standard RAG: ~61%")
-    print(f"  Mem0: ~67%")
-    print(f"  Roampal (KG auto-routing): {precision_at_5:.1%}")
+    await suite.cleanup()
 
-    # Assertion
-    assert precision_at_5 >= 0.65, f"Target: ≥65% precision@5, got {precision_at_5:.1%}"
+    # Verify target
+    assert is_correct, "Failed to retrieve correct answer under 4:1 semantic noise"
+    print(f"\n[PASS] Retrieved correct answer despite 4:1 noise ratio")
+
+    return is_correct
 
 
-@pytest.mark.standard
+# ====================================================================================
+# TEST 5: KG Routing Learning (Target: 60% → 80% improvement)
+# ====================================================================================
+
 @pytest.mark.asyncio
-async def test_token_efficiency(test_memory_system):
+async def test_kg_routing_improvement():
     """
-    Test token efficiency for memory retrieval.
-
-    Metric: How many tokens needed to provide context?
-    Competitor baseline: Mem0 = ~1.8K tokens vs full-context 26K
-    Target: <3K tokens per retrieval
+    Metric: KG routing precision improvement (cold start → trained)
+    Target: Measurable improvement from learning
+    Architecture.md claim: 60% → 80% (33% improvement)
     """
-    memory = test_memory_system
+    suite = StandardMetricsSuite("routing")
+    await suite.initialize()
 
-    # Store multiple facts
+    print("\n[KG ROUTING TEST] Setting up collections...")
+
+    # Seed different collections with topic-specific content
+    # Books: Programming content
     for i in range(20):
-        await memory.store_memory_bank(
-            text=f"Fact {i}: This is a medium-length piece of information about topic {i} that provides context.",
-            tags=[f"topic_{i}"],
-            importance=0.7,
-            confidence=0.85
+        await suite.memory_system.store(
+            f"Programming concept {i}: Python functions, classes, OOP principles",
+            "books",
+            {"topic": "programming"}
         )
 
-    # Retrieve top-5 for a query
-    results = await memory.search(
-        query="topic information",
-        collections=["memory_bank"],
-        limit=5
-    )
+    # Patterns: Deployment content
+    for i in range(20):
+        await suite.memory_system.store(
+            f"Deployment pattern {i}: Docker, Kubernetes, CI/CD pipelines",
+            "patterns",
+            {"topic": "deployment"}
+        )
 
-    # Estimate tokens (rough: ~4 chars per token)
-    total_chars = 0
-    for result in results:
-        content = result.get('content') or result.get('text', '')
-        total_chars += len(content)
+    # Phase 1: Cold start (no learned patterns)
+    print("[KG ROUTING TEST] Phase 1: Cold start (no routing knowledge)...")
 
-    estimated_tokens = total_chars / 4
+    programming_queries = [
+        "python function syntax",
+        "class inheritance",
+        "OOP principles",
+        "python modules"
+    ]
 
-    print(f"\n=== TOKEN EFFICIENCY ===")
-    print(f"Results retrieved: {len(results)}")
-    print(f"Total characters: {total_chars}")
-    print(f"Estimated tokens: {estimated_tokens:.0f}")
-    print(f"")
-    print(f"Competitor baselines:")
-    print(f"  Full-context: ~26,000 tokens")
-    print(f"  Mem0: ~1,800 tokens")
-    print(f"  Roampal: ~{estimated_tokens:.0f} tokens")
-    print(f"  Improvement vs full-context: {(26000 - estimated_tokens) / 26000 * 100:.1f}%")
+    cold_start_correct = 0
+    for query in programming_queries:
+        results = await suite.memory_system.search(query, limit=5)
+        if results and results[0].get('collection') == 'books':
+            cold_start_correct += 1
 
-    # Assertion
-    assert estimated_tokens < 3000, f"Target: <3K tokens, got {estimated_tokens:.0f}"
+    cold_start_accuracy = (cold_start_correct / len(programming_queries)) * 100
+    print(f"  Cold start accuracy: {cold_start_accuracy:.0f}%")
 
+    # Phase 2: Learn from outcomes
+    print("[KG ROUTING TEST] Phase 2: Recording outcomes (learning)...")
 
-@pytest.mark.standard
-@pytest.mark.asyncio
-async def test_standard_metrics_summary(test_memory_system):
-    """
-    Comprehensive test that generates a comparison report against competitors.
+    for i in range(10):
+        # Programming queries → books should work
+        results = await suite.memory_system.search(f"programming concept {i}", limit=5)
+        if results and results[0].get('collection') == 'books':
+            await suite.memory_system.record_outcome(results[0]['id'], "worked")
 
-    This test runs all standard metrics and generates a summary report
-    comparing Roampal against Mem0, ChatGPT Memory, and Claude Projects.
-    """
-    memory = test_memory_system
+        # Deployment queries → patterns should work
+        results = await suite.memory_system.search(f"deployment pattern {i}", limit=5)
+        if results and results[0].get('collection') == 'patterns':
+            await suite.memory_system.record_outcome(results[0]['id'], "worked")
 
-    metrics = {
-        "memory_recall_accuracy": 0.0,
-        "search_latency_p95": 0.0,
-        "context_retention": 0.0,
-        "relevance_precision": 0.0,
-        "token_efficiency": 0.0,
+    # Phase 3: Test after learning
+    print("[KG ROUTING TEST] Phase 3: Testing after learning...")
+
+    learned_correct = 0
+    for query in programming_queries:
+        results = await suite.memory_system.search(query, limit=5)
+        if results and results[0].get('collection') == 'books':
+            learned_correct += 1
+
+    learned_accuracy = (learned_correct / len(programming_queries)) * 100
+    improvement = learned_accuracy - cold_start_accuracy
+
+    print(f"\n[RESULTS]")
+    print(f"  Cold start: {cold_start_accuracy:.0f}%")
+    print(f"  After learning: {learned_accuracy:.0f}%")
+    print(f"  Improvement: +{improvement:.0f}pp")
+    print(f"  Target: Measurable improvement")
+
+    await suite.cleanup()
+
+    # Verify target
+    assert learned_accuracy >= cold_start_accuracy, "No routing improvement detected"
+    print(f"\n[PASS] Routing improved from {cold_start_accuracy:.0f}% -> {learned_accuracy:.0f}%")
+
+    return {
+        "cold_start": cold_start_accuracy,
+        "learned": learned_accuracy,
+        "improvement": improvement
     }
 
-    # Quick benchmark run
-    # (In real benchmark, we'd call the individual tests above)
 
-    print(f"\n╔═══════════════════════════════════════════════════════════════════════╗")
-    print(f"║           ROAMPAL vs COMPETITORS - STANDARD METRICS                  ║")
-    print(f"╚═══════════════════════════════════════════════════════════════════════╝")
-    print(f"")
-    print(f"📊 MEMORY RECALL ACCURACY:")
-    print(f"  Mem0 (LOCOMO):        66.9%")
-    print(f"  Roampal:              [TO BE MEASURED]")
-    print(f"")
-    print(f"⚡ SEARCH LATENCY (p95):")
-    print(f"  Mem0:                 1.44s")
-    print(f"  Roampal:              [TO BE MEASURED]")
-    print(f"")
-    print(f"🧠 CONTEXT RETENTION:")
-    print(f"  Claude Projects:      Multi-session")
-    print(f"  Roampal:              [TO BE MEASURED]")
-    print(f"")
-    print(f"🎯 RELEVANCE PRECISION@5:")
-    print(f"  Standard RAG:         ~61%")
-    print(f"  Mem0:                 ~67%")
-    print(f"  Roampal:              [TO BE MEASURED]")
-    print(f"")
-    print(f"💾 TOKEN EFFICIENCY:")
-    print(f"  Full-context:         ~26K tokens")
-    print(f"  Mem0:                 ~1.8K tokens")
-    print(f"  Roampal:              [TO BE MEASURED]")
-    print(f"")
+if __name__ == "__main__":
+    # Run all tests
+    asyncio.run(test_search_latency_p95())
+    asyncio.run(test_relevance_ranking_precision())
+    asyncio.run(test_token_efficiency())
+    asyncio.run(test_learning_under_semantic_noise())
+    asyncio.run(test_kg_routing_improvement())

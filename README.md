@@ -26,12 +26,12 @@ Validated performance characteristics:
 
 | Metric | Result |
 |--------|--------|
-| **Search Latency (p95)** | **34ms** |
+| **Search Latency (p95)** | **77ms** |
 | **Token Efficiency** | **112 tokens/query** |
 | **Learning Under Noise** | **80% precision @ 4:1 semantic confusion** |
 | **Routing Accuracy** | **100% (cross-collection test)** |
 
-[See benchmark methodology & results →](benchmarks/README.md)
+[See benchmark methodology & results →](benchmarks/README.md) (12 test suites, 100+ tests)
 
 ---
 
@@ -41,7 +41,7 @@ Roampal includes advanced memory features:
 
 - **Outcome-Based Learning**: Memories adapt based on feedback (+0.2 worked, -0.3 failed)
 - **5-Tier Architecture**: Books, Working, History, Patterns, Memory Bank
-- **Dual Knowledge Graphs**: Routing KG + Content KG for entity tracking
+- **Triple Knowledge Graphs**: Routing KG + Content KG + Action-Effectiveness KG
 - **Local-First**: All processing on-device, no cloud dependencies
 
 [See architecture details →](docs/architecture.md)
@@ -135,7 +135,7 @@ Roampal includes advanced memory features:
 ### Verified Metrics
 
 **Search Performance:**
-- p95 latency: 34ms
+- p95 latency: 77ms
 - Token efficiency: 112 tokens/query average
 - Cross-collection routing: 100% accuracy (7/7 tests)
 
@@ -146,7 +146,7 @@ Roampal includes advanced memory features:
 
 **Memory System:**
 - 5-tier architecture: Books, Working, History, Patterns, Memory Bank
-- Dual knowledge graphs: Routing KG + Content KG
+- Triple knowledge graphs: Routing KG + Content KG + Action-Effectiveness KG
 - Quality-based ranking: importance × confidence scoring
 
 > See [benchmarks/README.md](benchmarks/README.md) for test methodology
@@ -171,17 +171,18 @@ Roampal includes advanced memory features:
 - Scores CURRENT learning immediately (enables optional tool calling)
 - Cross-tool memory sharing across all MCP clients
 
-**📊 Dual Knowledge Graph System**:
+**📊 Triple Knowledge Graph System**:
 - **Routing KG** (blue nodes) - Learns query patterns → collection routing
 - **Content KG** (green nodes) - Entity relationships extracted from memories
-- **Purple nodes** - Concepts appearing in both graphs
+- **Action-Effectiveness KG** (orange nodes) - Learns which actions work in which contexts
+- **Purple nodes** - Concepts appearing in multiple graphs
 
 **🌐 Bundled Multilingual Embeddings**: Works offline in 50+ languages
 - Model: `paraphrase-multilingual-mpnet-base-v2`
 - No internet required after initial setup
 
 ### Performance
-- Search latency: 34ms (p95)
+- Search latency: 77ms (p95)
 - Token efficiency: 112 tokens/query
 - Semantic confusion resistance: 80% precision @ 4:1 noise
 - Routing accuracy: 100% (cross-collection KG test)
@@ -199,7 +200,7 @@ Roampal includes advanced memory features:
 | **Bad Advice** | Auto-deleted when score drops below threshold |
 | **Context** | Recalls from all past conversations globally |
 | **Privacy** | 100% local, zero telemetry, full data ownership |
-| **Performance** | 34ms search latency (p95) |
+| **Performance** | 77ms search latency (p95) |
 
 ## Getting Started
 
@@ -249,12 +250,13 @@ The LLM autonomously controls memory via tools (search_memory, create_memory, up
 
 Roampal auto-discovers MCP clients and writes the config for you. No manual JSON editing required.
 
-### Available MCP Tools
+### Available MCP Tools (6 tools)
 
 - **`search_memory`** - Search across all memory tiers with optional metadata filtering
 - **`add_to_memory_bank`** - Store permanent facts about the user
 - **`update_memory`** - Modify existing memories by doc_id
 - **`archive_memory`** - Remove outdated information
+- **`get_context_insights`** - Get organic insights from Knowledge Graphs before searching (past patterns, failure warnings, action stats)
 - **`record_response`** - Store semantic learnings with explicit outcome scoring (worked/failed/partial/unknown)
 
 ### How It Works

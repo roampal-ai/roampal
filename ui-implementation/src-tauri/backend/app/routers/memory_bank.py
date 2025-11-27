@@ -1,6 +1,12 @@
 """
 Memory Bank API Router
 Provides user control over memory_bank collection (5th collection)
+
+memory_bank is the persistent identity layer enabling continuity and growth:
+1. User Context - Who they are, what they want (identity, preferences, goals, projects)
+2. System Mastery - How to be effective (tool strategies, search patterns, what works/fails)
+3. Agent Growth - Self-improvement (mistakes learned, relationship dynamics, progress tracking)
+
 LLM has full autonomy, user has override via Settings UI
 """
 

@@ -9,11 +9,13 @@ import uuid
 import re
 import asyncio
 import math
+import os
 from typing import List, Dict, Any, Optional, Literal, Set
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
 from filelock import FileLock
+from dataclasses import dataclass, field
 
 from modules.memory.chromadb_adapter import ChromaDBAdapter
 from modules.memory.file_memory_adapter import FileMemoryAdapter
@@ -39,6 +41,66 @@ AutonomousRouter = None  # Legacy import, no longer needed
 logger = logging.getLogger(__name__)
 
 CollectionName = Literal["books", "working", "history", "patterns", "memory_bank"]
+# ContextType is now any string - LLM discovers topics organically (coding, fitness, finance, etc.)
+ContextType = str
+
+
+@dataclass
+class ActionOutcome:
+    """
+    Tracks individual action outcomes with topic-based context awareness (v0.2.1 Causal Learning).
+
+    Enables learning: "In topic X, action Y leads to outcome Z"
+
+    Examples:
+    - For CODING: search_memory → 92% success (searching code patterns works well)
+    - For FITNESS: create_memory → 88% success (storing workout logs works well)
+    - For FINANCE: archive_memory → 75% success (archiving expenses works well)
+
+    Context is LLM-classified from conversation (coding, fitness, finance, creative_writing, etc.)
+    """
+    action_type: str  # Tool name: "search_memory", "create_memory", "update_memory", etc.
+    context_type: ContextType  # LLM-classified topic: "coding", "fitness", "finance", etc.
+    outcome: Literal["worked", "failed", "partial"]
+    timestamp: datetime = field(default_factory=datetime.now)
+
+    # Action details
+    action_params: Dict[str, Any] = field(default_factory=dict)  # Tool parameters
+    doc_id: Optional[str] = None  # If action involved a document
+    collection: Optional[str] = None  # Which collection was accessed
+
+    # Outcome details
+    failure_reason: Optional[str] = None
+    success_context: Optional[Dict[str, Any]] = None
+
+    # Causal attribution
+    chain_position: int = 0  # Position in action chain (0 = first action)
+    chain_length: int = 1  # Total actions in chain
+    caused_final_outcome: bool = True  # Did this action cause the final outcome?
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dict for KG storage"""
+        return {
+            "action_type": self.action_type,
+            "context_type": self.context_type,
+            "outcome": self.outcome,
+            "timestamp": self.timestamp.isoformat(),
+            "action_params": self.action_params,
+            "doc_id": self.doc_id,
+            "collection": self.collection,
+            "failure_reason": self.failure_reason,
+            "success_context": self.success_context,
+            "chain_position": self.chain_position,
+            "chain_length": self.chain_length,
+            "caused_final_outcome": self.caused_final_outcome,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ActionOutcome":
+        """Deserialize from dict"""
+        data = data.copy()
+        data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+        return cls(**data)
 
 
 def with_retry(max_attempts: int = 3, delay: float = 1.0):
@@ -95,12 +157,21 @@ class UnifiedMemorySystem:
     NEW_ITEM_DELETION_THRESHOLD = 0.1  # More lenient for items < 7 days old
 
     def __init__(self, data_dir: str = "./data", use_server: bool = True, llm_service=None):
+        # Support environment variable override for dev builds
+        env_data_dir = os.environ.get('ROAMPAL_DATA_DIR')
+        if env_data_dir:
+            data_dir = env_data_dir
+            logger.info(f"Using data directory from ROAMPAL_DATA_DIR: {data_dir}")
+
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
 
         # Core components
         self.embedding_service = EmbeddingService()
         self.file_adapter = FileMemoryAdapter()
+
+        # Cached memory tracking for outcome-based scoring
+        self._cached_doc_ids = {}  # session_id -> [doc_ids] from last search
 
         # Advanced components (if enabled)
         self.outcome_detector = None
@@ -125,6 +196,15 @@ class UnifiedMemorySystem:
         self.llm_service = llm_service
         if llm_service and is_enabled("ENABLE_LLM_MEMORY_SCORING"):
             logger.info("LLM memory scoring enabled")
+
+        # Cross-encoder for reranking (v2.1 Enhanced Retrieval)
+        self.reranker = None
+        try:
+            from sentence_transformers import CrossEncoder
+            self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+            logger.info("Cross-encoder reranker loaded for enhanced retrieval (v2.1)")
+        except Exception as e:
+            logger.warning(f"Cross-encoder reranker not available: {e}")
 
         # One adapter per collection
         self.collections: Dict[str, ChromaDBAdapter] = {}
@@ -179,7 +259,9 @@ class UnifiedMemorySystem:
             "failure_patterns": {},     # concept -> failure_reasons
             "problem_categories": {},   # problem_type -> preferred_collections
             "problem_solutions": {},    # problem_signature -> [solution_ids]
-            "solution_patterns": {}     # pattern_hash -> {problem, solution, success_rate}
+            "solution_patterns": {},    # pattern_hash -> {problem, solution, success_rate}
+            # v0.2.1 Causal Learning: Action-level effectiveness tracking
+            "context_action_effectiveness": {}  # (context, action, collection) -> {success, fail, success_rate}
         }
 
         if self.kg_path.exists():
@@ -295,6 +377,103 @@ class UnifiedMemorySystem:
             self.outcome_detector.llm_service = llm_service
             logger.info("LLM service injected into OutcomeDetector")
 
+    async def detect_context_type(
+        self,
+        system_prompts: Optional[List[str]] = None,
+        recent_messages: Optional[List[Dict[str, str]]] = None
+    ) -> str:
+        """
+        LLM-BASED SESSION TYPE CLASSIFICATION (General-Purpose):
+
+        Uses LLM to classify conversation session type from context.
+        Returns session types like: "learning", "recall", "coding_help", "fitness_tracking", etc.
+
+        This enables contextual learning based on operational mode:
+        - System learns: "search_memory works 92% for RECALL sessions"
+        - System learns: "create_memory works 88% for LEARNING sessions"
+        - System learns: "search_memory works 85% for CODING_HELP sessions"
+
+        NO hardcoded keywords. LLM discovers session types naturally from conversation.
+        Works for ANY interaction mode (truly general-purpose).
+
+        Args:
+            system_prompts: System messages that set conversation context
+            recent_messages: Last few conversation turns
+
+        Returns:
+            Session type string (e.g., "learning", "recall", "coding_help", "general_chat")
+        """
+        # Fallback if no LLM available
+        if not self.llm_service:
+            logger.debug("[CONTEXT] No LLM service - using 'general' context")
+            return "general"
+
+        # Build context from available information
+        context_parts = []
+        if system_prompts:
+            # Use first 2 system prompts (usually enough context)
+            context_parts.extend(system_prompts[:2])
+        if recent_messages:
+            # Use last 3 messages for recency
+            for msg in recent_messages[-3:]:
+                if isinstance(msg, dict):
+                    context_parts.append(msg.get('content', ''))
+                else:
+                    context_parts.append(str(msg))
+
+        if not context_parts:
+            logger.debug("[CONTEXT] No context available - using 'general'")
+            return "general"
+
+        # Limit token usage (keep it fast and cheap)
+        conversation_text = "\n".join(context_parts)[:800]
+
+        prompt = f"""Classify this conversation's SESSION TYPE in 1-2 words (lowercase, underscore-separated).
+
+Consider the operational mode - what kind of interaction is happening?
+
+Examples:
+- coding_help: Programming assistance, debugging, architecture discussion
+- fitness_tracking: Logging workouts, nutrition, health goals  
+- creative_writing: Story development, worldbuilding, character creation
+- project_planning: Task management, deadlines, coordination
+- learning: Being taught new information
+- recall: Remembering or retrieving past information
+- general_chat: Casual conversation
+
+Conversation:
+{conversation_text}
+
+Session type (1-2 words only):"""
+
+        try:
+            # Call LLM with timeout
+            response = await asyncio.wait_for(
+                self.llm_service.generate_response(prompt, max_tokens=10),
+                timeout=3.0
+            )
+
+            # Clean up response (supports multilingual category names)
+            topic = response.strip().lower().replace(" ", "_").replace("-", "_")
+            # Keep unicode alphanumeric + underscore (supports any language)
+            topic = re.sub(r'[^\w]', '_', topic, flags=re.UNICODE)
+            topic = topic.strip('_')  # Remove leading/trailing underscores
+
+            # Validate (reasonable length and format)
+            if len(topic) > 0 and len(topic) < 30:
+                logger.debug(f"[CONTEXT] Classified as: {topic}")
+                return topic
+            else:
+                logger.warning(f"[CONTEXT] Invalid topic format: {response[:50]}")
+                return "general"
+
+        except asyncio.TimeoutError:
+            logger.debug("[CONTEXT] Classification timeout - using 'general'")
+            return "general"
+        except Exception as e:
+            logger.debug(f"[CONTEXT] Classification failed ({e.__class__.__name__}) - using 'general'")
+            return "general"
+
     async def initialize(self):
         """Initialize all components"""
         if self.initialized:
@@ -331,6 +510,236 @@ class UnifiedMemorySystem:
         self.initialized = True
         logger.info("UnifiedMemorySystem ready")
 
+    async def _generate_contextual_prefix(
+        self,
+        text: str,
+        metadata: Optional[Dict[str, Any]],
+        collection: str
+    ) -> str:
+        """
+        Generate context-aware prefix for better retrieval (Anthropic Contextual Retrieval, Sep 2024).
+        Reduces retrieval failures by 49% (67% with reranking).
+
+        Args:
+            text: Original memory text
+            metadata: Memory metadata
+            collection: Collection name
+
+        Returns:
+            Contextualized text with prefix explaining what this memory is about
+        """
+        # Skip contextual prefix for very short text or if LLM service unavailable
+        if len(text) < 50 or not self.llm_service:
+            return text
+
+        try:
+            # Build context from metadata
+            context_parts = []
+
+            if metadata:
+                # Extract conversation context
+                if metadata.get("conversation_id"):
+                    context_parts.append(f"Conversation: {metadata['conversation_id']}")
+
+                # Extract tags/categories
+                if metadata.get("tags"):
+                    tags = metadata["tags"]
+                    if isinstance(tags, list):
+                        context_parts.append(f"Tags: {', '.join(tags[:3])}")
+
+                # Extract importance/purpose
+                if metadata.get("importance"):
+                    importance = metadata["importance"]
+                    if importance >= 0.9:
+                        context_parts.append("High importance")
+
+            # Add collection type
+            collection_context = {
+                "memory_bank": "user memory",
+                "patterns": "proven solution pattern",
+                "working": "recent conversation",
+                "history": "past conversation",
+                "books": "reference material"
+            }
+            context_parts.append(collection_context.get(collection, collection))
+
+            # Build prompt
+            context_str = ", ".join(context_parts)
+            prompt = f"""Given this context and memory chunk, write ONE concise sentence explaining what this memory is about.
+
+Context: {context_str}
+Chunk: {text[:300]}
+
+Prefix (one sentence, max 20 words):"""
+
+            # Use fast model for speed (timeout 5s to avoid blocking)
+            try:
+                response = await asyncio.wait_for(
+                    self.llm_service.generate(prompt, max_tokens=50),
+                    timeout=5.0
+                )
+                prefix = response.strip().strip('"').strip("'")
+
+                # Validate prefix is reasonable
+                if len(prefix) > 10 and len(prefix) < 200:
+                    contextual_text = f"{prefix} {text}"
+                    logger.debug(f"[CONTEXTUAL] Generated prefix: {prefix[:50]}...")
+                    return contextual_text
+
+            except asyncio.TimeoutError:
+                logger.debug("[CONTEXTUAL] LLM timeout, using original text")
+
+        except Exception as e:
+            logger.debug(f"[CONTEXTUAL] Prefix generation failed: {e}, using original text")
+
+        # Fallback to original text
+        return text
+
+    async def _rerank_with_cross_encoder(
+        self,
+        query: str,
+        candidates: List[Dict],
+        top_k: int
+    ) -> List[Dict]:
+        """
+        Rerank top candidates with cross-encoder for precision (v2.1 Enhanced Retrieval).
+        Uses BERT cross-encoder model for fine-grained query-document matching.
+        Based on industry best practices (Pinecone, Weaviate, 2025).
+
+        Args:
+            query: Search query
+            candidates: All candidate results from initial retrieval
+            top_k: Number of top results to keep
+
+        Returns:
+            Reranked results with cross-encoder scores
+        """
+        if not self.reranker:
+            return candidates
+
+        try:
+            # Take top-30 candidates for reranking (balance quality vs speed)
+            top_candidates = sorted(
+                candidates,
+                key=lambda x: x.get("final_rank_score", 0.0),
+                reverse=True
+            )[:30]
+
+            # Prepare query-document pairs for cross-encoder
+            pairs = []
+            for candidate in top_candidates:
+                # Use text field for matching
+                doc_text = candidate.get("text", "")
+                if not doc_text and candidate.get("metadata"):
+                    doc_text = candidate.get("metadata", {}).get("content", "")
+
+                pairs.append([query, doc_text[:512]])  # Limit to 512 chars for speed
+
+            # Score with cross-encoder (batch processing for efficiency)
+            ce_scores = self.reranker.predict(pairs, batch_size=32, show_progress_bar=False)
+
+            # Add cross-encoder scores and blend with original scores
+            # For memory_bank: apply quality as a MULTIPLIER to final score
+            for i, candidate in enumerate(top_candidates):
+                ce_score = float(ce_scores[i])
+                candidate["ce_score"] = ce_score
+
+                original_score = candidate.get("final_rank_score", 0.5)
+                collection = candidate.get("collection", "")
+
+                # Standard blend: 40% original, 60% cross-encoder
+                blended_score = 0.4 * original_score + 0.6 * ce_score
+
+                # For memory_bank: multiply by quality boost
+                # High quality (0.93): boost by 1.0 + 0.93 = 1.93x
+                # Low quality (0.08): boost by 1.0 + 0.08 = 1.08x
+                # This ensures high-quality docs beat low-quality even if CE ranks them similarly
+                if collection == "memory_bank":
+                    metadata = candidate.get("metadata", {})
+                    importance = metadata.get("importance", 0.5)
+                    confidence = metadata.get("confidence", 0.5)
+                    try:
+                        importance = float(importance) if not isinstance(importance, (int, float)) else importance
+                        confidence = float(confidence) if not isinstance(confidence, (int, float)) else confidence
+                    except:
+                        importance = confidence = 0.5
+                    quality = importance * confidence
+                    # Quality boost: score × (1 + quality)
+                    # High quality (0.93) gets 1.93x, Low quality (0.08) gets 1.08x
+                    candidate["final_rank_score"] = blended_score * (1.0 + quality)
+                else:
+                    candidate["final_rank_score"] = blended_score
+
+            # Re-sort by blended score
+            reranked = sorted(
+                top_candidates,
+                key=lambda x: x["final_rank_score"],
+                reverse=True
+            )[:top_k]
+
+            # Add back remaining candidates (not reranked)
+            remaining = [c for c in candidates if c not in top_candidates]
+            final_results = reranked + remaining
+
+            logger.debug(f"[RERANK] Cross-encoder reranked top-30 → top-{top_k}")
+            return final_results
+
+        except Exception as e:
+            logger.warning(f"[RERANK] Cross-encoder reranking failed: {e}, using original ranking")
+            return candidates
+
+    def _calculate_entity_boost(
+        self,
+        query: str,
+        doc_id: str
+    ) -> float:
+        """
+        Calculate quality boost based on Content KG entities.
+
+        Only applies to memory_bank searches - boosts documents containing
+        high-quality entities that match query concepts.
+
+        Args:
+            query: Search query text
+            doc_id: Document ID to check for entity matches
+
+        Returns:
+            Boost multiplier (1.0 = no boost, up to 1.5 = 50% boost)
+        """
+        try:
+            # Extract entities from query
+            query_concepts = self._extract_concepts(query)
+            query_entities = [c for c in query_concepts if len(c) >= 3]
+
+            if not query_entities:
+                return 1.0
+
+            # Get entities in this document
+            doc_entities = self.content_graph._doc_entities.get(doc_id, set())
+
+            if not doc_entities:
+                return 1.0
+
+            # Calculate quality boost from matching high-quality entities
+            total_boost = 0.0
+            for entity in query_entities:
+                if entity in doc_entities and entity in self.content_graph.entities:
+                    entity_quality = self.content_graph.entities[entity].get("avg_quality", 0.0)
+                    total_boost += entity_quality
+
+            # Cap boost at 50% (total_boost * 0.2 with max 0.5)
+            # quality=1.0 per entity × 3 entities × 0.2 = 0.6 boost → capped at 0.5 (50%)
+            boost_multiplier = 1.0 + min(total_boost * 0.2, 0.5)
+
+            if boost_multiplier > 1.0:
+                logger.debug(f"Entity boost for {doc_id}: {boost_multiplier:.2f}x (quality={total_boost:.2f})")
+
+            return boost_multiplier
+
+        except Exception as e:
+            logger.debug(f"Entity boost calculation failed: {e}")
+            return 1.0
+
     async def store(
         self,
         text: str,
@@ -361,9 +770,93 @@ class UnifiedMemorySystem:
                 doc_id="pending"  # Will update after store
             )
 
-        # Generate ID and embedding
+        # DEDUPLICATION CHECK for memory_bank and patterns
+        # (Skip for working/history - those need temporal context preserved)
+        # With L2 distance formula similarity = 1/(1+d):
+        # - d=0.1 → 91% similar, d=0.2 → 83%, d=0.5 → 67%
+        # Threshold 0.8 means L2 distance < 0.25 (very similar embeddings)
+        SIMILARITY_THRESHOLD = 0.80
+
+        if collection in ["memory_bank", "patterns"]:
+            try:
+                # Search for similar existing memories
+                existing = await self.search(
+                    query=text,
+                    limit=5,  # Check top 5 most similar
+                    collections=[collection]
+                )
+
+                # Check similarity threshold
+                for result in existing:
+                    # Calculate similarity from L2 distance
+                    # Formula: similarity = 1 / (1 + distance) maps [0, inf) -> (0, 1]
+                    distance = result.get("distance", 1.0)
+                    similarity = 1.0 / (1.0 + distance)
+
+                    if similarity >= SIMILARITY_THRESHOLD:
+                        existing_id = result.get("id")
+                        existing_metadata = result.get("metadata", {})
+
+                        logger.info(f"[DEDUP] Found similar memory: {existing_id} (similarity={similarity:.3f})")
+
+                        # MERGE STRATEGY: Keep higher importance/confidence
+                        if collection == "memory_bank":
+                            new_importance = metadata.get("importance", 0.7) if metadata else 0.7
+                            new_confidence = metadata.get("confidence", 0.7) if metadata else 0.7
+                            old_importance = existing_metadata.get("importance", 0.7)
+                            old_confidence = existing_metadata.get("confidence", 0.7)
+
+                            # Type safety: ensure values are floats
+                            try:
+                                new_importance = float(new_importance) if not isinstance(new_importance, (int, float)) else new_importance
+                                new_confidence = float(new_confidence) if not isinstance(new_confidence, (int, float)) else new_confidence
+                                old_importance = float(old_importance) if not isinstance(old_importance, (int, float)) else old_importance
+                                old_confidence = float(old_confidence) if not isinstance(old_confidence, (int, float)) else old_confidence
+                            except (ValueError, TypeError):
+                                new_importance = new_confidence = old_importance = old_confidence = 0.7
+
+                            # If new memory has higher quality, update instead of duplicate
+                            new_quality = new_importance * new_confidence
+                            old_quality = old_importance * old_confidence
+
+                            if new_quality > old_quality:
+                                # Update existing with better metadata
+                                logger.info(f"[DEDUP] Updating existing memory (new quality {new_quality:.2f} > old {old_quality:.2f})")
+
+                                # Archive old version
+                                await self.archive_memory_bank(existing_id, reason="dedup_replaced_by_higher_quality")
+
+                                # Fall through to store new version
+                                break
+                            else:
+                                # Keep existing, increment mentioned_count
+                                logger.info(f"[DEDUP] Keeping existing memory (quality {old_quality:.2f} >= new {new_quality:.2f})")
+
+                                # Increment mentioned count
+                                existing_metadata["mentioned_count"] = existing_metadata.get("mentioned_count", 0) + 1
+
+                                # Update metadata (without re-embedding)
+                                await self.collections[collection].update_metadata(
+                                    doc_id=existing_id,
+                                    metadata=existing_metadata
+                                )
+
+                                return existing_id  # Return existing ID
+
+                        elif collection == "patterns":
+                            # For patterns, always prefer existing (already proven)
+                            logger.info(f"[DEDUP] Pattern already exists, skipping duplicate")
+                            return existing_id
+
+            except Exception as e:
+                logger.warning(f"[DEDUP] Deduplication check failed: {e}, proceeding with storage")
+
+        # CONTEXTUAL RETRIEVAL (v2.1): Add context-aware prefix for better embedding
+        contextual_text = await self._generate_contextual_prefix(text, metadata, collection)
+
+        # Generate ID and embedding (use contextual text for embedding)
         doc_id = f"{collection}_{uuid.uuid4().hex[:8]}_{datetime.now().timestamp()}"
-        embedding = await self.embedding_service.embed_text(text)
+        embedding = await self.embedding_service.embed_text(contextual_text)
 
         # Prepare metadata with enhanced context
         final_metadata = {
@@ -435,8 +928,220 @@ class UnifiedMemorySystem:
 
                     self.message_count = 0
 
+        # Extract entities for Content KG if storing to memory_bank
+        if collection == "memory_bank":
+            try:
+                # Calculate quality score for Content KG entity ranking
+                importance = metadata.get("importance", 0.7) if metadata else 0.7
+                confidence = metadata.get("confidence", 0.7) if metadata else 0.7
+
+                # Ensure numeric types (handle lists/tuples/strings from various sources)
+                if isinstance(importance, (list, tuple)):
+                    importance = float(importance[0]) if importance else 0.7
+                elif isinstance(importance, str):
+                    importance_map = {'high': 0.9, 'medium': 0.7, 'low': 0.5}
+                    importance = importance_map.get(importance.lower(), 0.7)
+                else:
+                    importance = float(importance) if importance else 0.7
+
+                if isinstance(confidence, (list, tuple)):
+                    confidence = float(confidence[0]) if confidence else 0.7
+                elif isinstance(confidence, str):
+                    confidence_map = {'high': 0.9, 'medium': 0.7, 'low': 0.5}
+                    confidence = confidence_map.get(confidence.lower(), 0.7)
+                else:
+                    confidence = float(confidence) if confidence else 0.7
+
+                quality_score = importance * confidence
+
+                self.content_graph.add_entities_from_text(
+                    text=text,
+                    doc_id=doc_id,
+                    collection="memory_bank",
+                    extract_concepts_fn=self._extract_concepts,
+                    quality_score=quality_score
+                )
+                await self._debounced_save_kg()
+                logger.debug(f"Extracted entities for Content KG: {doc_id} (quality={quality_score:.2f})")
+            except Exception as e:
+                logger.error(f"Failed to extract entities for Content KG: {e}", exc_info=True)
+
         logger.debug(f"Stored {doc_id} in {collection}")
         return doc_id
+
+    # =========================================================================
+    # QUERY PREPROCESSING (v0.2.2)
+    # =========================================================================
+
+    # Common acronym expansions for better search coverage
+    # Format: acronym -> expansion (both directions supported)
+    ACRONYM_DICT = {
+        # Technology
+        "api": "application programming interface",
+        "apis": "application programming interfaces",
+        "sdk": "software development kit",
+        "sdks": "software development kits",
+        "ui": "user interface",
+        "ux": "user experience",
+        "db": "database",
+        "sql": "structured query language",
+        "html": "hypertext markup language",
+        "css": "cascading style sheets",
+        "js": "javascript",
+        "ts": "typescript",
+        "ml": "machine learning",
+        "ai": "artificial intelligence",
+        "llm": "large language model",
+        "nlp": "natural language processing",
+        "gpu": "graphics processing unit",
+        "cpu": "central processing unit",
+        "ram": "random access memory",
+        "ssd": "solid state drive",
+        "hdd": "hard disk drive",
+        "os": "operating system",
+        "ide": "integrated development environment",
+        "cli": "command line interface",
+        "gui": "graphical user interface",
+        "ci": "continuous integration",
+        "cd": "continuous deployment",
+        "devops": "development operations",
+        "qa": "quality assurance",
+        "uat": "user acceptance testing",
+        "mvp": "minimum viable product",
+        "poc": "proof of concept",
+        "saas": "software as a service",
+        "paas": "platform as a service",
+        "iaas": "infrastructure as a service",
+        "iot": "internet of things",
+        "vpn": "virtual private network",
+        "dns": "domain name system",
+        "http": "hypertext transfer protocol",
+        "https": "hypertext transfer protocol secure",
+        "ftp": "file transfer protocol",
+        "ssh": "secure shell",
+        "ssl": "secure sockets layer",
+        "tls": "transport layer security",
+        "jwt": "json web token",
+        "oauth": "open authorization",
+        "rest": "representational state transfer",
+        "crud": "create read update delete",
+        "orm": "object relational mapping",
+        "json": "javascript object notation",
+        "xml": "extensible markup language",
+        "yaml": "yaml ain't markup language",
+        "csv": "comma separated values",
+        "pdf": "portable document format",
+        "svg": "scalable vector graphics",
+        "png": "portable network graphics",
+        "jpg": "joint photographic experts group",
+        "gif": "graphics interchange format",
+        "aws": "amazon web services",
+        "gcp": "google cloud platform",
+        "vm": "virtual machine",
+        "k8s": "kubernetes",
+        "npm": "node package manager",
+        "pip": "pip installs packages",
+        "git": "git",  # Keep as is, well known
+        "pr": "pull request",
+        "mr": "merge request",
+        "env": "environment",
+        "prod": "production",
+        "dev": "development",
+        "qa": "quality assurance",
+        "repo": "repository",
+        "config": "configuration",
+        "auth": "authentication",
+        "async": "asynchronous",
+        "sync": "synchronous",
+
+        # Locations
+        "nyc": "new york city",
+        "la": "los angeles",
+        "sf": "san francisco",
+        "dc": "washington dc",
+        "uk": "united kingdom",
+        "usa": "united states of america",
+        "us": "united states",
+
+        # Organizations
+        "nasa": "national aeronautics and space administration",
+        "fbi": "federal bureau of investigation",
+        "cia": "central intelligence agency",
+        "fda": "food and drug administration",
+        "cdc": "centers for disease control",
+        "mit": "massachusetts institute of technology",
+        "ucla": "university of california los angeles",
+        "stanford": "stanford university",
+        "harvard": "harvard university",
+
+        # Business
+        "ceo": "chief executive officer",
+        "cto": "chief technology officer",
+        "cfo": "chief financial officer",
+        "coo": "chief operating officer",
+        "vp": "vice president",
+        "hr": "human resources",
+        "roi": "return on investment",
+        "kpi": "key performance indicator",
+        "okr": "objectives and key results",
+        "b2b": "business to business",
+        "b2c": "business to consumer",
+        "erp": "enterprise resource planning",
+        "crm": "customer relationship management",
+        "eod": "end of day",
+        "asap": "as soon as possible",
+        "eta": "estimated time of arrival",
+        "fyi": "for your information",
+        "tbd": "to be determined",
+        "pov": "point of view",
+        "wfh": "work from home",
+    }
+
+    # Build reverse mapping (expansion -> acronym) for bidirectional matching
+    EXPANSION_TO_ACRONYM = {v.lower(): k.lower() for k, v in ACRONYM_DICT.items()}
+
+    def _preprocess_query(self, query: str) -> str:
+        """
+        Preprocess search query for better retrieval:
+        1. Expand acronyms (API -> "API application programming interface")
+        2. Normalize whitespace
+
+        This improves recall when user queries with acronyms but facts stored with full names.
+
+        Args:
+            query: Original search query
+
+        Returns:
+            Enhanced query with expanded acronyms
+        """
+        if not query:
+            return query
+
+        # Normalize whitespace
+        query = " ".join(query.split())
+
+        # Find and expand acronyms in query
+        words = query.split()
+        expansions_to_add = []
+
+        for word in words:
+            word_lower = word.lower().strip(".,!?;:'\"()")
+
+            # Check if word is a known acronym
+            if word_lower in self.ACRONYM_DICT:
+                expansion = self.ACRONYM_DICT[word_lower]
+                # Add expansion if not already in query
+                if expansion.lower() not in query.lower():
+                    expansions_to_add.append(expansion)
+                    logger.debug(f"[QUERY_PREPROCESS] Expanded '{word}' -> '{expansion}'")
+
+        # Append expansions to query (keeps original + adds expanded versions)
+        if expansions_to_add:
+            enhanced_query = query + " " + " ".join(expansions_to_add)
+            logger.debug(f"[QUERY_PREPROCESS] Enhanced query: '{query}' -> '{enhanced_query}'")
+            return enhanced_query
+
+        return query
 
     @track_performance("memory_search")
     async def search(
@@ -557,9 +1262,12 @@ class UnifiedMemorySystem:
                 # Backward compatibility - return list
                 return paginated_results
 
-        # TIER 2: Generate query embedding with error handling
+        # TIER 2: Preprocess query for better retrieval (acronym expansion, normalization)
+        processed_query = self._preprocess_query(query)
+
+        # Generate query embedding with error handling
         try:
-            query_embedding = await self.embedding_service.embed_text(query)
+            query_embedding = await self.embedding_service.embed_text(processed_query)
         except Exception as e:
             logger.error(f"[MEMORY] Embedding generation failed for query '{query}': {e}", exc_info=True)
             # Return empty results if embedding fails
@@ -586,8 +1294,10 @@ class UnifiedMemorySystem:
             # Working memory searches globally across all conversations
             if coll_name == "working":
                 # Get ALL working memory across all conversations
-                results = await self.collections[coll_name].query_vectors(
+                # v2.1: Use hybrid search (vector + BM25 + RRF fusion)
+                results = await self.collections[coll_name].hybrid_query(
                     query_vector=query_embedding,
+                    query_text=processed_query,  # Use preprocessed query for BM25
                     top_k=limit * 3,  # Get more for better ranking
                     filters=metadata_filters
                 )
@@ -616,19 +1326,17 @@ class UnifiedMemorySystem:
                         except:
                             r["minutes_ago"] = 999  # Unknown time = old
 
-                # Sort by BOTH recency and relevance
-                # Recent + relevant = best
-                for r in results:
-                    # Combine: lower distance (more relevant) + fewer minutes ago (more recent)
-                    r["combined_score"] = r.get("distance", 1.0) + (r.get("minutes_ago", 999) / 100)
-
-                results.sort(key=lambda x: x["combined_score"])
+                # Sort by relevance only (semantic similarity)
+                # Note: Recency metadata still calculated above for display purposes
+                results.sort(key=lambda x: x.get("distance", 1.0))
                 results = results[:limit]
             else:
                 # Books collection: get more results and boost recent uploads
                 if coll_name == "books":
-                    results = await self.collections[coll_name].query_vectors(
+                    # v2.1: Use hybrid search (vector + BM25 + RRF fusion)
+                    results = await self.collections[coll_name].hybrid_query(
                         query_vector=query_embedding,
+                        query_text=processed_query,  # Use preprocessed query for BM25
                         top_k=limit * 3,  # Get 3x results from books
                         filters=metadata_filters
                     )
@@ -640,15 +1348,19 @@ class UnifiedMemorySystem:
                     if "status" not in memory_bank_filters:
                         memory_bank_filters["status"] = {"$ne": "archived"}  # ChromaDB not-equals filter
 
-                    results = await self.collections[coll_name].query_vectors(
+                    # v2.1: Use hybrid search (vector + BM25 + RRF fusion)
+                    results = await self.collections[coll_name].hybrid_query(
                         query_vector=query_embedding,
-                        top_k=limit,
+                        query_text=processed_query,  # Use preprocessed query for BM25
+                        top_k=limit * 3,  # FIX: Same multiplier as working/books for fair competition
                         filters=memory_bank_filters
                     )
                 else:
-                    results = await self.collections[coll_name].query_vectors(
+                    # v2.1: Use hybrid search (vector + BM25 + RRF fusion)
+                    results = await self.collections[coll_name].hybrid_query(
                         query_vector=query_embedding,
-                        top_k=limit,
+                        query_text=processed_query,  # Use preprocessed query for BM25
+                        top_k=limit * 3,  # FIX: Same multiplier as working/books for fair competition
                         filters=metadata_filters
                     )
 
@@ -663,13 +1375,43 @@ class UnifiedMemorySystem:
                     metadata = r.get("metadata", {})
                     importance = metadata.get("importance", 0.7)
                     confidence = metadata.get("confidence", 0.7)
+
+                    # Ensure numeric types (handle lists/tuples/strings from ChromaDB)
+                    if isinstance(importance, (list, tuple)):
+                        importance = float(importance[0]) if importance else 0.7
+                    elif isinstance(importance, str):
+                        # Handle string values like 'high', 'medium', 'low'
+                        importance_map = {'high': 0.9, 'medium': 0.7, 'low': 0.5}
+                        importance = importance_map.get(importance.lower(), 0.7)
+                    else:
+                        importance = float(importance) if importance else 0.7
+
+                    if isinstance(confidence, (list, tuple)):
+                        confidence = float(confidence[0]) if confidence else 0.7
+                    elif isinstance(confidence, str):
+                        # Handle string values like 'high', 'medium', 'low'
+                        confidence_map = {'high': 0.9, 'medium': 0.7, 'low': 0.5}
+                        confidence = confidence_map.get(confidence.lower(), 0.7)
+                    else:
+                        confidence = float(confidence) if confidence else 0.7
+
                     quality_score = importance * confidence
 
-                    # Reduce distance for high-quality memories (0.5 = 50% max boost)
-                    # quality_score=1.0 → 50% distance reduction → ranks much higher
-                    # quality_score=0.5 → 25% distance reduction → moderate boost
-                    # quality_score=0.0 → 0% distance reduction → no boost
-                    r["distance"] = r.get("distance", 1.0) * (1.0 - quality_score * 0.5)
+                    # Apply metadata quality boost (from importance × confidence)
+                    # Strong boost: quality=1.0 → 80% distance reduction (0.2x multiplier)
+                    # Weak quality: quality=0.1 → 8% distance reduction (0.92x multiplier)
+                    # This allows high-quality memories to overcome semantic distance gap
+                    metadata_boost = 1.0 - quality_score * 0.8
+
+                    # Apply Content KG entity quality boost (ONLY for memory_bank)
+                    doc_id = r.get("id", "")
+                    entity_boost = self._calculate_entity_boost(query, doc_id)
+
+                    # Combine both boosts
+                    # quality_score=1.0 → 80% metadata boost (distance * 0.2)
+                    # entity_boost=1.5 → additional 50% entity boost
+                    # Combined max: distance * 0.2 * (1/1.5) = distance * 0.133 (87% total boost)
+                    r["distance"] = r.get("distance", 1.0) * metadata_boost / entity_boost
                 # Boost recently uploaded books (within last 7 days)
                 elif coll_name == "books" and r.get("upload_timestamp"):
                     from datetime import datetime, timedelta
@@ -691,25 +1433,106 @@ class UnifiedMemorySystem:
             unique_known = [s for s in known_solutions if s.get("id") not in existing_ids]
             all_results = unique_known + all_results
 
-        # LEARNING-AWARE RANKING: Combine embedding distance with learned scores
+        # LEARNING-AWARE RANKING: Adaptive weighting based on memory quality and maturity
         for r in all_results:
             metadata = r.get("metadata", {})
             learned_score = metadata.get("score", 0.5)  # Default to neutral 0.5
+            uses = metadata.get("uses", 0)
+            confidence = metadata.get("confidence", 0.7)
             distance = r.get("distance", 1.0)
+            collection = r.get("collection", "")
 
-            # Convert distance to similarity (lower distance = higher similarity)
-            embedding_similarity = 1.0 - min(distance, 1.0)
+            # Convert L2 distance to similarity (lower distance = higher similarity)
+            # ChromaDB uses L2 (Euclidean) distance which can be >> 1.0
+            # Formula: similarity = 1 / (1 + distance) maps [0, inf) -> (0, 1]
+            # - distance=0 -> similarity=1.0 (identical)
+            # - distance=1 -> similarity=0.5
+            # - distance=10 -> similarity=0.09
+            # This preserves the quality boost applied to distance earlier
+            embedding_similarity = 1.0 / (1.0 + distance)
 
-            # Combine: 70% embedding similarity + 30% learned score
-            # This ensures embeddings still matter most, but learning influences ranking
-            combined_score = (0.7 * embedding_similarity) + (0.3 * learned_score)
+            # DYNAMIC WEIGHTING based on memory maturity and quality
+            # Principle: Trust learned scores MORE as memories prove themselves
 
-            # Store as negative distance for sorting (higher score = lower "distance")
+            if uses >= 5 and learned_score >= 0.8:
+                # PROVEN HIGH-VALUE MEMORY
+                # Has been used 5+ times and consistently successful
+                # Weight: 40% embedding, 60% learned (trust the history)
+                embedding_weight = 0.4
+                learned_weight = 0.6
+
+            elif uses >= 3 and learned_score >= 0.7:
+                # ESTABLISHED MEMORY
+                # Has been used multiple times with good success
+                # Weight: 45% embedding, 55% learned
+                embedding_weight = 0.45
+                learned_weight = 0.55
+
+            elif uses >= 2:
+                # EMERGING PATTERN
+                # Has been used a few times, building track record
+                # Weight: 50/50 split (balanced)
+                embedding_weight = 0.5
+                learned_weight = 0.5
+
+            elif collection == "memory_bank":
+                # MEMORY BANK SPECIAL CASE
+                # User explicitly stored facts via create_memory
+                # Memory bank uses QUALITY-BASED ranking (importance × confidence)
+                # NOT outcome-based scoring like other collections
+                importance = metadata.get("importance", 0.7)
+
+                # Type safety: ensure importance and confidence are floats
+                try:
+                    importance = float(importance) if not isinstance(importance, (int, float)) else importance
+                    confidence = float(confidence) if not isinstance(confidence, (int, float)) else confidence
+                except (ValueError, TypeError):
+                    importance = 0.7
+                    confidence = 0.7
+
+                quality = importance * confidence
+
+                # CRITICAL: Use quality as the "learned_score" for memory_bank
+                # This ensures high-quality memories get higher scores than low-quality ones
+                # (Memory bank doesn't use outcome-based scoring, so "score" field is absent)
+                learned_score = quality
+
+                if quality >= 0.8:
+                    # High-quality explicit memory (importance=0.9, confidence=0.9)
+                    # Weight: 45% embedding, 55% quality
+                    embedding_weight = 0.45
+                    learned_weight = 0.55
+                else:
+                    # Standard new memory_bank entry
+                    # Weight: 50% embedding, 50% quality (balanced trust)
+                    embedding_weight = 0.5
+                    learned_weight = 0.5
+
+            else:
+                # NEW/UNKNOWN MEMORY
+                # Has no usage history, rely more on semantic matching
+                # Weight: 70% embedding, 30% learned (original behavior)
+                embedding_weight = 0.7
+                learned_weight = 0.3
+
+            # Calculate combined score with dynamic weights
+            combined_score = (embedding_weight * embedding_similarity) + (learned_weight * learned_score)
+
+            # Store detailed scores for debugging/transparency
             r["final_rank_score"] = combined_score
-            r["original_distance"] = distance  # Keep for debugging
+            r["original_distance"] = distance
+            r["embedding_similarity"] = embedding_similarity
+            r["learned_score"] = learned_score
+            r["embedding_weight"] = embedding_weight
+            r["learned_weight"] = learned_weight
+            r["uses"] = uses
 
         # Sort by combined score (higher is better)
         all_results.sort(key=lambda x: x.get("final_rank_score", 0.0), reverse=True)
+
+        # CROSS-ENCODER RERANKING (v2.1): Refine top results with cross-encoder for precision
+        if self.reranker and len(all_results) > limit * 2:
+            all_results = await self._rerank_with_cross_encoder(query, all_results, limit)
 
         # Track query for KG learning (only for returned results)
         paginated_results = all_results[offset:offset + limit]
@@ -746,6 +1569,22 @@ class UnifiedMemorySystem:
                 if concept.lower() in query.lower():
                     result["kg_routing_hint"] = f"Similar queries ({concept}) had {int(pattern.get('success_rate', 0)*100)}% success rate"
                     break
+
+        # Cache doc_ids from working/history/patterns for outcome-based scoring
+        # (architecture.md: "Score cached memories with same outcome")
+        session_id = transparency_context.session_id if transparency_context and hasattr(transparency_context, 'session_id') else 'default'
+        cached_doc_ids = []
+        for result in paginated_results:
+            collection = result.get("collection", "")
+            # Only cache scoreable collections (not books or memory_bank)
+            if collection in ["working", "history", "patterns"]:
+                doc_id = result.get("id")
+                if doc_id:
+                    cached_doc_ids.append(doc_id)
+
+        self._cached_doc_ids[session_id] = cached_doc_ids
+        if cached_doc_ids:
+            logger.debug(f"[CACHE] Cached {len(cached_doc_ids)} doc_ids for outcome scoring (session: {session_id})")
 
         # Track search completion and add citations if context provided
         if transparency_context:
@@ -865,10 +1704,22 @@ class UnifiedMemorySystem:
         """Delete all memories associated with a specific conversation"""
         try:
             deleted_count = 0
+            deleted_memory_bank_ids = []
 
             # Delete from all collections
             for collection_name, adapter in self.collections.items():
                 try:
+                    # Get doc_ids before deleting (for Content KG cleanup)
+                    if collection_name == "memory_bank":
+                        try:
+                            result = adapter.collection.get(
+                                where={"conversation_id": conversation_id},
+                                include=[]
+                            )
+                            deleted_memory_bank_ids = result.get("ids", [])
+                        except Exception as e:
+                            logger.warning(f"Failed to get memory_bank IDs for cleanup: {e}")
+
                     # ChromaDB delete by metadata filter
                     result = adapter.collection.delete(
                         where={"conversation_id": conversation_id}
@@ -881,6 +1732,19 @@ class UnifiedMemorySystem:
                 except Exception as e:
                     logger.warning(f"Failed to delete from {collection_name}: {e}")
                     continue
+
+            # CRITICAL: Batch cleanup Content KG for deleted memory_bank items
+            if deleted_memory_bank_ids:
+                try:
+                    for doc_id in deleted_memory_bank_ids:
+                        self.content_graph.remove_entity_mention(doc_id)
+                    await self._debounced_save_kg()
+                    logger.info(f"Removed {len(deleted_memory_bank_ids)} memory_bank entities from Content KG")
+                except Exception as e:
+                    logger.error(f"Failed to batch cleanup Content KG: {e}", exc_info=True)
+
+            # Cleanup dead KG references from Routing KG
+            await self._cleanup_kg_dead_references()
 
             logger.info(f"Deleted {deleted_count} total memories for conversation {conversation_id}")
             return deleted_count
@@ -1033,8 +1897,8 @@ class UnifiedMemorySystem:
 
         logger.info(f"[COLD-START] Formatted {len(safe_results)} safe memory_bank facts")
 
-        context_summary = "📋 **User Profile** (auto-loaded from your most important stored facts):\n" + "\n".join([
-            f"• {self._smart_truncate((r.get('content') or r.get('text', '')).replace(chr(10), ' '), 250)}"
+        context_summary = "[User Profile] (auto-loaded from your most important stored facts):\n" + "\n".join([
+            f"- {self._smart_truncate((r.get('content') or r.get('text', '')).replace(chr(10), ' '), 250)}"
             for r in safe_results
         ])
 
@@ -1198,6 +2062,19 @@ class UnifiedMemorySystem:
             "when", "where", "how", "why", "can", "could", "would", "should"
         }
 
+        # v0.2.1: Blocklist for MCP tool names and internal function-like patterns
+        # These pollute the Content KG with non-semantic entities
+        tool_blocklist = {
+            # MCP tool names
+            "search_memory", "add_to_memory_bank", "create_memory", "update_memory",
+            "archive_memory", "get_context_insights", "record_response", "validated",
+            # Common patterns from tool descriptions
+            "memory_bank", "working", "history", "patterns", "books",
+            # Internal function-like terms
+            "function", "parameter", "response", "request", "query", "result",
+            "collection", "collections", "metadata", "timestamp", "document"
+        }
+
         # Filter stop words
         filtered_words = [w for w in words if w not in stop_words and len(w) > 2]
 
@@ -1228,8 +2105,26 @@ class UnifiedMemorySystem:
             matches = re.findall(pattern, text, re.IGNORECASE)
             concepts.update(m.lower() for m in matches)
 
+        # v0.2.1: Filter out blocklisted tool names and n-grams containing them
+        def is_blocklisted(concept: str) -> bool:
+            """Check if concept or any of its parts are in the blocklist."""
+            if concept in tool_blocklist:
+                return True
+            # Check if any blocklist term is a component of the n-gram
+            parts = concept.split('_')
+            for part in parts:
+                if part in tool_blocklist:
+                    return True
+            # Also check for compound blocklist terms (e.g., "add_to_memory_bank" within larger n-gram)
+            for blocked in tool_blocklist:
+                if blocked in concept:
+                    return True
+            return False
+
+        filtered_concepts = {c for c in concepts if not is_blocklisted(c)}
+
         # Return up to 15 concepts (prioritize longer n-grams for specificity)
-        sorted_concepts = sorted(concepts, key=lambda x: len(x.split('_')), reverse=True)
+        sorted_concepts = sorted(filtered_concepts, key=lambda x: len(x.split('_')), reverse=True)
         return sorted_concepts[:15]
 
     def _track_usage(self, query: str, collection: str, doc_id: str):
@@ -1249,7 +2144,8 @@ class UnifiedMemorySystem:
         doc_id: str,
         outcome: Literal["worked", "failed", "partial"],
         failure_reason: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        session_id: str = 'default'
     ):
         """
         Record outcome and trigger learning.
@@ -1257,6 +2153,7 @@ class UnifiedMemorySystem:
         Args:
             doc_id: Document that was used
             outcome: Whether it worked
+            session_id: Session identifier for cached memory retrieval
         """
         # Get document to find collection (needed for KG routing update)
         collection_name = None
@@ -1275,7 +2172,13 @@ class UnifiedMemorySystem:
         # UPDATE KG ROUTING FIRST - even for books/memory_bank
         # This allows KG to learn which collections answer which queries
         metadata = doc.get("metadata", {})
-        problem_text = metadata.get("query", "")
+        # For quiz retrievals, use quiz_question from context; otherwise use stored query
+        problem_text = ""
+        if context and "quiz_question" in context:
+            problem_text = context["quiz_question"]
+        else:
+            problem_text = metadata.get("query", "")
+
         if problem_text and collection_name:
             await self._update_kg_routing(problem_text, collection_name, outcome)
             logger.info(f"[KG] Updated routing for '{problem_text[:50]}' → {collection_name} (outcome={outcome})")
@@ -1345,16 +2248,21 @@ class UnifiedMemorySystem:
         })
         outcome_history = outcome_history[-10:]  # Keep last 10
 
-        metadata.update({
+        # CRITICAL: Only update the CHANGED fields, not entire metadata dict
+        # This prevents overwriting other metadata fields
+        metadata_updates = {
             "score": new_score,
             "uses": uses,
             "last_outcome": outcome,
             "last_used": datetime.now().isoformat(),
             "outcome_history": json.dumps(outcome_history)
-        })
+        }
 
         # Update in ChromaDB
-        self.collections[collection_name].update_fragment_metadata(doc_id, metadata)
+        self.collections[collection_name].update_fragment_metadata(doc_id, metadata_updates)
+
+        # CRITICAL: Update local metadata dict with new values for promotion
+        metadata.update(metadata_updates)
 
         # Handle promotion/demotion with dynamic thresholds
         collection_size = self.collections[collection_name].collection.count()
@@ -1362,14 +2270,22 @@ class UnifiedMemorySystem:
 
         # Update KG with both problem and solution for proper relationship building
         # Note: routing patterns already updated above (before safeguard checks)
-        problem_text = metadata.get("query", "")
+        # Use problem_text from context (quiz question) if available, otherwise from metadata
+        if not problem_text:  # If not already set from context above
+            problem_text = metadata.get("query", "")
         solution_text = doc.get("content", "")
+
+        # DEBUG: Log KG building check (using logger to avoid MCP stdout pollution)
+        logger.debug(f"[KG_DEBUG] doc_id={doc_id[:20]}, outcome={outcome}, problem_text={bool(problem_text)} ({len(problem_text)} chars), solution_text={bool(solution_text)} ({len(solution_text)} chars)")
 
         # Build relationships and patterns when outcome is positive
         if outcome == "worked" and problem_text and solution_text:
+            logger.debug(f"[KG_BUILD] Building problem_categories! problem={len(problem_text)} chars, solution={len(solution_text)} chars")
+            logger.info(f"[KG] Building problem_categories for worked outcome (problem={len(problem_text)} chars, solution={len(solution_text)} chars)")
             # Extract concepts from both problem and solution
             problem_concepts = self._extract_concepts(problem_text)
             solution_concepts = self._extract_concepts(solution_text)
+            logger.debug(f"[KG_BUILD] Extracted problem_concepts: {len(problem_concepts)}, solution_concepts: {len(solution_concepts)}")
             all_concepts = list(set(problem_concepts + solution_concepts))
 
             # Build relationships between all concepts
@@ -1377,10 +2293,12 @@ class UnifiedMemorySystem:
 
             # Update problem categories
             problem_key = "_".join(sorted(problem_concepts)[:3])  # Key from first 3 concepts
+            logger.debug(f"[KG_BUILD] problem_key='{problem_key}', adding doc_id={doc_id[:20]}")
             if problem_key not in self.knowledge_graph["problem_categories"]:
                 self.knowledge_graph["problem_categories"][problem_key] = []
             if doc_id not in self.knowledge_graph["problem_categories"][problem_key]:
                 self.knowledge_graph["problem_categories"][problem_key].append(doc_id)
+            logger.debug(f"[KG_BUILD] problem_categories now has {len(self.knowledge_graph['problem_categories'])} keys")
 
             # Update solution patterns
             solution_key = f"solution_{doc_id}"
@@ -1406,8 +2324,8 @@ class UnifiedMemorySystem:
             if total > 0:
                 stats["success_rate"] = stats["success_count"] / total
 
-            # Save KG after updates (debounced)
-            await self._debounced_save_kg()
+            # Save KG after updates (IMMEDIATE save for problem_categories to ensure it persists)
+            await self._save_kg()
 
         # Track failure patterns when something doesn't work
         elif outcome == "failed":
@@ -1461,7 +2379,206 @@ class UnifiedMemorySystem:
         if outcome == "worked":
             await self._track_problem_solution(doc_id, metadata, context)
 
+        # CACHED MEMORY RE-SCORING (architecture.md: "Score cached memories with same outcome")
+        # Apply the same outcome to all memories retrieved in the last search
+        cached_doc_ids = self._cached_doc_ids.get(session_id, [])
+        if cached_doc_ids and outcome != "partial":  # Only for definitive outcomes
+            rescored_count = 0
+            for cached_doc_id in cached_doc_ids:
+                # Skip if it's the same doc_id we just scored
+                if cached_doc_id == doc_id:
+                    continue
+
+                # Find the collection for this cached doc_id
+                cached_collection = None
+                cached_doc = None
+                for coll_name in ["working", "history", "patterns"]:
+                    if cached_doc_id.startswith(coll_name):
+                        cached_collection = coll_name
+                        adapter = self.collections.get(coll_name)
+                        if adapter:
+                            cached_doc = adapter.get_fragment(cached_doc_id)
+                            break
+
+                if not cached_doc or not cached_collection:
+                    continue
+
+                # Score the cached memory with the same outcome
+                cached_metadata = cached_doc.get("metadata", {})
+                cached_score = cached_metadata.get("score", 0.5)
+                cached_uses = cached_metadata.get("uses", 0)
+
+                # Apply outcome scoring (same logic as main doc_id)
+                if outcome == "worked":
+                    cached_score = min(1.0, cached_score + 0.2)
+                    cached_uses += 1
+                elif outcome == "failed":
+                    cached_score = max(0.0, cached_score - 0.3)
+
+                # Update metadata
+                cached_updates = {
+                    "score": cached_score,
+                    "uses": cached_uses,
+                    "last_used": datetime.now().isoformat(),
+                    "last_outcome": outcome
+                }
+
+                # Update in ChromaDB
+                self.collections[cached_collection].update_fragment_metadata(cached_doc_id, cached_updates)
+                rescored_count += 1
+
+                logger.debug(f"[CACHED] Re-scored {cached_doc_id}: {outcome} (score: {cached_score:.2f}, uses: {cached_uses})")
+
+            # Clear cache after scoring
+            self._cached_doc_ids[session_id] = []
+            if rescored_count > 0:
+                logger.info(f"[CACHED] Re-scored {rescored_count} cached memories with outcome={outcome}")
+
         logger.info(f"Outcome recorded: {doc_id} -> {outcome} (score: {new_score:.2f})")
+
+    async def record_action_outcome(
+        self,
+        action: ActionOutcome
+    ):
+        """
+        Record action-level outcome with context awareness (v0.2.1 Causal Learning).
+
+        This enables learning: "In context X, action Y on collection Z leads to outcome W"
+        Example: In "memory_test" context, create_memory → failed (should use search_memory instead)
+
+        Args:
+            action: ActionOutcome with context type, action type, outcome, and causal attribution
+        """
+        # Build key for context-action-collection effectiveness tracking
+        # Format: "{context_type}|{action_type}|{collection}"
+        # Example: "coding|search_memory|working" or "fitness|create_memory|working"
+        key = f"{action.context_type}|{action.action_type}|{action.collection or '*'}"
+
+        # Initialize tracking structure if needed
+        if key not in self.knowledge_graph["context_action_effectiveness"]:
+            self.knowledge_graph["context_action_effectiveness"][key] = {
+                "successes": 0,
+                "failures": 0,
+                "partials": 0,
+                "success_rate": 0.0,
+                "total_uses": 0,
+                "first_seen": datetime.now().isoformat(),
+                "last_used": datetime.now().isoformat(),
+                "examples": []  # Store recent examples for debugging
+            }
+
+        stats = self.knowledge_graph["context_action_effectiveness"][key]
+
+        # Update counts based on outcome
+        if action.outcome == "worked":
+            stats["successes"] += 1
+        elif action.outcome == "failed":
+            stats["failures"] += 1
+        else:  # partial
+            stats["partials"] += 1
+
+        stats["total_uses"] += 1
+        stats["last_used"] = datetime.now().isoformat()
+
+        # Calculate success rate (successes / total, treating partials as 0.5)
+        total = stats["successes"] + stats["failures"] + stats["partials"]
+        if total > 0:
+            weighted_successes = stats["successes"] + (stats["partials"] * 0.5)
+            stats["success_rate"] = weighted_successes / total
+
+        # Store example for debugging (keep last 5)
+        example = {
+            "timestamp": action.timestamp.isoformat(),
+            "outcome": action.outcome,
+            "doc_id": action.doc_id,
+            "params": action.action_params,
+            "chain_position": action.chain_position,
+            "chain_length": action.chain_length,
+            "caused_final": action.caused_final_outcome
+        }
+        if action.failure_reason:
+            example["failure_reason"] = action.failure_reason
+
+        stats["examples"] = (stats.get("examples", []) + [example])[-5:]
+
+        # Log learning for transparency
+        logger.info(
+            f"[Causal Learning] {key}: {action.outcome} "
+            f"(rate={stats['success_rate']:.2%}, uses={stats['total_uses']}, "
+            f"chain={action.chain_position+1}/{action.chain_length})"
+        )
+
+        # If this action has low success rate in this context, log a warning
+        # This enables future self-correction
+        if stats["total_uses"] >= 3 and stats["success_rate"] < 0.3:
+            logger.warning(
+                f"[Causal Learning] LOW SUCCESS PATTERN DETECTED: {key} "
+                f"has only {stats['success_rate']:.0%} success rate after {stats['total_uses']} uses. "
+                f"Consider avoiding this action in {action.context_type} context."
+            )
+
+        # Save KG (debounced to avoid excessive writes)
+        await self._debounced_save_kg()
+
+        # Also call the legacy doc-level record_outcome for backward compatibility
+        # This maintains existing KG routing and score updates
+        if action.doc_id:
+            await self.record_outcome(
+                doc_id=action.doc_id,
+                outcome=action.outcome,
+                failure_reason=action.failure_reason,
+                context=action.success_context or {}
+            )
+
+    def get_action_effectiveness(
+        self,
+        context_type: ContextType,
+        action_type: str,
+        collection: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get effectiveness stats for an action in a specific context (v0.2.1 Causal Learning).
+
+        Args:
+            context_type: LLM-classified topic (e.g., "coding", "fitness", "finance")
+            action_type: Tool name (search_memory, create_memory, etc.)
+            collection: Optional collection filter
+
+        Returns:
+            Stats dict with success_rate, total_uses, etc., or None if no data
+        """
+        key = f"{context_type}|{action_type}|{collection or '*'}"
+        return self.knowledge_graph["context_action_effectiveness"].get(key)
+
+    def should_avoid_action(
+        self,
+        context_type: ContextType,
+        action_type: str,
+        collection: Optional[str] = None,
+        min_uses: int = 10,
+        max_success_rate: float = 0.1
+    ) -> bool:
+        """
+        Check if action should be avoided based on learned effectiveness (v0.2.1 Causal Learning).
+
+        NOTE: This is now informational only - system shows stats but doesn't prescribe actions.
+        Defaults changed to be less aggressive: min_uses=10 (was 3), max_success_rate=10% (was 30%).
+
+        Args:
+            context_type: Current context
+            action_type: Action being considered
+            collection: Optional collection filter
+            min_uses: Minimum uses before making judgment (default: 10)
+            max_success_rate: Threshold for "low success" (default: 0.1 = 10%)
+
+        Returns:
+            True if action has consistently failed and should be avoided (very rare)
+        """
+        stats = self.get_action_effectiveness(context_type, action_type, collection)
+        if not stats:
+            return False  # No data yet, don't block
+
+        return stats["total_uses"] >= min_uses and stats["success_rate"] < max_success_rate
 
     async def _promote_item(
         self,
@@ -1571,11 +2688,25 @@ class UnifiedMemorySystem:
             metadata["promotion_history"] = json.dumps(promotion_history)
             metadata["promoted_from"] = "working"
 
-            await self.collections["history"].upsert_vectors(
-                ids=[new_id],
-                vectors=[await self.embedding_service.embed_text(metadata["text"])],
-                metadatas=[metadata]
-            )
+            # CRITICAL: Get text from metadata or doc content for re-embedding
+            text_for_embedding = metadata.get("text") or metadata.get("content") or doc.get("content", "")
+
+            if not text_for_embedding:
+                logger.error(f"Cannot promote {doc_id}: no text found in metadata or doc")
+                return
+
+            try:
+                await self.collections["history"].upsert_vectors(
+                    ids=[new_id],
+                    vectors=[await self.embedding_service.embed_text(text_for_embedding)],
+                    metadatas=[metadata]
+                )
+                logger.info(f"✓ Created history memory: {new_id}")
+            except Exception as e:
+                logger.error(f"✗ Failed to create history memory {new_id}: {e}", exc_info=True)
+                return  # Don't delete from working if promotion failed!
+
+            # Only delete from working AFTER successful promotion
             self.collections["working"].delete_vectors([doc_id])
             await self._add_relationship(new_id, "evolution", {"parent": doc_id})
 
@@ -1998,8 +3129,12 @@ class UnifiedMemorySystem:
     # Removed _background_promotion_loop - Background promotion is handled in main.py
     # This eliminates duplicate background task tech debt (was running both 30min and 60min tasks)
 
-    async def cleanup_old_working_memory(self):
-        """Clean up working memory items older than 24 hours"""
+    async def cleanup_old_working_memory(self, current_time=None):
+        """Clean up working memory items older than 24 hours
+
+        Args:
+            current_time: Optional datetime to use as "now" (for testing). If None, uses datetime.now()
+        """
         try:
             working_adapter = self.collections.get("working")
             if not working_adapter:
@@ -2007,6 +3142,9 @@ class UnifiedMemorySystem:
 
             cleaned_count = 0
             all_ids = working_adapter.list_all_ids()
+
+            # Use provided time or real time
+            now = current_time if current_time else datetime.now()
 
             for doc_id in all_ids:
                 doc = working_adapter.get_fragment(doc_id)
@@ -2018,9 +3156,9 @@ class UnifiedMemorySystem:
                     try:
                         if timestamp_str:
                             doc_time = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                            age_hours = (datetime.now() - doc_time).total_seconds() / 3600
+                            age_hours = (now - doc_time).total_seconds() / 3600
 
-                            if age_hours > 24:
+                            if age_hours >= 24:
                                 working_adapter.delete_vectors([doc_id])
                                 cleaned_count += 1
                                 logger.info(f"Cleaned up old working memory {doc_id} (age: {age_hours:.1f}h)")
@@ -2089,8 +3227,8 @@ class UnifiedMemorySystem:
                     except:
                         age_hours = 0
 
-                    # Promote if: high score AND (used multiple times OR old enough)
-                    if score >= self.PROMOTION_SCORE_THRESHOLD and (uses >= 2 or age_hours >= 2):
+                    # Promote if: high score AND used multiple times
+                    if score >= self.PROMOTION_SCORE_THRESHOLD and uses >= 2:
                         # Promote to History
                         new_id = doc_id.replace("working_", "history_")
                         await self.collections["history"].upsert_vectors(
@@ -2751,16 +3889,19 @@ class UnifiedMemorySystem:
             # Ignore count check errors, continue with storage
             logger.warning(f"Could not check memory_bank capacity (continuing anyway): {e}")
 
-        doc_id = f"memory_bank_{uuid.uuid4().hex[:8]}"
-
-        await self.store(
+        # BUGFIX: store() generates the actual doc_id with timestamp
+        # We MUST capture and return that ID, not a pre-generated one
+        # NOTE: memory_bank does NOT use outcome-based scoring (no "score" field)
+        # Instead, ranking uses importance × confidence quality score
+        doc_id = await self.store(
             text=text,
             collection="memory_bank",
             metadata={
                 "tags": json.dumps(tags),
                 "importance": importance,
                 "confidence": confidence,
-                "score": 1.0,  # Never decays
+                # NO "score" field - memory_bank uses quality-based ranking (importance × confidence)
+                # not outcome-based scoring like working/history/patterns
                 "status": "active",
                 "created_at": datetime.now().isoformat(),
                 "mentioned_count": 1,
@@ -2772,11 +3913,19 @@ class UnifiedMemorySystem:
         # This builds the user's personal knowledge graph (green/purple nodes in UI)
         # Do NOT remove - core feature for entity relationship mapping
         try:
-            timestamp = datetime.now().isoformat()
-            self.content_graph.add_entities_from_text(text, doc_id, timestamp)
+            # Calculate quality score for Content KG entity ranking
+            quality_score = float(importance) * float(confidence)
+
+            self.content_graph.add_entities_from_text(
+                text=text,
+                doc_id=doc_id,
+                collection="memory_bank",
+                extract_concepts_fn=self._extract_concepts,
+                quality_score=quality_score
+            )
             # Save content graph asynchronously (debounced like routing KG)
             await self._debounced_save_kg()  # This now saves both KGs
-            logger.debug(f"Extracted entities from memory_bank item: {doc_id}")
+            logger.debug(f"Extracted entities from memory_bank item: {doc_id} (quality={quality_score:.2f})")
         except Exception as e:
             logger.error(f"Failed to extract entities for content KG: {e}", exc_info=True)
 
@@ -2843,11 +3992,39 @@ class UnifiedMemorySystem:
         # CRITICAL: Update content graph with new entities
         # Remove old entities, extract new ones
         try:
+            # Calculate quality score from existing metadata
+            importance = old_metadata.get("importance", 0.7)
+            confidence = old_metadata.get("confidence", 0.7)
+
+            # Ensure numeric types
+            if isinstance(importance, (list, tuple)):
+                importance = float(importance[0]) if importance else 0.7
+            elif isinstance(importance, str):
+                importance_map = {'high': 0.9, 'medium': 0.7, 'low': 0.5}
+                importance = importance_map.get(importance.lower(), 0.7)
+            else:
+                importance = float(importance) if importance else 0.7
+
+            if isinstance(confidence, (list, tuple)):
+                confidence = float(confidence[0]) if confidence else 0.7
+            elif isinstance(confidence, str):
+                confidence_map = {'high': 0.9, 'medium': 0.7, 'low': 0.5}
+                confidence = confidence_map.get(confidence.lower(), 0.7)
+            else:
+                confidence = float(confidence) if confidence else 0.7
+
+            quality_score = importance * confidence
+
             self.content_graph.remove_entity_mention(doc_id)
-            timestamp = datetime.now().isoformat()
-            self.content_graph.add_entities_from_text(new_text, doc_id, timestamp)
+            self.content_graph.add_entities_from_text(
+                text=new_text,
+                doc_id=doc_id,
+                collection="memory_bank",
+                extract_concepts_fn=self._extract_concepts,
+                quality_score=quality_score
+            )
             await self._debounced_save_kg()
-            logger.debug(f"Updated content KG for memory_bank item: {doc_id}")
+            logger.debug(f"Updated content KG for memory_bank item: {doc_id} (quality={quality_score:.2f})")
         except Exception as e:
             logger.error(f"Failed to update content KG: {e}", exc_info=True)
 
@@ -2983,6 +4160,15 @@ class UnifiedMemorySystem:
         """
         try:
             self.collections["memory_bank"].delete_vectors([doc_id])
+
+            # CRITICAL: Remove entity mentions from content graph when deleted
+            try:
+                self.content_graph.remove_entity_mention(doc_id)
+                await self._debounced_save_kg()
+                logger.debug(f"Removed content KG entities for deleted memory: {doc_id}")
+            except Exception as e:
+                logger.error(f"Failed to update content KG on delete: {e}", exc_info=True)
+
             logger.info(f"User permanently deleted memory: {doc_id}")
             return True
         except Exception as e:
@@ -3038,8 +4224,23 @@ class UnifiedMemorySystem:
         # STEP 2: Get content KG entities (memory-based relationships)
         # CRITICAL: Do not skip this step - provides green/purple nodes in UI
         content_entities = self.content_graph.get_all_entities(min_mentions=1)
+
+        # v0.2.1: Blocklist for filtering out tool-like entities from existing content_graph
+        tool_blocklist_terms = {
+            "search_memory", "add_to_memory_bank", "create_memory", "update_memory",
+            "archive_memory", "get_context_insights", "record_response", "validated",
+            "memory_bank", "working", "history", "patterns", "books",
+            "function", "parameter", "response", "request", "query", "result",
+            "collection", "collections", "metadata", "timestamp", "document"
+        }
+
         for entity_data in content_entities:
             entity_name = entity_data["entity"]
+
+            # v0.2.1: Skip entities that look like tool names (contain blocklisted terms)
+            is_tool_like = any(term in entity_name for term in tool_blocklist_terms)
+            if is_tool_like:
+                continue
 
             if filter_text and filter_text.lower() not in entity_name.lower():
                 continue
@@ -3070,6 +4271,51 @@ class UnifiedMemorySystem:
                     "last_used": entity_data.get("last_seen"),
                     "created_at": entity_data.get("first_seen")
                 }
+
+
+        # STEP 3: Get Action Effectiveness KG entities (context|action|collection patterns)
+        # v0.2.1: Orange nodes showing action success rates per context
+        for key, stats in self.knowledge_graph.get("context_action_effectiveness", {}).items():
+            parts = key.split("|")
+            if len(parts) >= 2:
+                context_type = parts[0]
+                action_type = parts[1]
+                collection = parts[2] if len(parts) > 2 else "*"
+
+                # Create readable label
+                label = f"{action_type}@{context_type}"
+                if collection != "*":
+                    label += f"→{collection}"
+
+                if filter_text and filter_text.lower() not in label.lower():
+                    continue
+
+                total_uses = stats.get("successes", 0) + stats.get("failures", 0)
+                if total_uses == 0:
+                    continue  # Skip unused patterns
+
+                success_rate = stats.get("success_rate", 0.5)
+
+                # Don't overwrite routing/content entities with same name
+                if label not in entities_map:
+                    entities_map[label] = {
+                        "entity": label,
+                        "source": "action",  # Orange nodes for action effectiveness
+                        "routing_connections": 0,
+                        "content_connections": 0,
+                        "total_connections": 0,
+                        "success_rate": success_rate,
+                        "best_collection": collection if collection != "*" else None,
+                        "collections_used": {collection: {"total": total_uses, "successes": stats.get("successes", 0), "failures": stats.get("failures", 0)}},
+                        "usage_count": total_uses,
+                        "mentions": 0,
+                        "last_used": stats.get("last_used"),
+                        "created_at": stats.get("first_used"),
+                        # Action-specific metadata
+                        "context_type": context_type,
+                        "action_type": action_type,
+                        "partials": stats.get("partials", 0)
+                    }
 
         # Convert to list and sort by usage
         entities = list(entities_map.values())

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { modelContextService } from '../services/modelContextService';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface ModelContextSettingsProps {
   isOpen: boolean;
@@ -32,7 +33,7 @@ export const ModelContextSettings: React.FC<ModelContextSettingsProps> = ({
       setLoading(true);
       try {
         // Fetch installed models
-        const response = await apiFetch('http://localhost:8000/api/model/available');
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/available`);
         if (!response.ok) {
           console.error('Failed to fetch installed models');
           return;

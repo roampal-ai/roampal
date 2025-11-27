@@ -6,6 +6,7 @@
  */
 
 import logger from './logger';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 // Types for file upload tracking
 export interface FileUploadState {
@@ -100,7 +101,7 @@ export async function uploadFile(
     });
 
     // Send request
-    xhr.open('POST', 'http://localhost:8000/api/book-upload/upload');
+    xhr.open('POST', `${ROAMPAL_CONFIG.apiUrl}/api/book-upload/upload`);
     xhr.send(formData);
   });
 }

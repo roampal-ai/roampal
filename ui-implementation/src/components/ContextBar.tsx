@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowDownIcon, ClockIcon, SparklesIcon, CubeIcon, LinkIcon, MagnifyingGlassIcon, FunnelIcon } from '@heroicons/react/24/outline';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface ContextBarProps {
   memories: MemoryFragment[];
@@ -85,7 +86,7 @@ export const ContextBar: React.FC<ContextBarProps> = ({
 
   const fetchFragments = async (reset = false) => {
     try {
-      const response = await apiFetch(`http://localhost:8000/api/memory/fragments?limit=200&offset=0`);
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory/fragments?limit=200&offset=0`);
       if (response.ok) {
         const data = await response.json();
         console.log('[ContextBar] Fetched fragments:', data);
@@ -106,7 +107,7 @@ export const ContextBar: React.FC<ContextBarProps> = ({
 
   const fetchKnowledgeGraph = async () => {
     try {
-      const response = await apiFetch('http://localhost:8000/api/memory/knowledge-graph');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory/knowledge-graph`);
       if (response.ok) {
         const data = await response.json();
         if (data.nodes) {

@@ -7,8 +7,8 @@
     "distDir": "../dist"
   },
   "package": {
-    "productName": "Roampal",
-    "version": "0.2.0"
+    "productName": "Roampal DEV",
+    "version": "0.2.1"
   },
   "tauri": {
     "allowlist": {
@@ -36,16 +36,19 @@
       "http": {
         "all": true,
         "scope": [
-          "http://localhost:8000/**"
+          "http://localhost:8766/**"
         ]
       }
     },
     "bundle": {
       "active": true,
-      "targets": [
-        "nsis"
-      ],
-      "identifier": "com.roampal.app",
+      "targets": [],
+      "identifier": "com.roampal.dev",
+      "windows": {
+        "nsis": {
+          "compression": "zlib"
+        }
+      },
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
@@ -64,16 +67,16 @@
         "binaries/models"
       ],
       "publisher": "Roampal",
-      "copyright": "\u00a9 2024 Roampal"
+      "copyright": "© 2024 Roampal"
     },
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:8000 http://127.0.0.1:8000 ws://localhost:8000 ws://127.0.0.1:8000; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:8766 http://127.0.0.1:8766 ws://localhost:8766 ws://127.0.0.1:8766; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
     },
     "windows": [
       {
         "fullscreen": false,
         "resizable": true,
-        "title": "Roampal - Your Private Intelligence",
+        "title": "Roampal DEV - Your Private Intelligence",
         "width": 1400,
         "height": 900,
         "minWidth": 900,

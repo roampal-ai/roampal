@@ -1,10 +1,13 @@
 // Roampal Configuration
+// Port configured via VITE_API_PORT env var (default: 8765 for prod, 8766 for dev)
+const API_PORT = import.meta.env.VITE_API_PORT || '8765';
+
 export const ROAMPAL_CONFIG = {
   name: 'Roampal',
-  apiUrl: 'http://localhost:8000',
-  API_BASE: 'http://localhost:8000',
-  apiBase: 'http://localhost:8000',
-  WS_URL: 'ws://localhost:8000',
+  apiUrl: `http://localhost:${API_PORT}`,
+  API_BASE: `http://localhost:${API_PORT}`,
+  apiBase: `http://localhost:${API_PORT}`,
+  WS_URL: `ws://localhost:${API_PORT}`,
   ENABLE_DEBUG_LOGGING: false,
   MAX_RETRIES: 3,
   RETRY_DELAY: 1000,

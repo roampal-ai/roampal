@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { flushSync } from 'react-dom';
 import { useTauri } from '../config/roampal';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 // Get Tauri functions once at module level
 const { readFile, writeFile, listFiles, isTauri } = useTauri();
@@ -158,7 +159,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   // Create new conversation (server-generated ID)
   createConversation: async () => {
     try {
-      const response = await apiFetch('http://localhost:8000/api/chat/create-conversation', {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/chat/create-conversation`, {
         method: 'POST'
       });
 
@@ -230,7 +231,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
       // Notify backend of conversation switch for memory promotion
       if (oldConversationId) {
-        const response = await apiFetch('http://localhost:8000/api/chat/switch-conversation', {
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/chat/switch-conversation`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -247,7 +248,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       // Load messages for the new conversation
       let loadedMessages: any[] = [];
       try {
-        const response = await apiFetch(`http://localhost:8000/api/sessions/${newConversationId}`);
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/sessions/${newConversationId}`);
         if (response.ok) {
           const data = await response.json();
 
@@ -355,7 +356,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
     const conversationId = state.conversationId;
     // Use single unified WebSocket endpoint
-    const ws = new WebSocket(`ws://localhost:8000/ws/conversation/${conversationId}`);
+    const ws = new WebSocket(`${ROAMPAL_CONFIG.WS_URL}/ws/conversation/${conversationId}`);
 
     // Setup heartbeat to keep connection alive
     let heartbeatInterval: NodeJS.Timeout | null = null;
@@ -828,7 +829,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     const conversationId = state.conversationId;
     if (conversationId) {
       try {
-        await apiFetch(`http://localhost:8000/api/agent/cancel/${conversationId}`, {
+        await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/agent/cancel/${conversationId}`, {
           method: 'POST',
         });
         console.log('[Cancel] Backend task cancelled');
@@ -940,7 +941,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
       // Start async generation task
       console.log('[POLLING] Starting async generation');
-      const startResponse = await apiFetch('http://localhost:8000/api/agent/stream', {
+      const startResponse = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/agent/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -962,7 +963,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
       const poll = async () => {
         try {
-          const progressResponse = await apiFetch(`http://localhost:8000/api/agent/progress/${conversation_id}`, {
+          const progressResponse = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/agent/progress/${conversation_id}`, {
             signal: abortController.signal,
           });
 
@@ -1079,7 +1080,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   searchMemory: async (query: string) => {
     try {
-      const response = await apiFetch('http://localhost:8000/api/memory/search', {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query })
@@ -1110,7 +1111,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     // Notify backend of switch to promote old conversation's memories (if it exists)
     if (oldConversationId) {
       try {
-        await apiFetch('http://localhost:8000/api/chat/switch-conversation', {
+        await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/chat/switch-conversation`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1141,7 +1142,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   initialize: async () => {
     // Get initial feature mode
     try {
-      const response = await apiFetch('http://localhost:8000/api/chat/feature-mode');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/chat/feature-mode`);
       if (response.ok) {
         const data = await response.json();
         // Mode system removed
@@ -1196,7 +1197,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   loadSessions: async () => {
     try {
-      const response = await apiFetch('http://localhost:8000/api/sessions/list');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/sessions/list`);
       if (response.ok) {
         const data = await response.json();
         const formattedSessions: ChatSession[] = data.sessions.map((session: any) => ({
@@ -1218,7 +1219,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   loadSession: async (conversationId: string) => {
     try {
-      const response = await apiFetch(`http://localhost:8000/api/sessions/${conversationId}`);
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/sessions/${conversationId}`);
       if (response.ok) {
         const data = await response.json();
         const messages = data.messages.map((msg: any) => {
@@ -1300,7 +1301,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   deleteSession: async (conversationId: string) => {
     try {
-      const response = await apiFetch(`http://localhost:8000/api/sessions/${conversationId}`, {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/sessions/${conversationId}`, {
         method: 'DELETE'
       });
 
@@ -1315,7 +1316,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   updateSessionTitle: async (sessionId: string, title: string) => {
     try {
-      const response = await apiFetch(`http://localhost:8000/api/sessions/${sessionId}`, {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/sessions/${sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: title })

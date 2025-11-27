@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -56,7 +57,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
         }
 
         const response = await fetch(
-          `http://localhost:8000/api/backup/estimate?include=${selectedTypes}`
+          `${ROAMPAL_CONFIG.apiUrl}/api/backup/estimate?include=${selectedTypes}`
         );
 
         if (response.ok) {
@@ -95,8 +96,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
 
       // Create backup with selected types
       const url = selectedTypes === 'sessions,memory,books,knowledge'
-        ? 'http://localhost:8000/api/backup/create'
-        : `http://localhost:8000/api/backup/create?include=${selectedTypes}`;
+        ? `${ROAMPAL_CONFIG.apiUrl}/api/backup/create`
+        : `${ROAMPAL_CONFIG.apiUrl}/api/backup/create?include=${selectedTypes}`;
 
       const response = await fetch(url, {
         method: 'POST'

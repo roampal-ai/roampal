@@ -9,6 +9,7 @@ import {
   ChartBarIcon
 } from '@heroicons/react/24/outline';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface Memory {
   id: string;
@@ -53,9 +54,9 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
     setLoading(true);
     try {
       const [memoriesRes, archivedRes, statsRes] = await Promise.all([
-        apiFetch('http://localhost:8000/api/memory-bank/list'),
-        apiFetch('http://localhost:8000/api/memory-bank/archived'),
-        apiFetch('http://localhost:8000/api/memory-bank/stats')
+        apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory-bank/list`),
+        apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory-bank/archived`),
+        apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory-bank/stats`)
       ]);
 
       if (memoriesRes.ok) {
@@ -79,7 +80,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
 
   const handleArchive = async (id: string) => {
     try {
-      const response = await apiFetch(`http://localhost:8000/api/memory-bank/${id}`, {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory-bank/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -97,7 +98,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
 
   const handleRestore = async (id: string) => {
     try {
-      const response = await apiFetch(`http://localhost:8000/api/memory-bank/restore/${id}`, {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory-bank/restore/${id}`, {
         method: 'POST'
       });
       if (response.ok) {
@@ -112,7 +113,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
     if (!confirm('Permanently delete this memory? This cannot be undone.')) return;
 
     try {
-      const response = await apiFetch(`http://localhost:8000/api/memory-bank/delete/${id}`, {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory-bank/delete/${id}`, {
         method: 'DELETE'
       });
       if (response.ok) {

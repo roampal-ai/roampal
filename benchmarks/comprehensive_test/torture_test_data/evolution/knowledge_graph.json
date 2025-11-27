@@ -1,0 +1,302 @@
+{
+  "routing_patterns": {
+    "deployment": {
+      "collections_used": {
+        "working": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 150
+        },
+        "patterns": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 150
+        },
+        "history": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 150
+        },
+        "books": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 150
+        },
+        "memory_bank": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 150
+        }
+      },
+      "best_collection": "patterns",
+      "success_rate": 0.5,
+      "last_used": "2025-11-26T17:58:15.196622"
+    },
+    "programming_example": {
+      "collections_used": {
+        "working": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "patterns": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "history": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "books": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "memory_bank": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        }
+      },
+      "best_collection": "books",
+      "success_rate": 0.5,
+      "last_used": "2025-11-26T17:58:15.035678"
+    },
+    "programming": {
+      "collections_used": {
+        "working": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "patterns": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "history": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "books": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "memory_bank": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        }
+      },
+      "best_collection": "books",
+      "success_rate": 0.5,
+      "last_used": "2025-11-26T17:58:15.035678"
+    },
+    "example": {
+      "collections_used": {
+        "working": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 299
+        },
+        "patterns": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 299
+        },
+        "history": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 299
+        },
+        "books": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 299
+        },
+        "memory_bank": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 299
+        }
+      },
+      "best_collection": "books",
+      "success_rate": 0.5,
+      "last_used": "2025-11-26T17:58:15.196622"
+    },
+    "deployment_example": {
+      "collections_used": {
+        "working": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "patterns": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "history": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "books": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        },
+        "memory_bank": {
+          "successes": 0,
+          "failures": 0,
+          "partials": 0,
+          "total": 149
+        }
+      },
+      "best_collection": "patterns",
+      "success_rate": 0.5,
+      "last_used": "2025-11-26T17:58:15.196622"
+    },
+    "deployment_guide_docker": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "guide_docker_kubernetes": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "docker_kubernetes": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "guide_docker": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "deployment_guide": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "kubernetes": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "docker": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    },
+    "guide": {
+      "collections_used": {},
+      "best_collection": "patterns",
+      "success_rate": 0.5
+    }
+  },
+  "success_rates": {
+    "patterns_209f2c66_1764204790.912043": {
+      "success_count": 0,
+      "failure_count": 20,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "patterns_b9e52843_1764204790.845284": {
+      "success_count": 0,
+      "failure_count": 25,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "patterns_73ab75fc_1764204791.414161": {
+      "success_count": 0,
+      "failure_count": 2,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "patterns_96dcc9a5_1764204790.895386": {
+      "success_count": 0,
+      "failure_count": 6,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "patterns_0c45e88e_1764204790.878667": {
+      "success_count": 0,
+      "failure_count": 16,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "patterns_f5a83e5a_1764204790.878667": {
+      "success_count": 0,
+      "failure_count": 11,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "patterns_750d4c2b_1764204790.949415": {
+      "success_count": 0,
+      "failure_count": 2,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "patterns_cd40e96a_1764204791.196704": {
+      "success_count": 0,
+      "failure_count": 2,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "patterns_32fede87_1764204790.928713": {
+      "success_count": 0,
+      "failure_count": 1,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "patterns_1c159aa2_1764204791.146507": {
+      "success_count": 0,
+      "failure_count": 1,
+      "partial_count": 0,
+      "success_rate": 0.0
+    },
+    "patterns_97804c4d_1764204791.34689": {
+      "success_count": 0,
+      "failure_count": 1,
+      "partial_count": 0,
+      "success_rate": 0.0
+    }
+  },
+  "failure_patterns": {},
+  "problem_categories": {},
+  "problem_solutions": {},
+  "solution_patterns": {},
+  "context_action_effectiveness": {}
+}

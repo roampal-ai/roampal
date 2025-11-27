@@ -149,6 +149,25 @@ async fn stream_llm_response(
 // Backend process state
 struct BackendProcess(Arc<Mutex<Option<Child>>>);
 
+// Read API port from backend/.env file
+fn read_api_port_from_env(backend_dir: &std::path::Path) -> u16 {
+    let env_file = backend_dir.join(".env");
+    if let Ok(content) = std::fs::read_to_string(&env_file) {
+        for line in content.lines() {
+            if line.starts_with("ROAMPAL_API_PORT=") {
+                if let Some(port_str) = line.strip_prefix("ROAMPAL_API_PORT=") {
+                    if let Ok(port) = port_str.trim().parse::<u16>() {
+                        println!("[read_api_port] Found port {} in .env file", port);
+                        return port;
+                    }
+                }
+            }
+        }
+    }
+    println!("[read_api_port] Using default port 8765");
+    8765 // Default to PROD port
+}
+
 // Start the Python backend
 #[tauri::command]
 fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProcess>) -> Result<String, String> {
@@ -191,8 +210,12 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
     let main_py = backend_dir.join("main.py");
     let backend_root = &backend_dir;
 
+    // Read API port from .env file
+    let api_port = read_api_port_from_env(&backend_dir);
+
     println!("[start_backend] Python exe: {:?}", python_exe);
     println!("[start_backend] Main.py: {:?}", main_py);
+    println!("[start_backend] API port: {}", api_port);
 
     // Check if main.py exists with more details
     println!("[start_backend] Checking main.py existence...");
@@ -229,6 +252,7 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
             .arg(&main_py)
             .current_dir(backend_root)
             .env("PYTHONPATH", pythonpath)
+            .env("ROAMPAL_API_PORT", api_port.to_string())
             .creation_flags(CREATE_NO_WINDOW);
 
         let child = child_cmd
@@ -243,9 +267,9 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
                 }
             })?;
 
-        println!("[start_backend] Backend process spawned successfully");
+        println!("[start_backend] Backend process spawned successfully on port {}", api_port);
         *backend = Some(child);
-        Ok(format!("Backend started from {}", main_py.display()))
+        Ok(format!("Backend started from {} on port {}", main_py.display(), api_port))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -257,7 +281,19 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
 // Check if backend is responding
 #[tauri::command]
 async fn check_backend() -> Result<bool, String> {
-    match reqwest::get("http://localhost:8000/health").await {
+    // Get the current executable directory to read .env file for port
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("Failed to get exe path: {}", e))?
+        .parent()
+        .ok_or("Failed to get exe directory")?
+        .to_path_buf();
+    let backend_dir = exe_dir.join("backend");
+    let api_port = read_api_port_from_env(&backend_dir);
+
+    let url = format!("http://localhost:{}/health", api_port);
+    println!("[check_backend] Checking {}", url);
+
+    match reqwest::get(&url).await {
         Ok(response) => Ok(response.status().is_success()),
         Err(_) => Ok(false)
     }

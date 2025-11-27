@@ -146,6 +146,11 @@ class FeatureFlagManager:
             return True
         return False
 
+    # Alias for set() - used by main.py sanitization code
+    def set_flag(self, flag_name: str, value: Any) -> bool:
+        """Alias for set() - Set flag value (runtime only, doesnt persist)"""
+        return self.set(flag_name, value)
+
     def is_enabled(self, flag_name: str) -> bool:
         """Check if a feature is enabled"""
         value = self.get(flag_name, False)

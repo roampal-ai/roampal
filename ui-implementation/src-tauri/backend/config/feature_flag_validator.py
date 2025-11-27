@@ -79,3 +79,77 @@ class FeatureFlagValidator:
             logger.info("✓ Feature flag configuration validated - no dangerous combinations")
 
         return True
+
+    @staticmethod
+    def get_safe_production_config() -> Dict[str, Any]:
+        """
+        Returns safe default configuration for production deployment.
+        All autonomous/dangerous features are disabled.
+        """
+        return {
+            "ENABLE_AUTONOMY": False,
+            "ENABLE_AUTO_APPLY_SOLUTIONS": False,
+            "ENABLE_AUTO_REFACTOR": False,
+            "ENABLE_GIT_OPERATIONS": False,
+            "MAX_AUTONOMOUS_ACTIONS": 0,
+            "MAX_FILE_WRITES_PER_SESSION": 0,
+            "REQUIRE_CONFIRMATION": True,
+            "PLANNER_DRY_RUN": True,
+            "ORCHESTRATOR_DRY_RUN": True,
+            "REFLECTION_DRY_RUN": True,
+            "ENABLE_PATTERN_CRON": False,
+            "ENABLE_REFLECTION_WRITE": False,
+            # Keep these enabled as they're read-only/safe
+            "ENABLE_MEMORY": True,
+            "ENABLE_SEARCH": True,
+            "ENABLE_KG": True,
+            "ENABLE_METRICS": True,
+            "ENABLE_OUTCOME_DETECTION": True,
+            "ENABLE_OUTCOME_TRACKING": True,
+            "ENABLE_LLM_OUTCOME_DETECTION": True,
+            "ENABLE_PROBLEM_SOLUTION_INDEX": True,
+        }
+
+    @staticmethod
+    def sanitize_for_production(config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Sanitize configuration for production by disabling dangerous features.
+        Returns a new config dict with safe values enforced.
+        """
+        safe_defaults = FeatureFlagValidator.get_safe_production_config()
+        sanitized = dict(config)
+
+        # Force disable dangerous features for production
+        dangerous_flags = [
+            "ENABLE_AUTONOMY",
+            "ENABLE_AUTO_APPLY_SOLUTIONS",
+            "ENABLE_AUTO_REFACTOR",
+            "ENABLE_GIT_OPERATIONS",
+        ]
+
+        for flag in dangerous_flags:
+            if config.get(flag, False):
+                logger.warning(f"⚠️  Production safety: Disabling {flag}")
+                sanitized[flag] = False
+
+        # Enforce safe limits
+        if config.get("MAX_AUTONOMOUS_ACTIONS", 0) > 0:
+            logger.warning("⚠️  Production safety: Setting MAX_AUTONOMOUS_ACTIONS to 0")
+            sanitized["MAX_AUTONOMOUS_ACTIONS"] = 0
+
+        if config.get("MAX_FILE_WRITES_PER_SESSION", 0) > 0:
+            logger.warning("⚠️  Production safety: Setting MAX_FILE_WRITES_PER_SESSION to 0")
+            sanitized["MAX_FILE_WRITES_PER_SESSION"] = 0
+
+        # Ensure confirmation is required
+        if not config.get("REQUIRE_CONFIRMATION", True):
+            logger.warning("⚠️  Production safety: Enabling REQUIRE_CONFIRMATION")
+            sanitized["REQUIRE_CONFIRMATION"] = True
+
+        # Ensure dry-run modes for safety
+        for dry_run_flag in ["PLANNER_DRY_RUN", "ORCHESTRATOR_DRY_RUN", "REFLECTION_DRY_RUN"]:
+            if not config.get(dry_run_flag, True):
+                logger.warning(f"⚠️  Production safety: Enabling {dry_run_flag}")
+                sanitized[dry_run_flag] = True
+
+        return sanitized

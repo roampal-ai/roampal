@@ -84,7 +84,8 @@ class ContentGraph:
         text: str,
         doc_id: str,
         collection: str,
-        extract_concepts_fn: Callable[[str], List[str]]
+        extract_concepts_fn: Callable[[str], List[str]],
+        quality_score: Optional[float] = None
     ) -> List[str]:
         """
         Extract entities from text and index them in the content graph.
@@ -94,6 +95,7 @@ class ContentGraph:
             doc_id: Unique document identifier
             collection: Collection name (e.g., "memory_bank")
             extract_concepts_fn: Function to extract concepts (reuses _extract_concepts from UnifiedMemorySystem)
+            quality_score: Optional quality score (importance × confidence) for this document's entities
 
         Returns:
             List of extracted entity names
@@ -101,13 +103,13 @@ class ContentGraph:
         Example:
             >>> cg = ContentGraph()
             >>> entities = cg.add_entities_from_text(
-            ...     text="Logan works at EverBright as operations manager",
+            ...     text="User prefers Docker Compose for local development environments",
             ...     doc_id="mem_001",
             ...     collection="memory_bank",
             ...     extract_concepts_fn=memory_system._extract_concepts
             ... )
             >>> entities
-            ['logan', 'everbright', 'operations', 'manager', 'operations_manager']
+            ['docker', 'compose', 'local', 'development', 'environments']
         """
         # Extract concepts using same logic as routing KG (consistency)
         concepts = extract_concepts_fn(text)
@@ -129,7 +131,9 @@ class ContentGraph:
                     "collections": defaultdict(int),
                     "documents": [],
                     "first_seen": now,
-                    "last_seen": now
+                    "last_seen": now,
+                    "total_quality": 0.0,
+                    "avg_quality": 0.0
                 }
 
             # Update entity metadata
@@ -139,6 +143,13 @@ class ContentGraph:
 
             if doc_id not in self.entities[entity]["documents"]:
                 self.entities[entity]["documents"].append(doc_id)
+
+            # Update quality scores if provided
+            if quality_score is not None:
+                self.entities[entity]["total_quality"] += quality_score
+                self.entities[entity]["avg_quality"] = (
+                    self.entities[entity]["total_quality"] / self.entities[entity]["mentions"]
+                )
 
         # Track entities in this document for relationship building
         self._doc_entities[doc_id].update(entities)
@@ -395,8 +406,8 @@ class ContentGraph:
             if data["mentions"] >= min_mentions
         ]
 
-        # Sort by mentions (descending)
-        entities.sort(key=lambda x: x["mentions"], reverse=True)
+        # Sort by avg_quality (descending), fallback to mentions for backward compatibility
+        entities.sort(key=lambda x: x.get("avg_quality", 0.0), reverse=True)
 
         return entities
 

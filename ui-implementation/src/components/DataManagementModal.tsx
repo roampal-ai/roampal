@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface DataManagementModalProps {
   isOpen: boolean;
@@ -81,7 +82,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
         }
 
         const response = await apiFetch(
-          `http://localhost:8000/api/backup/estimate?include=${selectedTypes}`
+          `${ROAMPAL_CONFIG.apiUrl}/api/backup/estimate?include=${selectedTypes}`
         );
 
         if (response.ok) {
@@ -108,7 +109,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
   const fetchDataStats = async () => {
     setIsLoadingStats(true);
     try {
-      const response = await apiFetch('http://localhost:8000/api/data/stats');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/data/stats`);
       if (response.ok) {
         const data = await response.json();
         setDataStats(data);
@@ -141,8 +142,8 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
       }
 
       const url = selectedTypes === 'sessions,memory,books,knowledge'
-        ? 'http://localhost:8000/api/backup/create'
-        : `http://localhost:8000/api/backup/create?include=${selectedTypes}`;
+        ? `${ROAMPAL_CONFIG.apiUrl}/api/backup/create`
+        : `${ROAMPAL_CONFIG.apiUrl}/api/backup/create?include=${selectedTypes}`;
 
       const response = await apiFetch(url, {
         method: 'POST'
@@ -197,7 +198,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
     if (!deleteTarget) return;
 
     try {
-      const response = await apiFetch(`http://localhost:8000/api/data/clear/${deleteTarget}`, {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/data/clear/${deleteTarget}`, {
         method: 'POST'
       });
 
@@ -231,7 +232,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
     try {
       setIsCompacting(true);
 
-      const response = await apiFetch('http://localhost:8000/api/data/compact-database', {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/data/compact-database`, {
         method: 'POST'
       });
 

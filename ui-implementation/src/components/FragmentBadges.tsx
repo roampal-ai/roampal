@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowUpIcon, ArrowDownIcon, ClockIcon, SparklesIcon } from '@heroicons/react/24/outline';
 import { apiFetch } from '../utils/fetch';
+import { ROAMPAL_CONFIG } from '../config/roampal';
 
 interface Fragment {
   id: string;
@@ -30,7 +31,7 @@ export const FragmentBadges: React.FC<FragmentBadgesProps> = ({
 
   const fetchFragments = async () => {
     try {
-      const response = await apiFetch('http://localhost:8000/api/memory/fragments');
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory/fragments`);
       if (response.ok) {
         const data = await response.json();
         setFragments(data);

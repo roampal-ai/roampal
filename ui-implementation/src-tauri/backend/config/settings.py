@@ -14,15 +14,28 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # --- CONSTANT: THE ONE TRUE MEMORY PATH ---
 # Data paths - Use AppData for production builds, local for development
+#
+# DEV vs PROD separation:
+# - ROAMPAL_DATA_DIR env var controls app folder name (e.g., "Roampal_DEV" vs "Roampal")
+# - DEV build: port 8002, data in AppData/Roampal_DEV/data
+# - PROD build: port 8001, data in AppData/Roampal/data
 
-# Priority 1: Environment variable (allows override)
+# Priority 1: Environment variable (allows override for dev/prod separation)
 ROAMPAL_DATA_DIR = os.getenv("ROAMPAL_DATA_DIR")
 
 if ROAMPAL_DATA_DIR:
-    # Explicitly set via environment variable
-    DATA_PATH = ROAMPAL_DATA_DIR
+    # Explicitly set via environment variable (e.g., "Roampal_DEV" for dev build)
+    if os.name == 'nt':  # Windows
+        appdata = os.getenv('APPDATA', os.path.expanduser('~\\AppData\\Roaming'))
+        DATA_PATH = os.path.join(appdata, ROAMPAL_DATA_DIR, 'data')
+    elif sys.platform == 'darwin':  # macOS
+        DATA_PATH = os.path.expanduser(f'~/Library/Application Support/{ROAMPAL_DATA_DIR}/data')
+    else:  # Linux
+        DATA_PATH = os.path.expanduser(f'~/.local/share/{ROAMPAL_DATA_DIR.lower()}/data')
+
+    os.makedirs(DATA_PATH, exist_ok=True)
     if "--mcp" not in sys.argv:
-        print(f"[Roampal] Using ROAMPAL_DATA_DIR from environment: {DATA_PATH}")
+        print(f"[Roampal] Using ROAMPAL_DATA_DIR={ROAMPAL_DATA_DIR}: {DATA_PATH}")
 
 elif (PROJECT_ROOT / "ui-implementation").exists():
     # Development mode - project structure includes ui-implementation folder
@@ -31,7 +44,7 @@ elif (PROJECT_ROOT / "ui-implementation").exists():
         print(f"[Roampal] Development mode detected, using local data: {DATA_PATH}")
 
 else:
-    # Production/bundled mode - use platform-specific user data directory
+    # Production/bundled mode - use platform-specific user data directory (default: Roampal)
     if os.name == 'nt':  # Windows
         appdata = os.getenv('APPDATA', os.path.expanduser('~\\AppData\\Roaming'))
         DATA_PATH = os.path.join(appdata, 'Roampal', 'data')

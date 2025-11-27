@@ -38,7 +38,7 @@ from typing import Dict, Any, Optional
 
 # Core services
 from modules.embedding.embedding_service import EmbeddingService
-from modules.memory.unified_memory_system import UnifiedMemorySystem
+from modules.memory.unified_memory_system import UnifiedMemorySystem, ActionOutcome
 from modules.memory.session_cleanup import SessionCleanupManager
 from modules.llm.ollama_client import OllamaClient
 from services.unified_image_service import UnifiedImageService
@@ -92,6 +92,73 @@ logger = logging.getLogger(__name__)
 # MCP session-based caches for outcome scoring and cold-start injection
 _mcp_search_cache = {}  # {session_id: {"doc_ids": [...], "query": "...", "timestamp": ...}}
 _mcp_first_tool_call = set()  # Track first tool call per session for cold-start injection
+_mcp_action_cache = {}  # {session_id: {"actions": [...], "last_context": str, "last_activity": datetime}} - Track tool actions for Action-Effectiveness KG
+
+# MCP conversation boundary detection configuration
+MCP_CACHE_EXPIRY_SECONDS = 600  # 10 minutes - clear cache if no activity (new conversation likely started)
+
+def _should_clear_action_cache(session_id: str, new_context: str) -> tuple[bool, str]:
+    """
+    Detect conversation boundaries to prevent cross-conversation action scoring.
+
+    MCP protocol doesn't provide conversation IDs, so we infer boundaries from:
+    1. Time gaps (10+ minutes = likely new conversation)
+    2. Context shifts (coding → fitness = likely new conversation)
+
+    Returns:
+        (should_clear: bool, reason: str)
+    """
+    if session_id not in _mcp_action_cache:
+        return False, "No existing cache"
+
+    cache = _mcp_action_cache[session_id]
+    last_activity = cache.get("last_activity")
+    last_context = cache.get("last_context")
+
+    # Signal 1: TIME GAP - 10+ minutes since last tool call
+    if last_activity:
+        time_gap = (datetime.now() - last_activity).total_seconds()
+        if time_gap > MCP_CACHE_EXPIRY_SECONDS:
+            return True, f"time_gap={time_gap:.0f}s (>{MCP_CACHE_EXPIRY_SECONDS}s)"
+
+    # Signal 2: CONTEXT SHIFT - Topic changed significantly
+    # Ignore shifts to/from "general" (too noisy, not reliable)
+    if last_context and new_context != last_context:
+        if last_context != "general" and new_context != "general":
+            return True, f"context_shift: {last_context} → {new_context}"
+
+    return False, "same_conversation"
+
+def _cache_action_with_boundary_check(session_id: str, action: "ActionOutcome", context_type: str):
+    """
+    Cache action with automatic conversation boundary detection.
+
+    Clears cache if conversation boundary detected, then caches the new action.
+    """
+    # Check for conversation boundary
+    should_clear, reason = _should_clear_action_cache(session_id, context_type)
+    if should_clear:
+        actions_discarded = len(_mcp_action_cache[session_id].get("actions", []))
+        logger.warning(
+            f"[MCP] Conversation boundary detected ({reason}). "
+            f"Clearing {actions_discarded} cached actions to prevent cross-conversation scoring."
+        )
+        del _mcp_action_cache[session_id]
+
+    # Initialize cache if needed
+    if session_id not in _mcp_action_cache:
+        _mcp_action_cache[session_id] = {
+            "actions": [],
+            "last_context": context_type,
+            "last_activity": datetime.now()
+        }
+
+    # Add action
+    _mcp_action_cache[session_id]["actions"].append(action)
+
+    # Update metadata
+    _mcp_action_cache[session_id]["last_activity"] = datetime.now()
+    _mcp_action_cache[session_id]["last_context"] = context_type
 
 async def _inject_cold_start_if_needed(session_id: str, tool_response: str, memory_system) -> str:
     """
@@ -678,6 +745,7 @@ async def run_mcp_server():
     logger.info("[MCP] Starting Roampal MCP Server...")
 
     # Initialize memory system (use embedded ChromaDB for MCP mode)
+    data_path = Path(DATA_PATH)  # Local reference for use throughout MCP server
     memory = UnifiedMemorySystem(data_dir=str(DATA_PATH), use_server=False)
     await memory.initialize()
 
@@ -710,7 +778,12 @@ async def run_mcp_server():
         return [
             types.Tool(
                 name="search_memory",
-                description="Search the 5-tier memory system (books, working, history, patterns, memory_bank) for relevant information",
+                description="""Search Roampal's 5-tier persistent memory (books, working, history, patterns, memory_bank).
+
+AUTO-ROUTING: Omit 'collections' → system uses learned KG routing patterns
+MANUAL: ["memory_bank"]=user info, ["books"]=docs, ["working"]=today, ["history"]=past, ["patterns"]=solutions
+
+Use user's EXACT query text. Memory persists across all sessions.""",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -720,31 +793,20 @@ async def run_mcp_server():
                         },
                         "collections": {
                             "type": "array",
-                            "items": {"type": "string", "enum": ["books", "working", "history", "patterns", "memory_bank", "all"]},
-                            "description": """Which collections to search:
-
-AUTOMATIC ROUTING (recommended):
-- Omit this parameter (or use ["all"]) → System uses learned patterns from past searches
-
-MANUAL OVERRIDE (when you know exactly where to look):
-- ["books"] = Uploaded documents/PDFs
-- ["working"] = Recent conversation exchanges (last 24 hours) - use for "today", "recent", "just now"
-- ["history"] = Past conversation exchanges (30+ days) - use for "last week", "previously"
-- ["patterns"] = Learned solutions/behaviors that worked
-- ["memory_bank"] = Important facts to remember (user info, preferences, goals, key learnings)
-""",
-                            "default": ["all"]
+                            "items": {"type": "string", "enum": ["books", "working", "history", "patterns", "memory_bank"]},
+                            "description": "Which collections to search. Omit for auto-routing (recommended). Manual: books, working, history, patterns, memory_bank",
+                            "default": None
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "Maximum number of results to return (1-20)",
+                            "description": "Number of results (1-20)",
                             "default": 5,
                             "minimum": 1,
                             "maximum": 20
                         },
                         "metadata": {
                             "type": "object",
-                            "description": "Optional filters for precision when semantic search needs refinement. Use sparingly - only when you need exact attribute matching. Available fields: timestamp (date filter), last_outcome (worked/failed/partial), title/author (book filters), has_code (true/false), source (mcp_claude/internal). Example: metadata={'timestamp': '2025-11-12'} to filter by date.",
+                            "description": "Optional filters. Use sparingly. Examples: timestamp='2025-11-12', last_outcome='worked', has_code=true",
                             "additionalProperties": True
                         }
                     },
@@ -753,55 +815,92 @@ MANUAL OVERRIDE (when you know exactly where to look):
             ),
             types.Tool(
                 name="add_to_memory_bank",
-                description="Store critical information in permanent memory_bank (user info, preferences, goals, key learnings).",
+                description="""Store PERMANENT facts (user identity, preferences, goals, learned strategies).
+
+Store: Learning about user, discovering what works, tracking progress
+Don't: Session transcripts (auto-captured), temporary tasks
+
+Examples: "User's name is X", "User prefers Y style", "Full queries work better than keywords for this user" """,
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "content": {"type": "string", "description": "Information to store"},
-                        "tags": {"type": "array", "items": {"type": "string"}, "description": "Categories (e.g., identity, preference, goal, context)"},
-                        "importance": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.7, "description": "How critical is this memory (0.0-1.0)"},
-                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.7, "description": "How certain are you about this fact (0.0-1.0)"}
+                        "content": {"type": "string", "description": "The fact to remember"},
+                        "tags": {"type": "array", "items": {"type": "string"}, "description": "Categories: identity, preference, goal, project, system_mastery, agent_growth"},
+                        "importance": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.7, "description": "How critical (0.0-1.0)"},
+                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.7, "description": "How certain (0.0-1.0)"}
                     },
                     "required": ["content"]
                 }
             ),
             types.Tool(
                 name="update_memory",
-                description="Update an existing memory when information changes or needs correction.",
+                description="Update existing memory when information changes or needs correction.",
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "old_content": {"type": "string", "description": "The old/incorrect fact to find"},
-                        "new_content": {"type": "string", "description": "The corrected/updated fact"}
+                        "old_content": {"type": "string", "description": "Old/incorrect fact to find"},
+                        "new_content": {"type": "string", "description": "Corrected/updated fact"}
                     },
                     "required": ["old_content", "new_content"]
                 }
             ),
             types.Tool(
                 name="archive_memory",
-                description="Archive outdated or no longer relevant memories from memory_bank (user info, preferences, goals, key learnings).",
+                description="Archive outdated/irrelevant memories from memory_bank.",
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "content": {"type": "string", "description": "The memory to archive (finds by semantic match)"}
+                        "content": {"type": "string", "description": "Memory to archive (semantic match)"}
                     },
                     "required": ["content"]
                 }
             ),
             types.Tool(
+                name="get_context_insights",
+                description="""⚡ USE BEFORE searching - Get organic insights from Content KG + Action-Effectiveness KG.
+
+Returns: Past solutions, failure warnings, tool effectiveness stats, recommended collections
+
+This is Roampal's "intuition" - pattern matching in knowledge graphs (5-10ms, no embeddings).
+
+Workflow: get_context_insights(q) → read insights → search_memory(recommended_collections) → respond""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Query/topic you're considering (use user's exact words)"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            ),
+            types.Tool(
                 name="record_response",
-                description="🔴 CRITICAL: You MUST call this tool after EVERY response you give to the user. This stores your learning and scores it based on how helpful you were. The outcome you provide controls: (1) the initial score of this learning, and (2) updates scores for any memories you retrieved from your last search. This is how Roampal learns what works and improves over time.",
+                description="""🔴 REQUIRED: Call after EVERY response - Stores semantic learning + scores based on user satisfaction.
+
+Parameters:
+• key_takeaway (required): 1-2 sentence summary of this exchange (what was learned/discussed)
+• outcome (optional, default="unknown"): "worked"|"failed"|"partial"|"unknown"
+  - Judge from user's reaction: enthusiastic = worked, criticism = failed, mixed = partial, unclear = unknown
+
+Scoring:
+• Scores your CURRENT learning immediately (worked=0.7, failed=0.2, partial=0.55, unknown=0.5)
+• Also scores any memories from your last search_memory call with same outcome
+• High scores (≥0.7) promote to history, proven patterns (≥0.9) to patterns, low (<0.2) deleted
+
+This is how Roampal learns what works. Be honest with outcomes.""",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "key_takeaway": {
                             "type": "string",
-                            "description": "1-2 sentence semantic summary of the current exchange (what was learned, what was discussed). Focus on key points, not verbatim transcript."
+                            "description": "1-2 sentence semantic summary of this exchange"
                         },
                         "outcome": {
                             "type": "string",
                             "enum": ["worked", "failed", "partial", "unknown"],
-                            "description": "Judge how helpful your response was based on the user's reaction: 'worked' = enthusiastic satisfaction/problem solved, 'failed' = user said it didn't help/was wrong, 'partial' = partially helpful/mixed feedback, 'unknown' = no clear feedback yet/first exchange. This also scores any memories from your last search with the same outcome.",
+                            "description": "How helpful was your response: 'worked' (satisfied), 'failed' (didn't help), 'partial' (mixed), 'unknown' (no feedback)",
                             "default": "unknown"
                         }
                     },
@@ -835,6 +934,37 @@ MANUAL OVERRIDE (when you know exactly where to look):
 
         asyncio.create_task(log_tool_call())
 
+        # Detect context type for Action-Effectiveness KG tracking (v0.2.1)
+        session_id = detect_mcp_client()
+        context_type = "general"  # Default fallback
+
+        # Get recent conversation for context detection
+        session_file = data_path / "mcp_sessions" / f"{session_id}.json"
+        recent_conv = []
+        if session_file.exists():
+            try:
+                session_data = json.loads(session_file.read_text(encoding="utf-8"))
+                turns = session_data.get("turns", [])[-5:]  # Last 5 turns
+                for turn in turns:
+                    user_msg = turn.get("user_message", "")
+                    ai_msg = turn.get("ai_response", "")
+                    if user_msg:
+                        recent_conv.append({"role": "user", "content": user_msg})
+                    if ai_msg:
+                        recent_conv.append({"role": "assistant", "content": ai_msg})
+            except Exception as e:
+                logger.warning(f"[MCP] Failed to load session for context detection: {e}")
+
+        # Detect context for this interaction
+        try:
+            context_type = await memory.detect_context_type(
+                system_prompts=[],
+                recent_messages=recent_conv
+            )
+            logger.info(f"[MCP] Context detected: {context_type}")
+        except Exception as e:
+            logger.warning(f"[MCP] Context detection failed: {e}")
+
         try:
             if name == "search_memory":
                 query = arguments.get("query")
@@ -846,8 +976,6 @@ MANUAL OVERRIDE (when you know exactly where to look):
                 limit = int(arguments.get("limit", 5)) if arguments.get("limit") else 5
                 # Extract metadata filters
                 metadata = arguments.get("metadata", None)
-
-                session_id = detect_mcp_client()
 
                 # Quick check: if memory system isn't initialized, return early (avoids slow embedding model loading)
                 if not memory.initialized:
@@ -924,6 +1052,20 @@ MANUAL OVERRIDE (when you know exactly where to look):
                 # Apply cold-start injection if this is first tool call
                 text = await _inject_cold_start_if_needed(session_id, text, memory)
 
+                # Track action for Action-Effectiveness KG (will be scored on record_response)
+                collections_used = list(result_collections) if result_collections else (collections if collections else ["all"])
+                for coll in collections_used:
+                    action = ActionOutcome(
+                        action_type="search_memory",
+                        context_type=context_type,
+                        outcome="unknown",  # Will be set when record_response is called
+                        action_params={"query": query, "limit": limit},
+                        collection=coll if coll != "all" else None
+                    )
+                    _cache_action_with_boundary_check(session_id, action, context_type)
+
+                logger.info(f"[MCP] Cached {len(collections_used)} search_memory actions (context={context_type}, total_cached={len(_mcp_action_cache[session_id]['actions'])})")
+
                 return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
 
             elif name == "add_to_memory_bank":
@@ -937,6 +1079,18 @@ MANUAL OVERRIDE (when you know exactly where to look):
 
                 text = f"Added to memory bank (ID: {doc_id})"
                 text = await _inject_cold_start_if_needed(session_id, text, memory)
+
+                # Track action for Action-Effectiveness KG
+                action = ActionOutcome(
+                    action_type="create_memory",
+                    context_type=context_type,
+                    outcome="unknown",
+                    action_params={"content_preview": content[:50]},
+                    doc_id=doc_id,
+                    collection="memory_bank"
+                )
+                _cache_action_with_boundary_check(session_id, action, context_type)
+                logger.info(f"[MCP] Cached create_memory action (context={context_type}, total_cached={len(_mcp_action_cache[session_id]['actions'])})")
 
                 return types.CallToolResult(
                     content=[types.TextContent(type="text", text=text)]
@@ -957,6 +1111,18 @@ MANUAL OVERRIDE (when you know exactly where to look):
 
                     text = f"Updated memory (ID: {doc_id})"
                     text = await _inject_cold_start_if_needed(session_id, text, memory)
+
+                    # Track action for Action-Effectiveness KG
+                    action = ActionOutcome(
+                        action_type="update_memory",
+                        context_type=context_type,
+                        outcome="unknown",
+                        action_params={"new_content_preview": new_content[:50]},
+                        doc_id=doc_id,
+                        collection="memory_bank"
+                    )
+                    _cache_action_with_boundary_check(session_id, action, context_type)
+                    logger.info(f"[MCP] Cached update_memory action (context={context_type}, total_cached={len(_mcp_action_cache[session_id]['actions'])})")
 
                     return types.CallToolResult(
                         content=[types.TextContent(type="text", text=text)]
@@ -982,6 +1148,18 @@ MANUAL OVERRIDE (when you know exactly where to look):
                     text = f"Archived memory (ID: {doc_id})"
                     text = await _inject_cold_start_if_needed(session_id, text, memory)
 
+                    # Track action for Action-Effectiveness KG
+                    action = ActionOutcome(
+                        action_type="archive_memory",
+                        context_type=context_type,
+                        outcome="unknown",
+                        action_params={"content_preview": content[:50]},
+                        doc_id=doc_id,
+                        collection="memory_bank"
+                    )
+                    _cache_action_with_boundary_check(session_id, action, context_type)
+                    logger.info(f"[MCP] Cached archive_memory action (context={context_type}, total_cached={len(_mcp_action_cache[session_id]['actions'])})")
+
                     return types.CallToolResult(
                         content=[types.TextContent(type="text", text=text)]
                     )
@@ -990,6 +1168,135 @@ MANUAL OVERRIDE (when you know exactly where to look):
                         content=[types.TextContent(type="text", text="Memory not found for archiving")],
                         isError=True
                     )
+
+            elif name == "get_context_insights":
+                query = arguments.get("query", "")
+                session_id = detect_mcp_client()
+
+                logger.info(f"[MCP] get_context_insights: query='{query[:50]}'")
+
+                # Get recent conversation from session file
+                session_file = data_path / "mcp_sessions" / f"{session_id}.json"
+                recent_conv = []
+                system_prompts = []
+                if session_file.exists():
+                    try:
+                        session_data = json.loads(session_file.read_text(encoding="utf-8"))
+                        # Extract last 5 turns for context
+                        turns = session_data.get("turns", [])[-5:]
+                        for turn in turns:
+                            # Convert session turn format to conversation format
+                            user_msg = turn.get("user_message", "")
+                            ai_msg = turn.get("ai_response", "")
+                            if user_msg:
+                                recent_conv.append({"role": "user", "content": user_msg})
+                            if ai_msg:
+                                recent_conv.append({"role": "assistant", "content": ai_msg})
+                    except Exception as e:
+                        logger.error(f"[MCP] Failed to load session file: {e}")
+
+                # Detect context type for action-effectiveness guidance (v0.2.1)
+                context_type = await memory.detect_context_type(
+                    system_prompts=system_prompts,
+                    recent_messages=recent_conv
+                )
+
+                # Analyze conversation for organic insights (Content KG)
+                try:
+                    org_context = await memory.analyze_conversation_context(
+                        current_message=query,
+                        recent_conversation=recent_conv,
+                        conversation_id=session_id
+                    )
+
+                    # Check action-effectiveness for tool guidance (Action-Effectiveness KG)
+                    action_stats = []
+                    available_actions = ["search_memory", "create_memory", "update_memory", "archive_memory"]
+                    collections_to_check = [None, "books", "working", "history", "patterns", "memory_bank"]  # Check all 5 tiers + wildcard
+
+                    for action in available_actions:
+                        # Check across all collections
+                        for collection in collections_to_check:
+                            stats = memory.get_action_effectiveness(context_type, action, collection)
+                            # Only surface stats if we have enough data (10+ uses)
+                            if stats and stats['total_uses'] >= 10:
+                                coll_suffix = f" on {collection}" if collection else ""
+                                action_stats.append({
+                                    'action': action,
+                                    'collection': collection,
+                                    'success_rate': stats['success_rate'],
+                                    'uses': stats['total_uses'],
+                                    'suffix': coll_suffix
+                                })
+
+                    # Format insights
+                    has_actionable_insights = (
+                        org_context and (
+                            org_context.get('relevant_patterns') or
+                            org_context.get('past_outcomes') or
+                            org_context.get('proactive_insights')
+                        )
+                    )
+
+                    if not has_actionable_insights and not action_stats:
+                        text = f"No relevant patterns found in knowledge graph for '{query}'.\n\nThis appears to be a new type of query. The system will learn from your interactions and build patterns over time."
+                    else:
+                        response = f"═══ CONTEXTUAL GUIDANCE (Context: {context_type}) ═══\n\n"
+
+                        if org_context and org_context.get('relevant_patterns'):
+                            response += "📋 Past Experience:\n"
+                            for pattern in org_context['relevant_patterns'][:3]:
+                                response += f"  • {pattern['insight']}\n"
+                                response += f"    Collection: {pattern['collection']}, Score: {pattern['score']:.2f}, Uses: {pattern['uses']}\n"
+                                response += f"    → {pattern['text'][:150]}...\n\n"
+
+                        if org_context and org_context.get('past_outcomes'):
+                            response += "⚠️ Past Failures to Avoid:\n"
+                            for outcome in org_context['past_outcomes'][:2]:
+                                response += f"  • {outcome['insight']}\n\n"
+
+                        # Action-Effectiveness KG stats (v0.2.1 - informational only)
+                        if action_stats:
+                            # Sort by uses (most frequently used first)
+                            action_stats.sort(key=lambda x: x['uses'], reverse=True)
+                            top_stats = action_stats[:5]  # Show top 5 most-used
+
+                            response += "📊 Action Outcome Stats (which actions led to correct answers):\n"
+                            response += "In similar contexts, these actions contributed to correct final answers:\n"
+                            for stat in top_stats:
+                                suffix = stat.get('suffix', '')
+                                success_rate = int(stat['success_rate']*100)
+                                uses = stat['uses']
+                                response += f"  • {stat['action']}(){suffix}: {success_rate}% of uses led to correct answers ({uses} uses)\n"
+                            response += "\n⚠️ IMPORTANT: Low % means 'didn't help answer THIS question correctly', NOT 'tool is broken'.\n"
+                            response += "If create_memory() returned a doc_id with no errors, it worked! Don't retry.\n"
+
+                            response += "\n"
+
+                        if org_context and org_context.get('proactive_insights'):
+                            response += "💡 Search Recommendations:\n"
+                            for insight in org_context['proactive_insights'][:3]:
+                                rec = insight.get('recommendation', '')
+                                if rec:
+                                    response += f"  • {rec}\n"
+
+                        if org_context and org_context.get('topic_continuity'):
+                            for topic in org_context['topic_continuity'][:1]:
+                                response += f"\n🔗 {topic['insight']}\n"
+
+                        response += "\nUse this guidance to choose appropriate tools and provide informed responses."
+                        text = response
+
+                except Exception as e:
+                    logger.error(f"[MCP] get_context_insights error: {e}", exc_info=True)
+                    text = f"Error analyzing context: {str(e)}"
+
+                # Inject cold-start context if first tool call
+                text = await _inject_cold_start_if_needed(session_id, text, memory)
+
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=text)]
+                )
 
             elif name == "record_response":
                 # Per architecture.md line 574-586: Store semantic summary, score CURRENT learning
@@ -1056,11 +1363,32 @@ MANUAL OVERRIDE (when you know exactly where to look):
                             except Exception as e:
                                 logger.warning(f"[MCP] Failed to update KG routing: {e}")
 
-                # Always clear cache after record_response (architecture.md line 549)
+                # Score Action-Effectiveness KG (v0.2.1) - Update tool effectiveness stats
+                actions_scored = 0
+                if outcome in ["worked", "failed", "partial"] and session_id in _mcp_action_cache:
+                    cache = _mcp_action_cache[session_id]
+                    cached_actions = cache.get("actions", [])
+                    logger.info(f"[MCP] Scoring {len(cached_actions)} cached actions for Action-Effectiveness KG with outcome={outcome}")
+
+                    for action in cached_actions:
+                        # Update outcome from "unknown" to actual result
+                        action.outcome = outcome
+                        try:
+                            await memory.record_action_outcome(action)
+                            actions_scored += 1
+                            logger.info(f"[MCP] Action-Effectiveness KG updated: {action.context_type}|{action.action_type}|{action.collection or '*'} → {outcome}")
+                        except Exception as e:
+                            logger.warning(f"[MCP] Failed to record action outcome: {e}")
+
+                # Always clear caches after record_response (architecture.md line 549)
                 # Even if outcome="unknown", prevents stale cache buildup
                 if session_id in _mcp_search_cache:
                     del _mcp_search_cache[session_id]
                     logger.debug(f"[MCP] Cleared search cache for {session_id}")
+
+                if session_id in _mcp_action_cache:
+                    del _mcp_action_cache[session_id]
+                    logger.debug(f"[MCP] Cleared action cache for {session_id}")
 
                 # Record to session file
                 result = await mcp_session_manager.record_exchange(
@@ -1079,6 +1407,9 @@ MANUAL OVERRIDE (when you know exactly where to look):
 
                 if cached_memories_scored > 0:
                     response_text += f"📊 Scored {cached_memories_scored} cached memories\n"
+
+                if actions_scored > 0:
+                    response_text += f"🔧 Updated {actions_scored} tool effectiveness stats\n"
 
                 logger.info(f"[MCP] {client_name} recorded learning: {doc_id}")
 
@@ -1108,12 +1439,38 @@ MANUAL OVERRIDE (when you know exactly where to look):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
+def print_mcp_banner():
+    """Print informative banner to console (stderr) for MCP mode.
+
+    MCP uses stdout for JSON-RPC, so all console output MUST go to stderr.
+    This gives users visibility that MCP server is running.
+    """
+    import sys
+    banner = """
+╔══════════════════════════════════════════════════════════════╗
+║                 ROAMPAL MCP SERVER RUNNING                   ║
+╠══════════════════════════════════════════════════════════════╣
+║  Status: Connected to AI tool (Claude Desktop, Cursor, etc)  ║
+║                                                              ║
+║  This window provides memory to your AI assistant.           ║
+║  Closing this window will disconnect memory access.          ║
+║                                                              ║
+║  To stop: Close this window or press Ctrl+C                  ║
+╚══════════════════════════════════════════════════════════════╝
+"""
+    print(banner, file=sys.stderr)
+
+
 if __name__ == "__main__":
     # Check for MCP mode
     if "--mcp" in sys.argv:
+        print_mcp_banner()  # Show informative console message
         logger.info("[MCP] Running in MCP server mode")
         asyncio.run(run_mcp_server())
     else:
         # Run FastAPI server (normal mode)
+        # Port configurable via ROAMPAL_API_PORT env var (default: 8001)
         import uvicorn
-        uvicorn.run(app, host="127.0.0.1", port=8000)
+        api_port = int(os.getenv('ROAMPAL_API_PORT', '8001'))
+        logger.info(f"Starting FastAPI server on port {api_port}")
+        uvicorn.run(app, host="127.0.0.1", port=api_port)
