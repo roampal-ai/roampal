@@ -1,6 +1,6 @@
 # Roampal Benchmarks
 
-**Last Updated**: 2025-11-27
+**Last Updated**: 2025-12-01
 **Test Suite Location**: `benchmarks/comprehensive_test/`
 
 ---
@@ -212,6 +212,43 @@ python test_dynamic_weight_shift.py
 
 ---
 
+### 6. Token Efficiency Benchmark (Personal Finance)
+
+**Location**: `benchmarks/comprehensive_test/test_token_efficiency.py`
+**Purpose**: Prove outcome learning works across domains (not just programming)
+
+**Test Design**:
+- 100 adversarial personal finance scenarios across 10 categories
+- Each scenario has research-backed "good" advice and common "bad" advice
+- Queries semantically match the BAD advice (adversarial by design)
+- Sources: S&P SPIVA, Schwab Research, Vanguard, DALBAR studies
+
+**Categories**:
+Market Timing, Stock Picking, Fee Awareness, Emotional Trading, Diversification, Tax Efficiency, Emergency Funds, Debt Management, Retirement Timing, Insurance
+
+**Why Personal Finance?**
+Bad financial advice often *sounds* more appealing than good advice:
+- "Buy the dip!" sounds active and smart
+- "Stay invested through volatility" sounds passive and boring
+- Yet research shows passive approaches outperform 90%+ of the time
+
+This makes it a perfect adversarial test domain.
+
+**Results**:
+
+| Metric | Plain Vector DB | Roampal |
+|--------|----------------|---------|
+| **Success Rate** | 0% (0/100) | **100% (100/100)** |
+| **Tokens per query** | 55-93 (full context) | **20 (targeted retrieval)** |
+
+**How to Run**:
+```bash
+cd benchmarks/comprehensive_test
+python test_token_efficiency.py
+```
+
+---
+
 ## What Is Tested
 
 ### ✅ Infrastructure (Fully Validated)
@@ -289,9 +326,13 @@ python test_torture_suite.py
 # Run statistical significance test
 cd learning_curve_test
 python test_statistical_significance_synthetic.py
+
+# Run token efficiency benchmark
+cd ../
+python test_token_efficiency.py
 ```
 
-**Total Runtime**: ~2-3 minutes for all 40 tests
+**Total Runtime**: ~5 minutes for core tests, ~15-20 minutes for full validation
 
 ---
 

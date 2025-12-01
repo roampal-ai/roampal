@@ -17,7 +17,7 @@ Comprehensive test suite validating Roampal's 5-tier memory architecture, 3 know
 - **Roampal vs Vector DB**: 100% vs 3.3% on adversarial queries (p=0.001, d=7.49)
 - Statistical learning proven: 58% → 93% accuracy (+35pp, p=0.005, Cohen's d=13.4)
 - Dynamic weight shifting: 5/5 scenarios - proven memories outrank semantic matches
-- Search latency validated: p95=77ms @ 100 memories (2.6x faster than Mem0, 8x faster than Zep)
+- Search latency validated: p95=77ms @ 100 memories
 - Production infrastructure verified: 1000 concurrent stores, zero corruption
 
 **Full documentation**: See [docs/BENCHMARKS.md](../docs/BENCHMARKS.md) for complete results and methodology.
@@ -44,6 +44,9 @@ python test_latency_benchmark.py
 
 # Semantic Confusion Test (~30s)
 python test_semantic_confusion.py
+
+# Token Efficiency Benchmark (~2 min)
+python test_token_efficiency.py
 ```
 
 ---
@@ -187,12 +190,8 @@ Proven memories:  40% embedding similarity, 60% score
 - **p50**: 64.60ms
 - **p95**: 77ms
 - **p99**: 87.71ms
-- **Token efficiency**: 112 tokens average
 
-**Comparison**:
-- Roampal: 77ms
-- Mem0: 200ms (2.6x slower)
-- Zep: 632ms (8x slower)
+**Scalability**: Performance degrades gracefully as collection grows (500 memories: p95=122ms)
 
 ---
 
@@ -228,6 +227,48 @@ Proven memories:  40% embedding similarity, 60% score
 3. CE multiplier: `final_score = blended_score × (1 + quality)`
 
 **Result**: Quality ranking (12x difference: 0.93 vs 0.08) successfully cuts through 15:1 noise ratio.
+
+---
+
+### 8. Token Efficiency Benchmark (Personal Finance)
+
+**Location**: `benchmarks/comprehensive_test/test_token_efficiency.py`
+**Runtime**: ~2 minutes
+**Status**: PASS (100% vs 0% on adversarial queries)
+
+**Test Design**:
+- 100 adversarial personal finance scenarios across 10 categories
+- Each scenario has research-backed "good" advice and common "bad" advice
+- Queries semantically match the BAD advice (adversarial design)
+- Sources: S&P SPIVA, Schwab Research, Vanguard, DALBAR studies
+
+**Categories Tested**:
+| Category | Examples |
+|----------|----------|
+| Market Timing | Buying dips vs staying invested |
+| Stock Picking | Individual stocks vs index funds |
+| Fee Awareness | High-fee funds vs low-cost alternatives |
+| Emotional Trading | Panic selling vs staying the course |
+| Diversification | Concentrated bets vs broad allocation |
+| Tax Efficiency | Frequent trading vs tax-loss harvesting |
+| Emergency Funds | Investing emergency funds vs cash reserves |
+| Debt Management | Investing while in debt vs paying down debt |
+| Retirement Timing | Early withdrawal vs letting it compound |
+| Insurance | Skipping coverage vs adequate protection |
+
+**Why This Test Matters**:
+Personal finance is adversarial by nature - bad advice often *sounds* more appealing:
+- "Buy the dip!" sounds active and smart
+- "Stay invested through volatility" sounds passive and boring
+- Yet research shows the passive approach outperforms 90%+ of the time
+
+**Results**:
+- Plain vector search: 0/100 correct (0%)
+- Roampal: 100/100 correct (100%)
+- Token efficiency: 20 tokens/query vs 55-93 for full context
+
+**How It Works**:
+Same mechanism as the programming benchmark - outcome scores (0.9 worked vs 0.2 failed) override semantic similarity. The system learned which advice actually worked.
 
 ---
 
@@ -323,6 +364,9 @@ python test_latency_benchmark.py
 
 # Semantic confusion (30s)
 python test_semantic_confusion.py
+
+# Token efficiency (2 min)
+python test_token_efficiency.py
 ```
 
 **Total runtime**: ~15-20 minutes for complete validation
@@ -333,7 +377,7 @@ python test_semantic_confusion.py
 
 **Production Ready**:
 - Infrastructure handles 1000 concurrent stores without corruption
-- Search latency competitive with industry (2.6x-8x faster than alternatives)
+- Sub-100ms search latency at typical memory volumes
 - Zero edge case failures (boundary values, empty collections, concurrent access)
 
 **Learning Works**:
@@ -350,4 +394,4 @@ python test_semantic_confusion.py
 
 ---
 
-**Last Updated**: November 27, 2025
+**Last Updated**: December 1, 2025
