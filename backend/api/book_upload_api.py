@@ -1,6 +1,7 @@
 """
 Book Upload API without shard architecture
 Simplified version for Roampal's single-user architecture
+v0.2.3: Added multi-format document support via FormatExtractor
 """
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, BackgroundTasks, Request, Depends, WebSocket
 from typing import Optional, Dict, List, Any
@@ -13,6 +14,9 @@ import asyncio
 from pydantic import BaseModel
 import logging
 from backend.api.websocket_progress import initialize_task, update_progress, manager, websocket_endpoint
+
+# Format extraction for multi-format support (v0.2.3)
+from modules.memory.format_extractor import FormatDetector, detect_and_extract, ExtractionError
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +46,14 @@ async def upload_book(
     """Upload a book file for ingestion"""
     logger.info(f"Starting upload for file '{file.filename}'")
     try:
-        # Validate file type
-        allowed_extensions = {'.txt', '.md'}
+        # Validate file type - expanded in v0.2.3 with FormatExtractor
+        allowed_extensions = FormatDetector.get_supported_extensions()
         file_extension = Path(file.filename).suffix.lower()
 
         if file_extension not in allowed_extensions:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}"
+                detail=f"Unsupported file type. Allowed: {', '.join(sorted(allowed_extensions))}"
             )
 
         # Validate file size (10MB limit)
@@ -113,19 +117,42 @@ async def upload_book(
             shutil.copyfileobj(file.file, buffer)
         logger.debug(f"File saved successfully, size: {file_path.stat().st_size} bytes")
 
-        # Validate file is valid UTF-8 text
+        # Validate file can be extracted (v0.2.3: replaces UTF-8 only check)
+        # For plain text files, this validates encoding
+        # For other formats, this validates the file can be parsed
+        extracted_metadata = {}
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                f.read(1024)  # Read first 1KB to verify encoding
-        except UnicodeDecodeError:
-            # Clean up invalid file
+            # Quick extraction test - validates format is readable
+            extracted = detect_and_extract(file_path)
+            if not extracted.has_content():
+                file_path.unlink()
+                raise HTTPException(
+                    status_code=400,
+                    detail="File appears empty or could not extract any text content."
+                )
+            # Capture any extracted metadata (title, author from PDF/DOCX)
+            extracted_metadata = extracted.get_metadata_dict()
+            if extracted.extraction_warnings:
+                logger.info(f"Extraction warnings for '{file.filename}': {extracted.extraction_warnings}")
+        except ExtractionError as e:
             file_path.unlink()
             raise HTTPException(
                 status_code=400,
-                detail="File is not valid UTF-8 text. Please ensure the file is a text document."
+                detail=f"Could not process file: {str(e)}"
+            )
+        except Exception as e:
+            file_path.unlink()
+            logger.error(f"Unexpected extraction error for '{file.filename}': {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"File validation failed: {str(e)}"
             )
 
         # Create book metadata
+        # v0.2.3: Use extracted metadata as fallback for title/author
+        extracted_title = extracted_metadata.get('extracted_title')
+        extracted_author = extracted_metadata.get('extracted_author')
+
         book_metadata = {
             "book_id": book_id,
             "original_filename": file.filename,
@@ -133,11 +160,12 @@ async def upload_book(
             "file_size": file_path.stat().st_size,
             "file_type": file_extension,
             "upload_timestamp": timestamp,
-            "title": title or Path(file.filename).stem,
-            "author": author or "Unknown",
+            "title": title or extracted_title or Path(file.filename).stem,
+            "author": author or extracted_author or "Unknown",
             "description": description,
             "processing_status": "pending",
-            "file_path": str(file_path)
+            "file_path": str(file_path),
+            "format_metadata": extracted_metadata  # v0.2.3: Store extraction metadata
         }
 
         # Save metadata
@@ -280,10 +308,25 @@ async def process_book_task(
             manager.complete_task(task_id, success=False, error="Cancelled by user")
             return
 
-        # Read book content
+        # Extract book content using FormatExtractor (v0.2.3)
+        # Supports: .txt, .md, .pdf, .docx, .xlsx, .xls, .csv, .html, .rtf
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                book_content = f.read()
+            extracted = detect_and_extract(Path(file_path))
+            book_content = extracted.content
+
+            if not book_content:
+                raise ExtractionError("No text content could be extracted")
+
+            # Log format-specific info
+            format_type = extracted.format_type
+            if extracted.is_tabular:
+                logger.info(f"[BOOK_PROCESSOR] Extracted tabular data: {extracted.row_count} rows, {extracted.column_count} cols")
+            if extracted.extraction_warnings:
+                logger.warning(f"[BOOK_PROCESSOR] Extraction warnings: {extracted.extraction_warnings}")
+
+        except ExtractionError as e:
+            logger.error(f"Failed to extract content from {file_path}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to extract book content: {e}")
         except Exception as e:
             logger.error(f"Failed to read book file {file_path}: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to read book file: {e}")

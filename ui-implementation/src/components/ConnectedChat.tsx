@@ -87,6 +87,31 @@ export const ConnectedChat: React.FC = () => {
   const hasLoadedModels = useRef(false);
   const [showOllamaRequired, setShowOllamaRequired] = useState(false);
 
+  // GPU/VRAM and quantization selection state
+  const [gpuInfo, setGpuInfo] = useState<{
+    detected: boolean;
+    gpus: Array<{name: string; total_vram_gb: number; free_vram_gb: number; used_vram_gb: number}>;
+    total_vram_gb: number;
+    available_vram_gb: number;
+    recommended_quant: string;
+    max_model_size_gb: number;
+  } | null>(null);
+  const [showQuantSelector, setShowQuantSelector] = useState(false);
+  const [selectedModelForQuant, setSelectedModelForQuant] = useState<string | null>(null);
+  const [modelQuantizations, setModelQuantizations] = useState<Array<{
+    level: string;
+    size_gb: number;
+    vram_required_gb: number;
+    quality: number;
+    quality_label: string;
+    file: string;
+    is_default: boolean;
+    fits_in_vram: boolean;
+    download_url: string;
+    ollama_tag?: string;
+  }>>([]);
+  const [selectedQuantization, setSelectedQuantization] = useState<string | null>(null);
+
   // Multi-provider state
   const [selectedProvider, setSelectedProvider] = useState<'ollama' | 'lmstudio'>(() => {
     const saved = localStorage.getItem('selectedProvider');
@@ -112,6 +137,51 @@ export const ConnectedChat: React.FC = () => {
       return false;
     }
     return false;
+  };
+
+  // Fetch GPU/VRAM information
+  const fetchGpuInfo = async () => {
+    try {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/gpu`);
+      if (response.ok) {
+        const data = await response.json();
+        setGpuInfo(data);
+        return data;
+      }
+    } catch (error) {
+      console.error('[GPU] Error fetching GPU info:', error);
+    }
+    return null;
+  };
+
+  // Fetch quantization options for a specific model
+  const fetchModelQuantizations = async (modelName: string) => {
+    try {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/${encodeURIComponent(modelName)}/quantizations`);
+      if (response.ok) {
+        const data = await response.json();
+        setModelQuantizations(data.quantizations || []);
+        // Pre-select the recommended or default quantization
+        const recommended = data.quantizations?.find((q: any) => q.level === data.recommended_quant);
+        const defaultQuant = data.quantizations?.find((q: any) => q.is_default);
+        const fittingQuant = data.quantizations?.find((q: any) => q.fits_in_vram);
+        setSelectedQuantization(recommended?.level || defaultQuant?.level || fittingQuant?.level || null);
+        return data;
+      }
+    } catch (error) {
+      console.error('[Quantizations] Error fetching:', error);
+    }
+    return null;
+  };
+
+  // Open quantization selector for a model
+  const openQuantSelector = async (modelName: string) => {
+    setSelectedModelForQuant(modelName);
+    setShowQuantSelector(true);
+    await Promise.all([
+      fetchGpuInfo(),
+      fetchModelQuantizations(modelName)
+    ]);
   };
 
   // Detect available providers (only show if they have chat models)
@@ -2485,13 +2555,31 @@ export const ConnectedChat: React.FC = () => {
                                   Cancel Download
                                 </button>
                               ) : (
-                                <button
-                                  onClick={() => handleInstallModel(model.name)}
-                                  disabled={!!installingModelName}
-                                  className="px-4 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                  Install
-                                </button>
+                                <div className="relative group/install">
+                                  <button
+                                    onClick={() => {
+                                      // Check if model has quantization options (in our registry)
+                                      const hasQuantOptions = [
+                                        'qwen2.5:7b', 'qwen2.5:14b', 'qwen2.5:32b', 'qwen2.5:72b', 'qwen2.5:3b',
+                                        'llama3.2:3b', 'llama3.1:8b', 'llama3.3:70b', 'mixtral:8x7b'
+                                      ].includes(model.name);
+                                      if (hasQuantOptions) {
+                                        openQuantSelector(model.name);
+                                      } else {
+                                        handleInstallModel(model.name);
+                                      }
+                                    }}
+                                    disabled={!!installingModelName || !availableProviders.find(p => p.name === 'lmstudio')?.available}
+                                    className="px-4 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                  >
+                                    Install
+                                  </button>
+                                  {!availableProviders.find(p => p.name === 'lmstudio')?.available && (
+                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-zinc-800 text-zinc-300 text-xs rounded whitespace-nowrap opacity-0 group-hover/install:opacity-100 transition-opacity pointer-events-none z-50">
+                                      Start LM Studio server to install
+                                    </div>
+                                  )}
+                                </div>
                               )}
                             </div>
                           </div>
@@ -2601,17 +2689,35 @@ export const ConnectedChat: React.FC = () => {
                                   Cancel Download
                                 </button>
                               ) : (
-                                <button
-                                  onClick={() => handleInstallModel(model.name)}
-                                  disabled={!!installingModelName}
-                                  className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap ${
-                                    model.agentCapable
-                                      ? 'bg-green-600 hover:bg-green-700 text-white shadow-sm hover:shadow-md'
-                                      : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm hover:shadow-md'
-                                  } disabled:opacity-50 disabled:cursor-not-allowed`}
-                                >
-                                  Install
-                                </button>
+                                <div className="relative group/install">
+                                  <button
+                                    onClick={() => {
+                                      // Check if model has quantization options (in our registry)
+                                      const hasQuantOptions = [
+                                        'qwen2.5:7b', 'qwen2.5:14b', 'qwen2.5:32b', 'qwen2.5:72b', 'qwen2.5:3b',
+                                        'llama3.2:3b', 'llama3.1:8b', 'llama3.3:70b', 'mixtral:8x7b'
+                                      ].includes(model.name);
+                                      if (hasQuantOptions) {
+                                        openQuantSelector(model.name);
+                                      } else {
+                                        handleInstallModel(model.name);
+                                      }
+                                    }}
+                                    disabled={!!installingModelName || !availableProviders.find(p => p.name === 'ollama')?.available}
+                                    className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap ${
+                                      model.agentCapable
+                                        ? 'bg-green-600 hover:bg-green-700 text-white shadow-sm hover:shadow-md'
+                                        : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm hover:shadow-md'
+                                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                  >
+                                    Install
+                                  </button>
+                                  {!availableProviders.find(p => p.name === 'ollama')?.available && (
+                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-zinc-800 text-zinc-300 text-xs rounded whitespace-nowrap opacity-0 group-hover/install:opacity-100 transition-opacity pointer-events-none z-50">
+                                      Install Ollama to download models
+                                    </div>
+                                  )}
+                                </div>
                               )}
                             </div>
                           </div>
@@ -2693,6 +2799,170 @@ export const ConnectedChat: React.FC = () => {
               Installation continues in background if you close this window
             </div>
           </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quantization Selection Modal */}
+      {showQuantSelector && selectedModelForQuant && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-gradient-to-b from-zinc-900 to-zinc-950 border border-zinc-800 rounded-xl shadow-2xl p-6 max-w-lg w-full mx-4 max-h-[85vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-white">Select Quantization</h3>
+                <p className="text-sm text-zinc-400 mt-0.5">{selectedModelForQuant}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowQuantSelector(false);
+                  setSelectedModelForQuant(null);
+                  setModelQuantizations([]);
+                  setSelectedQuantization(null);
+                }}
+                className="p-2 hover:bg-zinc-800 rounded-lg transition-colors"
+              >
+                <svg className="w-5 h-5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* GPU Info Banner */}
+            {gpuInfo?.detected && (
+              <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                <div className="flex items-center gap-2 mb-1">
+                  <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                  </svg>
+                  <span className="text-sm font-medium text-blue-300">{gpuInfo.gpus[0]?.name || 'GPU Detected'}</span>
+                </div>
+                <div className="text-xs text-blue-200/70">
+                  {gpuInfo.available_vram_gb.toFixed(1)} GB VRAM available of {gpuInfo.total_vram_gb.toFixed(1)} GB total
+                </div>
+              </div>
+            )}
+
+            {/* Quantization Options */}
+            {modelQuantizations.length === 0 ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                <span className="ml-3 text-zinc-400">Loading quantization options...</span>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {modelQuantizations.map((quant) => {
+                  const isSelected = selectedQuantization === quant.level;
+                  const canFit = quant.fits_in_vram;
+
+                  return (
+                    <button
+                      key={quant.level}
+                      onClick={() => setSelectedQuantization(quant.level)}
+                      disabled={!canFit}
+                      className={`w-full p-3 rounded-lg border text-left transition-all ${
+                        isSelected
+                          ? 'bg-blue-600/20 border-blue-500/50 ring-1 ring-blue-500/30'
+                          : canFit
+                            ? 'bg-zinc-800/50 border-zinc-700/50 hover:bg-zinc-800 hover:border-zinc-600'
+                            : 'bg-zinc-800/20 border-zinc-800/50 opacity-50 cursor-not-allowed'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`font-mono font-medium ${isSelected ? 'text-blue-300' : 'text-white'}`}>
+                            {quant.level}
+                          </span>
+                          {quant.is_default && (
+                            <span className="text-xs px-1.5 py-0.5 bg-green-600/20 text-green-400 rounded">
+                              Default
+                            </span>
+                          )}
+                          {!canFit && (
+                            <span className="text-xs px-1.5 py-0.5 bg-red-600/20 text-red-400 rounded">
+                              Too Large
+                            </span>
+                          )}
+                        </div>
+                        <span className={`text-sm ${isSelected ? 'text-blue-300' : 'text-zinc-400'}`}>
+                          {quant.size_gb.toFixed(1)} GB
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-500">
+                          VRAM: {quant.vram_required_gb.toFixed(1)} GB
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-zinc-500">Quality:</span>
+                          <div className="flex gap-0.5">
+                            {[1, 2, 3, 4, 5].map((star) => (
+                              <svg
+                                key={star}
+                                className={`w-3 h-3 ${star <= quant.quality ? 'text-yellow-400' : 'text-zinc-700'}`}
+                                fill="currentColor"
+                                viewBox="0 0 20 20"
+                              >
+                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                              </svg>
+                            ))}
+                          </div>
+                          <span className="text-zinc-500">({quant.quality_label})</span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowQuantSelector(false);
+                  setSelectedModelForQuant(null);
+                  setModelQuantizations([]);
+                  setSelectedQuantization(null);
+                }}
+                className="flex-1 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const selectedQuant = modelQuantizations.find(q => q.level === selectedQuantization);
+                  if (selectedQuant) {
+                    // Use the Ollama tag if available, otherwise use the base model name
+                    const modelToInstall = selectedQuant.ollama_tag || selectedModelForQuant;
+                    setShowQuantSelector(false);
+                    setSelectedModelForQuant(null);
+                    setModelQuantizations([]);
+                    setSelectedQuantization(null);
+                    handleInstallModel(modelToInstall!);
+                  }
+                }}
+                disabled={!selectedQuantization || modelQuantizations.length === 0 || !availableProviders.find(p => p.name === viewProvider)?.available}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-700 disabled:cursor-not-allowed text-white rounded-lg transition-colors font-medium"
+                title={!availableProviders.find(p => p.name === viewProvider)?.available ? `${viewProvider === 'lmstudio' ? 'LM Studio' : 'Ollama'} is not running` : undefined}
+              >
+                Install {selectedQuantization || '...'}
+              </button>
+            </div>
+
+            {/* Info Footer */}
+            <div className="mt-4 pt-4 border-t border-zinc-800">
+              <div className="flex items-start gap-2 text-xs text-zinc-500">
+                <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>
+                  Higher quantization = better quality but more VRAM. Q4_K_M is recommended for most users.
+                  {gpuInfo?.recommended_quant && gpuInfo.recommended_quant !== 'Q4_K_M' && (
+                    <> Based on your GPU, <strong className="text-blue-400">{gpuInfo.recommended_quant}</strong> is recommended.</>
+                  )}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       )}

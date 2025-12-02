@@ -168,6 +168,26 @@ fn read_api_port_from_env(backend_dir: &std::path::Path) -> u16 {
     8765 // Default to PROD port
 }
 
+// Read data directory name from backend/.env file
+fn read_data_dir_from_env(backend_dir: &std::path::Path) -> String {
+    let env_file = backend_dir.join(".env");
+    if let Ok(content) = std::fs::read_to_string(&env_file) {
+        for line in content.lines() {
+            if line.starts_with("ROAMPAL_DATA_DIR=") {
+                if let Some(dir_name) = line.strip_prefix("ROAMPAL_DATA_DIR=") {
+                    let dir_name = dir_name.trim();
+                    if !dir_name.is_empty() {
+                        println!("[read_data_dir] Found data dir '{}' in .env file", dir_name);
+                        return dir_name.to_string();
+                    }
+                }
+            }
+        }
+    }
+    println!("[read_data_dir] Using default data dir 'Roampal'");
+    "Roampal".to_string() // Default to PROD data dir
+}
+
 // Start the Python backend
 #[tauri::command]
 fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProcess>) -> Result<String, String> {
@@ -210,12 +230,14 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
     let main_py = backend_dir.join("main.py");
     let backend_root = &backend_dir;
 
-    // Read API port from .env file
+    // Read API port and data dir from .env file
     let api_port = read_api_port_from_env(&backend_dir);
+    let data_dir = read_data_dir_from_env(&backend_dir);
 
     println!("[start_backend] Python exe: {:?}", python_exe);
     println!("[start_backend] Main.py: {:?}", main_py);
     println!("[start_backend] API port: {}", api_port);
+    println!("[start_backend] Data dir: {}", data_dir);
 
     // Check if main.py exists with more details
     println!("[start_backend] Checking main.py existence...");
@@ -253,6 +275,7 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
             .current_dir(backend_root)
             .env("PYTHONPATH", pythonpath)
             .env("ROAMPAL_API_PORT", api_port.to_string())
+            .env("ROAMPAL_DATA_DIR", &data_dir)
             .creation_flags(CREATE_NO_WINDOW);
 
         let child = child_cmd
@@ -385,14 +408,18 @@ fn main() {
             let backend_clone = Arc::clone(&backend_state.0);
 
             main_window.on_window_event(move |event| {
-                if let tauri::WindowEvent::Destroyed = event {
-                    println!("[Cleanup] Window destroyed, killing backend process...");
-                    if let Ok(mut backend) = backend_clone.lock() {
-                        if let Some(mut child) = backend.take() {
-                            let _ = child.kill();
-                            println!("[Cleanup] Backend process killed");
+                match event {
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+                        println!("[Cleanup] Window closing, killing backend process...");
+                        if let Ok(mut backend) = backend_clone.lock() {
+                            if let Some(mut child) = backend.take() {
+                                let _ = child.kill();
+                                let _ = child.wait(); // Wait for process to fully terminate
+                                println!("[Cleanup] Backend process killed");
+                            }
                         }
                     }
+                    _ => {}
                 }
             });
 

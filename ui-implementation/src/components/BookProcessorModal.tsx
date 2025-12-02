@@ -265,8 +265,8 @@ export const BookProcessorModal: React.FC<BookProcessorModalProps> = ({
         };
       }
 
-      // Check file type
-      const allowedExtensions = ['.txt', '.md'];
+      // Check file type - v0.2.3: expanded to support PDF, DOCX, Excel, CSV, HTML, RTF
+      const allowedExtensions = ['.txt', '.md', '.pdf', '.docx', '.xlsx', '.xls', '.csv', '.tsv', '.html', '.htm', '.rtf'];
       const extension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
       if (!allowedExtensions.includes(extension)) {
         return {
@@ -275,7 +275,7 @@ export const BookProcessorModal: React.FC<BookProcessorModalProps> = ({
           status: 'error' as const,
           progress: 0,
           message: 'Invalid file type',
-          error: `Only .txt and .md files are supported`,
+          error: `Unsupported file type. Allowed: ${allowedExtensions.join(', ')}`,
           customTitle: file.name.replace(/\.[^/.]+$/, ''),
           customAuthor: ''
         };
@@ -647,7 +647,7 @@ export const BookProcessorModal: React.FC<BookProcessorModalProps> = ({
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".txt,.md"
+              accept=".txt,.md,.pdf,.docx,.xlsx,.xls,.csv,.tsv,.html,.htm,.rtf"
               onChange={(e) => handleFileSelect(e.target.files)}
               className="hidden"
             />

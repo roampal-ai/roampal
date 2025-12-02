@@ -820,7 +820,10 @@ Use user's EXACT query text. Memory persists across all sessions.""",
 Store: Learning about user, discovering what works, tracking progress
 Don't: Session transcripts (auto-captured), temporary tasks
 
-Examples: "User's name is X", "User prefers Y style", "Full queries work better than keywords for this user" """,
+Examples: "User's name is X", "User prefers Y style", "Full queries work better than keywords for this user"
+
+Note: memory_bank facts are NOT auto-scored like search results. They persist until archived.
+Use this for stable user info, not session learnings (those go in record_response).""",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -906,7 +909,7 @@ This is how Roampal learns what works. Be honest with outcomes.""",
                     },
                     "required": ["key_takeaway"]
                 }
-            )
+            ),
         ]
 
     @server.call_tool()
@@ -1047,7 +1050,46 @@ This is how Roampal learns what works. Be honest with outcomes.""",
                         # Get collection from metadata or root level
                         metadata = r.get('metadata', {})
                         collection = r.get('collection') or metadata.get('collection', 'unknown')
-                        text += f"{i}. [{collection}] {content_preview}\n\n"
+
+                        # Extract metadata for LLM context (v0.2.3 enhancement)
+                        score = metadata.get('score')
+                        uses = metadata.get('uses', 0)
+                        timestamp = metadata.get('timestamp')
+                        last_outcome = metadata.get('last_outcome')
+                        doc_id = r.get('doc_id') or r.get('id', '')
+
+                        # Build metadata line for LLM scoring decisions
+                        meta_parts = []
+                        if score is not None:
+                            meta_parts.append(f"score:{score:.2f}")
+                        if uses > 0:
+                            meta_parts.append(f"uses:{uses}")
+                        if last_outcome:
+                            meta_parts.append(f"last:{last_outcome}")
+                        if timestamp:
+                            try:
+                                from datetime import datetime as dt
+                                if isinstance(timestamp, str):
+                                    ts = dt.fromisoformat(timestamp.replace('Z', '+00:00'))
+                                else:
+                                    ts = timestamp
+                                age_days = (datetime.now(ts.tzinfo) if ts.tzinfo else datetime.now() - ts).days if hasattr(ts, 'days') else (datetime.now() - ts).days
+                                if age_days == 0:
+                                    meta_parts.append("age:today")
+                                elif age_days == 1:
+                                    meta_parts.append("age:1d")
+                                elif age_days < 7:
+                                    meta_parts.append(f"age:{age_days}d")
+                                elif age_days < 30:
+                                    meta_parts.append(f"age:{age_days//7}w")
+                                else:
+                                    meta_parts.append(f"age:{age_days//30}mo")
+                            except:
+                                pass  # Skip age if parsing fails
+
+                        meta_line = f" ({', '.join(meta_parts)})" if meta_parts else ""
+                        id_hint = f" [id:{doc_id}]" if doc_id else ""
+                        text += f"{i}. [{collection}]{meta_line}{id_hint} {content_preview}\n\n"
 
                 # Apply cold-start injection if this is first tool call
                 text = await _inject_cold_start_if_needed(session_id, text, memory)
@@ -1399,17 +1441,32 @@ This is how Roampal learns what works. Be honest with outcomes.""",
                     outcome=outcome
                 )
 
-                # Build response text
+                # Build response text (v0.2.3: enriched summary)
                 client_name = get_client_display_name(session_id)
                 response_text = f"✓ Learning recorded for {client_name}\n"
                 response_text += f"Doc ID: {doc_id}\n"
                 response_text += f"Initial score: {initial_score} (outcome={outcome})\n"
 
                 if cached_memories_scored > 0:
-                    response_text += f"📊 Scored {cached_memories_scored} cached memories\n"
+                    response_text += f"Scored {cached_memories_scored} cached memories\n"
 
                 if actions_scored > 0:
-                    response_text += f"🔧 Updated {actions_scored} tool effectiveness stats\n"
+                    response_text += f"Updated {actions_scored} tool effectiveness stats\n"
+
+                # v0.2.3: Add system learning summary for LLM context
+                response_text += "\n--- System Learning Summary ---\n"
+                response_text += f"Your takeaway stored in working memory (will promote to history if score stays ≥0.7)\n"
+                if outcome == "worked":
+                    response_text += "Outcome 'worked': High initial score (0.7) - this learning is on track for promotion\n"
+                elif outcome == "failed":
+                    response_text += "Outcome 'failed': Low initial score (0.2) - consider what went wrong for future\n"
+                elif outcome == "partial":
+                    response_text += "Outcome 'partial': Medium score (0.55) - needs more positive outcomes to promote\n"
+                else:
+                    response_text += "Outcome 'unknown': Neutral score (0.5) - will adjust based on future use\n"
+
+                if cached_memories_scored > 0:
+                    response_text += f"The {cached_memories_scored} memories from your last search were also scored with '{outcome}'\n"
 
                 logger.info(f"[MCP] {client_name} recorded learning: {doc_id}")
 
@@ -1434,7 +1491,7 @@ This is how Roampal learns what works. Be honest with outcomes.""",
             )
 
     # Run MCP server via stdio
-    logger.info("[MCP] Server initialized with 5 tools: search_memory, add_to_memory_bank, update_memory, archive_memory, record_response")
+    logger.info("[MCP] Server initialized with 6 tools: search_memory, add_to_memory_bank, update_memory, archive_memory, get_context_insights, record_response")
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 

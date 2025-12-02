@@ -22,6 +22,7 @@ from modules.memory.file_memory_adapter import FileMemoryAdapter
 from modules.memory.content_graph import ContentGraph
 from modules.embedding.embedding_service import EmbeddingService
 from config.feature_flags import is_enabled, get_flag
+from config.settings import DATA_PATH
 from services.metrics_service import track_performance, get_metrics
 
 # Import advanced modules conditionally
@@ -140,7 +141,7 @@ class UnifiedMemorySystem:
     PRODUCTION THRESHOLDS:
     - HIGH_VALUE_THRESHOLD: 0.9 (memories with this score are preserved beyond retention period)
     - PROMOTION_SCORE_THRESHOLD: 0.7 (minimum score for promotion to patterns)
-    - DEMOTION_SCORE_THRESHOLD: 0.3 (below this, patterns demote to history)
+    - DEMOTION_SCORE_THRESHOLD: 0.4 (below this, patterns demote to history)
     - DELETION_SCORE_THRESHOLD: 0.2 (below this, history items are deleted)
 
     PROMOTION TRIGGER PRECEDENCE (highest to lowest priority):
@@ -152,16 +153,15 @@ class UnifiedMemorySystem:
     # Production-defined thresholds
     HIGH_VALUE_THRESHOLD = 0.9  # Memories above this are preserved beyond retention
     PROMOTION_SCORE_THRESHOLD = 0.7  # Minimum score for working->history or history->patterns
-    DEMOTION_SCORE_THRESHOLD = 0.3  # Below this, patterns demote to history
+    DEMOTION_SCORE_THRESHOLD = 0.4  # Below this, patterns demote to history
     DELETION_SCORE_THRESHOLD = 0.2  # Below this, history items are deleted
     NEW_ITEM_DELETION_THRESHOLD = 0.1  # More lenient for items < 7 days old
 
     def __init__(self, data_dir: str = "./data", use_server: bool = True, llm_service=None):
-        # Support environment variable override for dev builds
-        env_data_dir = os.environ.get('ROAMPAL_DATA_DIR')
-        if env_data_dir:
-            data_dir = env_data_dir
-            logger.info(f"Using data directory from ROAMPAL_DATA_DIR: {data_dir}")
+        # Use DATA_PATH from settings.py which properly handles AppData path resolution
+        # DATA_PATH already combines ROAMPAL_DATA_DIR with AppData when env var is set
+        data_dir = DATA_PATH
+        logger.info(f"Using data directory from settings.DATA_PATH: {data_dir}")
 
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
@@ -2635,43 +2635,8 @@ Prefix (one sentence, max 20 words):"""
             logger.warning(f"Cannot evaluate {doc_id}: document not found")
             return
 
-        # Fast-track: working -> patterns (exceptional cases with proven track record)
-        if collection == "working" and score >= self.HIGH_VALUE_THRESHOLD and uses >= 3:
-            # Check for consecutive successful outcomes
-            outcome_history = json.loads(metadata.get("outcome_history", "[]"))
-            recent_outcomes = [o.get("outcome") for o in outcome_history[-3:]]
-
-            if recent_outcomes.count("worked") >= 3:
-                # Three consecutive successes = fast-track to patterns
-                logger.info(f"Fast-track promotion: {doc_id} from working → patterns "
-                           f"(score: {score:.2f}, {uses} uses, 3+ consecutive successes)")
-
-                new_id = doc_id.replace("working_", "patterns_")
-                promotion_record = {
-                    "from": "working",
-                    "to": "patterns",
-                    "timestamp": datetime.now().isoformat(),
-                    "score": score,
-                    "uses": uses,
-                    "fast_tracked": True
-                }
-
-                promotion_history = json.loads(metadata.get("promotion_history", "[]"))
-                promotion_history.append(promotion_record)
-                metadata["promotion_history"] = json.dumps(promotion_history)
-                metadata["promoted_from"] = "working"
-                metadata["fast_tracked"] = True
-
-                await self.collections["patterns"].upsert_vectors(
-                    ids=[new_id],
-                    vectors=[await self.embedding_service.embed_text(metadata["text"])],
-                    metadatas=[metadata]
-                )
-                self.collections["working"].delete_vectors([doc_id])
-                await self._add_relationship(new_id, "evolution", {"parent": doc_id})
-
-                logger.info(f"Fast-tracked {doc_id} to patterns")
-                return  # Exit early
+        # NOTE (v0.2.3): Fast-track bypass removed. All memories must go through
+        # history first to prove themselves over time before reaching patterns.
 
         # Promotion: working -> history
         if collection == "working" and score >= 0.7 and uses >= 2:

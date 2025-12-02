@@ -1,15 +1,215 @@
 """
 Unified Model Registry API
 Single source of truth for model metadata across all providers.
+
+Features:
+- Model catalog with quantization options
+- VRAM/GPU detection and recommendations
+- Smart model selection based on hardware
 """
 from fastapi import APIRouter, HTTPException
 from typing import List, Dict, Any, Optional
 import logging
+import subprocess
+import re
+import sys
 
 from config.model_contexts import MODEL_CONTEXTS, get_context_size
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["model-registry"])
+
+# Windows-specific: Hide terminal windows when spawning subprocesses
+_SUBPROCESS_FLAGS = 0
+if sys.platform == "win32":
+    _SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW
+
+# ============================================================================
+# QUANTIZATION OPTIONS - All available quants per model family
+# ============================================================================
+# Format: {base_model: {quant_level: {size_gb, vram_required_gb, quality_rating}}}
+# Quality ratings: 1-5 (5=best quality, 1=most compressed)
+
+QUANTIZATION_OPTIONS = {
+    # Format: "ollama_tag" is the tag to pull from Ollama (e.g., qwen2.5:7b-instruct-q4_K_M)
+    # The base model name (e.g., qwen2.5:7b) is the default Q4_K_M quant
+    "qwen2.5:7b": {
+        "Q2_K": {"size_gb": 2.8, "vram_gb": 3.5, "quality": 1, "file": "Qwen2.5-7B-Instruct-Q2_K.gguf", "ollama_tag": "qwen2.5:7b-instruct-q2_K"},
+        "Q3_K_M": {"size_gb": 3.4, "vram_gb": 4.0, "quality": 2, "file": "Qwen2.5-7B-Instruct-Q3_K_M.gguf", "ollama_tag": "qwen2.5:7b-instruct-q3_K_M"},
+        "Q4_K_M": {"size_gb": 4.68, "vram_gb": 5.5, "quality": 3, "file": "Qwen2.5-7B-Instruct-Q4_K_M.gguf", "default": True, "ollama_tag": "qwen2.5:7b"},
+        "Q5_K_M": {"size_gb": 5.3, "vram_gb": 6.0, "quality": 4, "file": "Qwen2.5-7B-Instruct-Q5_K_M.gguf", "ollama_tag": "qwen2.5:7b-instruct-q5_K_M"},
+        "Q6_K": {"size_gb": 6.1, "vram_gb": 7.0, "quality": 4, "file": "Qwen2.5-7B-Instruct-Q6_K.gguf", "ollama_tag": "qwen2.5:7b-instruct-q6_K"},
+        "Q8_0": {"size_gb": 8.1, "vram_gb": 9.0, "quality": 5, "file": "Qwen2.5-7B-Instruct-Q8_0.gguf", "ollama_tag": "qwen2.5:7b-instruct-q8_0"},
+    },
+    "qwen2.5:14b": {
+        "Q2_K": {"size_gb": 5.5, "vram_gb": 6.5, "quality": 1, "file": "Qwen2.5-14B-Instruct-Q2_K.gguf", "ollama_tag": "qwen2.5:14b-instruct-q2_K"},
+        "Q3_K_M": {"size_gb": 6.6, "vram_gb": 7.5, "quality": 2, "file": "Qwen2.5-14B-Instruct-Q3_K_M.gguf", "ollama_tag": "qwen2.5:14b-instruct-q3_K_M"},
+        "Q4_K_M": {"size_gb": 8.99, "vram_gb": 10.0, "quality": 3, "file": "Qwen2.5-14B-Instruct-Q4_K_M.gguf", "default": True, "ollama_tag": "qwen2.5:14b"},
+        "Q5_K_M": {"size_gb": 10.5, "vram_gb": 12.0, "quality": 4, "file": "Qwen2.5-14B-Instruct-Q5_K_M.gguf", "ollama_tag": "qwen2.5:14b-instruct-q5_K_M"},
+        "Q6_K": {"size_gb": 12.1, "vram_gb": 14.0, "quality": 4, "file": "Qwen2.5-14B-Instruct-Q6_K.gguf", "ollama_tag": "qwen2.5:14b-instruct-q6_K"},
+        "Q8_0": {"size_gb": 15.7, "vram_gb": 18.0, "quality": 5, "file": "Qwen2.5-14B-Instruct-Q8_0.gguf", "ollama_tag": "qwen2.5:14b-instruct-q8_0"},
+    },
+    "qwen2.5:32b": {
+        "Q2_K": {"size_gb": 12.2, "vram_gb": 14.0, "quality": 1, "file": "Qwen2.5-32B-Instruct-Q2_K.gguf", "ollama_tag": "qwen2.5:32b-instruct-q2_K"},
+        "Q3_K_M": {"size_gb": 14.8, "vram_gb": 17.0, "quality": 2, "file": "Qwen2.5-32B-Instruct-Q3_K_M.gguf", "ollama_tag": "qwen2.5:32b-instruct-q3_K_M"},
+        "Q4_K_M": {"size_gb": 19.9, "vram_gb": 22.0, "quality": 3, "file": "Qwen2.5-32B-Instruct-Q4_K_M.gguf", "default": True, "ollama_tag": "qwen2.5:32b"},
+        "Q5_K_M": {"size_gb": 23.7, "vram_gb": 26.0, "quality": 4, "file": "Qwen2.5-32B-Instruct-Q5_K_M.gguf", "ollama_tag": "qwen2.5:32b-instruct-q5_K_M"},
+        "Q6_K": {"size_gb": 27.3, "vram_gb": 30.0, "quality": 4, "file": "Qwen2.5-32B-Instruct-Q6_K.gguf", "ollama_tag": "qwen2.5:32b-instruct-q6_K"},
+    },
+    "qwen2.5:72b": {
+        "Q2_K": {"size_gb": 26.9, "vram_gb": 30.0, "quality": 1, "file": "Qwen2.5-72B-Instruct-Q2_K.gguf", "ollama_tag": "qwen2.5:72b-instruct-q2_K"},
+        "Q3_K_M": {"size_gb": 33.2, "vram_gb": 36.0, "quality": 2, "file": "Qwen2.5-72B-Instruct-Q3_K_M.gguf", "ollama_tag": "qwen2.5:72b-instruct-q3_K_M"},
+        "Q4_K_M": {"size_gb": 47.4, "vram_gb": 50.0, "quality": 3, "file": "Qwen2.5-72B-Instruct-Q4_K_M.gguf", "default": True, "ollama_tag": "qwen2.5:72b"},
+    },
+    "qwen2.5:3b": {
+        "Q4_K_M": {"size_gb": 1.93, "vram_gb": 3.0, "quality": 3, "file": "Qwen2.5-3B-Instruct-Q4_K_M.gguf", "default": True, "ollama_tag": "qwen2.5:3b"},
+        "Q5_K_M": {"size_gb": 2.3, "vram_gb": 3.5, "quality": 4, "file": "Qwen2.5-3B-Instruct-Q5_K_M.gguf", "ollama_tag": "qwen2.5:3b-instruct-q5_K_M"},
+        "Q8_0": {"size_gb": 3.4, "vram_gb": 4.5, "quality": 5, "file": "Qwen2.5-3B-Instruct-Q8_0.gguf", "ollama_tag": "qwen2.5:3b-instruct-q8_0"},
+    },
+    "llama3.2:3b": {
+        "Q4_K_M": {"size_gb": 2.0, "vram_gb": 3.0, "quality": 3, "file": "Llama-3.2-3B-Instruct-Q4_K_M.gguf", "default": True, "ollama_tag": "llama3.2:3b"},
+        "Q5_K_M": {"size_gb": 2.4, "vram_gb": 3.5, "quality": 4, "file": "Llama-3.2-3B-Instruct-Q5_K_M.gguf", "ollama_tag": "llama3.2:3b-instruct-q5_K_M"},
+        "Q8_0": {"size_gb": 3.5, "vram_gb": 4.5, "quality": 5, "file": "Llama-3.2-3B-Instruct-Q8_0.gguf", "ollama_tag": "llama3.2:3b-instruct-q8_0"},
+    },
+    "llama3.1:8b": {
+        "Q3_K_M": {"size_gb": 3.6, "vram_gb": 4.5, "quality": 2, "file": "Meta-Llama-3.1-8B-Instruct-Q3_K_M.gguf", "ollama_tag": "llama3.1:8b-instruct-q3_K_M"},
+        "Q4_K_M": {"size_gb": 4.9, "vram_gb": 6.0, "quality": 3, "file": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", "default": True, "ollama_tag": "llama3.1:8b"},
+        "Q5_K_M": {"size_gb": 5.7, "vram_gb": 7.0, "quality": 4, "file": "Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf", "ollama_tag": "llama3.1:8b-instruct-q5_K_M"},
+        "Q6_K": {"size_gb": 6.6, "vram_gb": 8.0, "quality": 4, "file": "Meta-Llama-3.1-8B-Instruct-Q6_K.gguf", "ollama_tag": "llama3.1:8b-instruct-q6_K"},
+        "Q8_0": {"size_gb": 8.5, "vram_gb": 10.0, "quality": 5, "file": "Meta-Llama-3.1-8B-Instruct-Q8_0.gguf", "ollama_tag": "llama3.1:8b-instruct-q8_0"},
+    },
+    "llama3.3:70b": {
+        "Q2_K": {"size_gb": 24.0, "vram_gb": 28.0, "quality": 1, "file": "Llama-3.3-70B-Instruct-Q2_K.gguf", "ollama_tag": "llama3.3:70b-instruct-q2_K"},
+        "Q3_K_M": {"size_gb": 30.5, "vram_gb": 34.0, "quality": 2, "file": "Llama-3.3-70B-Instruct-Q3_K_M.gguf", "ollama_tag": "llama3.3:70b-instruct-q3_K_M"},
+        "Q4_K_M": {"size_gb": 42.5, "vram_gb": 46.0, "quality": 3, "file": "Llama-3.3-70B-Instruct-Q4_K_M.gguf", "default": True, "ollama_tag": "llama3.3:70b"},
+    },
+    "mixtral:8x7b": {
+        "Q3_K_M": {"size_gb": 19.0, "vram_gb": 22.0, "quality": 2, "file": "mixtral-8x7b-instruct-v0.1.Q3_K_M.gguf", "ollama_tag": "mixtral:8x7b-instruct-q3_K_M"},
+        "Q4_K_M": {"size_gb": 26.44, "vram_gb": 30.0, "quality": 3, "file": "mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf", "default": True, "ollama_tag": "mixtral:8x7b"},
+        "Q5_K_M": {"size_gb": 31.5, "vram_gb": 35.0, "quality": 4, "file": "mixtral-8x7b-instruct-v0.1.Q5_K_M.gguf", "ollama_tag": "mixtral:8x7b-instruct-q5_K_M"},
+    },
+}
+
+# HuggingFace repo mapping for GGUF downloads
+HUGGINGFACE_REPOS = {
+    "qwen2.5:7b": "bartowski/Qwen2.5-7B-Instruct-GGUF",
+    "qwen2.5:14b": "bartowski/Qwen2.5-14B-Instruct-GGUF",
+    "qwen2.5:32b": "bartowski/Qwen2.5-32B-Instruct-GGUF",
+    "qwen2.5:72b": "bartowski/Qwen2.5-72B-Instruct-GGUF",
+    "qwen2.5:3b": "bartowski/Qwen2.5-3B-Instruct-GGUF",
+    "llama3.2:3b": "bartowski/Llama-3.2-3B-Instruct-GGUF",
+    "llama3.1:8b": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+    "llama3.3:70b": "bartowski/Llama-3.3-70B-Instruct-GGUF",
+    "mixtral:8x7b": "TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF",
+}
+
+
+async def detect_gpu_info() -> Dict[str, Any]:
+    """
+    Detect GPU information using nvidia-smi (NVIDIA) or system commands.
+    Returns VRAM info, GPU name, and utilization.
+    """
+    gpu_info = {
+        "detected": False,
+        "gpus": [],
+        "total_vram_gb": 0,
+        "available_vram_gb": 0,
+        "recommended_quant": "Q4_K_M",
+        "max_model_size_gb": 0,
+    }
+
+    try:
+        # Try nvidia-smi first (NVIDIA GPUs)
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total,memory.free,memory.used,utilization.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=_SUBPROCESS_FLAGS
+        )
+
+        if result.returncode == 0:
+            gpu_info["detected"] = True
+            total_vram = 0
+            available_vram = 0
+
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    parts = [p.strip() for p in line.split(',')]
+                    if len(parts) >= 4:
+                        name = parts[0]
+                        total_mb = float(parts[1])
+                        free_mb = float(parts[2])
+                        used_mb = float(parts[3])
+                        util = parts[4] if len(parts) > 4 else "0"
+
+                        total_gb = total_mb / 1024
+                        free_gb = free_mb / 1024
+                        used_gb = used_mb / 1024
+
+                        gpu_info["gpus"].append({
+                            "name": name,
+                            "total_vram_gb": round(total_gb, 1),
+                            "free_vram_gb": round(free_gb, 1),
+                            "used_vram_gb": round(used_gb, 1),
+                            "utilization_percent": int(util) if util.isdigit() else 0
+                        })
+
+                        total_vram += total_gb
+                        available_vram += free_gb
+
+            gpu_info["total_vram_gb"] = round(total_vram, 1)
+            gpu_info["available_vram_gb"] = round(available_vram, 1)
+
+            # Calculate max model size (leave ~2GB headroom for system)
+            gpu_info["max_model_size_gb"] = max(0, round(available_vram - 2, 1))
+
+            # Recommend quantization based on available VRAM
+            if available_vram >= 48:
+                gpu_info["recommended_quant"] = "Q8_0"  # Highest quality
+            elif available_vram >= 24:
+                gpu_info["recommended_quant"] = "Q6_K"
+            elif available_vram >= 12:
+                gpu_info["recommended_quant"] = "Q5_K_M"
+            elif available_vram >= 8:
+                gpu_info["recommended_quant"] = "Q4_K_M"  # Default balanced
+            elif available_vram >= 4:
+                gpu_info["recommended_quant"] = "Q3_K_M"
+            else:
+                gpu_info["recommended_quant"] = "Q2_K"  # Most compressed
+
+    except FileNotFoundError:
+        logger.debug("nvidia-smi not found - no NVIDIA GPU or drivers not installed")
+    except subprocess.TimeoutExpired:
+        logger.warning("nvidia-smi timed out")
+    except Exception as e:
+        logger.debug(f"GPU detection failed: {e}")
+
+    return gpu_info
+
+
+def get_recommended_models(vram_gb: float) -> List[Dict[str, Any]]:
+    """
+    Get list of models that fit in available VRAM, sorted by quality.
+    """
+    recommendations = []
+
+    for model_name, quants in QUANTIZATION_OPTIONS.items():
+        for quant_level, info in quants.items():
+            if info["vram_gb"] <= vram_gb:
+                recommendations.append({
+                    "model": model_name,
+                    "quantization": quant_level,
+                    "size_gb": info["size_gb"],
+                    "vram_required_gb": info["vram_gb"],
+                    "quality": info["quality"],
+                    "is_default": info.get("default", False),
+                    "headroom_gb": round(vram_gb - info["vram_gb"], 1)
+                })
+
+    # Sort by quality (descending), then by VRAM usage (descending to prefer larger models)
+    recommendations.sort(key=lambda x: (-x["quality"], -x["vram_required_gb"]))
+
+    return recommendations
 
 # Tool-capable model families (whitelist based on testing)
 TOOL_CAPABLE_FAMILIES = {
@@ -271,4 +471,184 @@ async def get_model_tiers() -> Dict[str, Any]:
                 "models": TOOL_CAPABLE_FAMILIES["experimental"]
             }
         }
+    }
+
+
+# ============================================================================
+# NEW: GPU/VRAM Detection and Model Recommendations
+# ============================================================================
+
+@router.get("/api/model/gpu")
+async def get_gpu_info() -> Dict[str, Any]:
+    """
+    Detect GPU information and available VRAM.
+
+    Returns:
+    - detected: Whether a GPU was found
+    - gpus: List of detected GPUs with VRAM info
+    - total_vram_gb: Total VRAM across all GPUs
+    - available_vram_gb: Free VRAM currently available
+    - recommended_quant: Suggested quantization based on VRAM
+    - max_model_size_gb: Largest model that fits (with headroom)
+    """
+    return await detect_gpu_info()
+
+
+@router.get("/api/model/catalog")
+async def get_model_catalog() -> Dict[str, Any]:
+    """
+    Get full model catalog with all quantization options.
+
+    Returns comprehensive catalog of available models with:
+    - All quantization levels and their VRAM requirements
+    - File sizes and quality ratings
+    - HuggingFace repo information for downloads
+    """
+    catalog = []
+
+    for model_name, quants in QUANTIZATION_OPTIONS.items():
+        repo = HUGGINGFACE_REPOS.get(model_name)
+        tier = get_model_tier(model_name)
+        context_size = get_context_size(model_name)
+
+        model_entry = {
+            "name": model_name,
+            "tier": tier,
+            "tool_capable": is_tool_capable(model_name),
+            "context_window": context_size,
+            "huggingface_repo": repo,
+            "quantizations": []
+        }
+
+        for quant_level, info in quants.items():
+            model_entry["quantizations"].append({
+                "level": quant_level,
+                "size_gb": info["size_gb"],
+                "vram_required_gb": info["vram_gb"],
+                "quality": info["quality"],
+                "quality_label": ["", "Low", "Medium-Low", "Balanced", "High", "Highest"][info["quality"]],
+                "file": info["file"],
+                "is_default": info.get("default", False),
+                "download_url": f"https://huggingface.co/{repo}/resolve/main/{info['file']}" if repo else None
+            })
+
+        # Sort quantizations by quality descending
+        model_entry["quantizations"].sort(key=lambda x: -x["quality"])
+        catalog.append(model_entry)
+
+    return {
+        "models": catalog,
+        "count": len(catalog)
+    }
+
+
+@router.get("/api/model/recommendations")
+async def get_model_recommendations(
+    vram_gb: Optional[float] = None,
+    include_all: bool = False
+) -> Dict[str, Any]:
+    """
+    Get model recommendations based on available VRAM.
+
+    Query Parameters:
+    - vram_gb: Override VRAM detection with manual value (optional)
+    - include_all: Include models that don't fit in VRAM (default: False)
+
+    Returns:
+    - gpu_info: Detected GPU information
+    - recommendations: Models sorted by quality that fit in VRAM
+    - warnings: Any warnings about model selection
+    """
+    # Detect GPU if vram_gb not specified
+    gpu_info = await detect_gpu_info()
+
+    effective_vram = vram_gb if vram_gb is not None else gpu_info["available_vram_gb"]
+
+    recommendations = get_recommended_models(effective_vram if not include_all else 999)
+
+    # Add warnings
+    warnings = []
+    if not gpu_info["detected"]:
+        warnings.append("No NVIDIA GPU detected. Models will run on CPU (slower).")
+    if effective_vram < 4:
+        warnings.append("Limited VRAM. Consider Q2_K or Q3_K_M quantizations for better performance.")
+    if effective_vram < 2:
+        warnings.append("Very limited VRAM. CPU offloading will be required for most models.")
+
+    # Group by model for cleaner output
+    by_model = {}
+    for rec in recommendations:
+        model = rec["model"]
+        if model not in by_model:
+            by_model[model] = {
+                "model": model,
+                "tier": get_model_tier(model),
+                "tool_capable": is_tool_capable(model),
+                "available_quantizations": []
+            }
+        by_model[model]["available_quantizations"].append({
+            "quantization": rec["quantization"],
+            "size_gb": rec["size_gb"],
+            "vram_required_gb": rec["vram_required_gb"],
+            "quality": rec["quality"],
+            "is_default": rec["is_default"],
+            "headroom_gb": rec["headroom_gb"]
+        })
+
+    return {
+        "gpu_info": gpu_info,
+        "effective_vram_gb": effective_vram,
+        "recommendations": list(by_model.values()),
+        "total_options": len(recommendations),
+        "warnings": warnings
+    }
+
+
+@router.get("/api/model/{model_name}/quantizations")
+async def get_model_quantizations(model_name: str) -> Dict[str, Any]:
+    """
+    Get all available quantizations for a specific model.
+
+    Path Parameters:
+    - model_name: Model name (e.g., "qwen2.5:7b")
+
+    Returns quantization options with VRAM requirements.
+    """
+    if model_name not in QUANTIZATION_OPTIONS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{model_name}' not found in quantization catalog. Available: {list(QUANTIZATION_OPTIONS.keys())}"
+        )
+
+    quants = QUANTIZATION_OPTIONS[model_name]
+    repo = HUGGINGFACE_REPOS.get(model_name)
+
+    # Get GPU info for recommendations
+    gpu_info = await detect_gpu_info()
+
+    options = []
+    for quant_level, info in quants.items():
+        fits_in_vram = info["vram_gb"] <= gpu_info["total_vram_gb"] if gpu_info["detected"] else True
+        options.append({
+            "level": quant_level,
+            "size_gb": info["size_gb"],
+            "vram_required_gb": info["vram_gb"],
+            "quality": info["quality"],
+            "quality_label": ["", "Low", "Medium-Low", "Balanced", "High", "Highest"][info["quality"]],
+            "file": info["file"],
+            "is_default": info.get("default", False),
+            "fits_in_vram": fits_in_vram,
+            "download_url": f"https://huggingface.co/{repo}/resolve/main/{info['file']}" if repo else None,
+            "ollama_tag": info.get("ollama_tag", model_name)  # Ollama tag for pulling this quantization
+        })
+
+    # Sort by quality descending
+    options.sort(key=lambda x: -x["quality"])
+
+    return {
+        "model": model_name,
+        "huggingface_repo": repo,
+        "quantizations": options,
+        "gpu_info": gpu_info,
+        "recommended_quant": gpu_info["recommended_quant"]
     }

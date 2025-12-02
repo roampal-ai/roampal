@@ -179,7 +179,7 @@ Works with any tool-calling model via Ollama or LM Studio:
 - **Discord**: https://discord.gg/F87za86R3v
 - **Email**: roampal@protonmail.com
 - **GitHub**: https://github.com/roampal-ai/roampal/issues
-- **Author**: [Logan Teague](https://www.linkedin.com/in/logan-teague-mba-6909901a5/)
+- **Author**: [Logan Teague](https://www.linkedin.com/in/logan-teague-6909901a5//)
 
 ---
 

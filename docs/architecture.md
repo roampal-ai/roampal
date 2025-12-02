@@ -771,24 +771,10 @@ exchange_doc_id = await memory.store(
 - No conversation filter skipping during promotion (unified_memory_system.py:1359, 1599)
 - Full context maintained through entire decay lifecycle: working → history → patterns
 
-**Fast-Track Promotion (Advanced Feature - v0.2.1):**
-Exceptional memories can skip history collection and promote directly from working to patterns:
+**Fast-Track Promotion (REMOVED in v0.2.3):**
+~~Exceptional memories can skip history collection and promote directly from working to patterns.~~
 
-**Criteria:**
-- Score ≥ 0.9 (HIGH_VALUE_THRESHOLD)
-- Uses ≥ 3
-- Last 3 outcomes all "worked" (3 consecutive successes)
-
-**Why:** Proven patterns shouldn't wait in history - they're immediately valuable.
-
-**Implementation:** [unified_memory_system.py:2382-2417](unified_memory_system.py#L2382)
-
-**Example:**
-```
-working_abc123: score=0.95, uses=3, outcomes=[worked, worked, worked]
-→ Direct promotion to patterns (skips history)
-→ Marked with metadata["fast_tracked"] = True
-```
+**Removed in v0.2.3:** All memories now must go through history first to prove themselves over time. The fast-track bypass was too aggressive - 3 consecutive successes in one session doesn't prove long-term value. Memories need to "season" in history before reaching patterns.
 
 #### Unified Outcome-Based Memory Scoring (Updated 2025-10-06)
 
@@ -1684,12 +1670,51 @@ Processes uploaded documents for the knowledge base.
   - Returns book metadata (title, author, chunk range)
 - Real-time progress tracking via WebSocket
 - Security validations:
-  - File type whitelist (.txt, .md only)
   - 10MB size limit
-  - UTF-8 encoding validation
   - UUID format validation for book IDs
   - Metadata length limits (200 chars title, 1000 chars description)
   - Prompt injection pattern detection (logged warnings)
+
+### 4.1 Format Extractor (`modules/memory/format_extractor/`) - NEW v0.2.3
+
+Converts various document formats to plain text before processing by SmartBookProcessor.
+
+**Supported Formats:**
+
+| Format | Extension | Library | Notes |
+|--------|-----------|---------|-------|
+| Plain Text | .txt | built-in | Direct read with encoding detection |
+| Markdown | .md | built-in | Direct read |
+| PDF | .pdf | PyMuPDF | Text extraction, metadata (title/author) |
+| Word | .docx | python-docx | Preserves headings, extracts tables |
+| Excel | .xlsx, .xls | openpyxl + pandas | Row-based chunking with headers |
+| CSV | .csv, .tsv | pandas | Auto-detects delimiter and encoding |
+| HTML | .html, .htm | beautifulsoup4 | Strips tags, preserves structure |
+| RTF | .rtf | striprtf | Basic text extraction |
+
+**Architecture:**
+```
+upload → FormatDetector.detect() → appropriate Extractor → ExtractedDocument → SmartBookProcessor
+```
+
+**ExtractedDocument Structure:**
+- `content: str` - Extracted text content
+- `format_type: str` - Original format (pdf, docx, excel, etc.)
+- `title: Optional[str]` - Extracted from document metadata
+- `author: Optional[str]` - Extracted from document metadata
+- `is_tabular: bool` - True for Excel/CSV data
+- `extraction_warnings: List[str]` - Any issues (e.g., "images skipped")
+
+**Tabular Data Handling:**
+- Excel and CSV files use row-based chunking (50 rows per chunk)
+- Column headers prepended to each chunk for context
+- Enables semantic search over structured data
+
+**Limitations:**
+- Scanned PDFs: No OCR support (text-based PDFs only)
+- Password-protected files: Not supported
+- Images in documents: Skipped (text extraction only)
+- Excel formulas: Values extracted, not formulas
 
 ## Tool-Based Memory Search (NEW - 2025-10-01)
 
@@ -2648,7 +2673,7 @@ Roampal functions as a native MCP server, enabling external LLMs (Claude Desktop
    - Content KG knows which entities are most frequently mentioned
    - Provides truly important user context based on actual data patterns
    - Example: If "roampal" mentioned 10x, "logan" 8x → those facts are prioritized
-#### Available MCP Tools (6) - Updated 2025-11-26
+#### Available MCP Tools (7) - Updated 2025-12-02
 
 **Tool Description Philosophy**: Scannable, not verbose. External LLMs (Claude Desktop, Cursor) need to quickly understand tools.
 
@@ -2661,9 +2686,9 @@ Roampal functions as a native MCP server, enabling external LLMs (Claude Desktop
 
    **Result**: Both internal and external LLMs receive personalized user profile automatically on first message
 
-#### Available MCP Tools (6)
+#### Available MCP Tools (7)
 
-**1. record_response** (v0.2.0 - External LLM Judgment)
+**1. record_response** (v0.2.3 - Enhanced Return Value)
 ```json
 {
   "name": "record_response",
@@ -2679,11 +2704,12 @@ Roampal functions as a native MCP server, enabling external LLMs (Claude Desktop
     "4. Updates KG routing patterns with query → collection → outcome",
     "5. Clears search cache",
     "6. Records to session file for tracking"
-  ]
+  ],
+  "returns_v0.2.3": "Enriched summary explaining: what was stored, score meaning, promotion path, cached memories affected"
 }
 ```
 
-**2. search_memory** (v0.2.0 - Metadata Filtering Support)
+**2. search_memory** (v0.2.3 - Enriched Result Metadata)
 ```json
 {
   "name": "search_memory",
@@ -2710,7 +2736,16 @@ Roampal functions as a native MCP server, enabling external LLMs (Claude Desktop
     },
     "combined": "Multiple filters use AND logic: {\"title\": \"architecture\", \"has_code\": true}"
   },
-  "returns": "Up to 20 results with full content (no truncation since v0.1.6)"
+  "returns_v0.2.3": {
+    "format": "[collection] (score:X.XX, uses:N, last:outcome, age:Xd) [id:doc_id] content...",
+    "metadata_fields": [
+      "score: Current memory score (0.0-1.0)",
+      "uses: How many times retrieved successfully",
+      "last: Last recorded outcome (worked/failed/partial)",
+      "age: Human-readable age (today, 1d, 3d, 2w, 1mo)",
+      "id: Document ID for reference"
+    ]
+  }
 }
 ```
 
@@ -2777,6 +2812,7 @@ Roampal functions as a native MCP server, enabling external LLMs (Claude Desktop
   }
 }
 ```
+
 
 **Removed Tools** (v0.2.0):
 - `list_memory_bank` - Redundant (use `search_memory` with `collections=["memory_bank"]` instead)
@@ -2902,20 +2938,33 @@ WS   /ws/progress/{task_id}         # WebSocket for real-time progress updates
 
 The Model Switcher feature allows runtime hot-swapping of LLM models without restart, with full UI integration.
 
-**Backend**: [app/routers/model_switcher.py](../app/routers/model_switcher.py)
+**Backend (Main)**: [app/routers/model_switcher.py](../app/routers/model_switcher.py) (727 lines, Ollama-only)
+**Backend (UI Bundle)**: [ui-implementation/src-tauri/backend/app/routers/model_switcher.py](../ui-implementation/src-tauri/backend/app/routers/model_switcher.py) (1781 lines, full dual-provider)
 **Frontend**: [ui-implementation/src/components/ConnectedChat.tsx](../ui-implementation/src/components/ConnectedChat.tsx) (lines 66-445, 1460-1585)
+
+> **Note**: The UI bundle backend has significantly more features than the main codebase backend. LM Studio support, multi-provider detection, and GGUF downloads are only available in the UI bundle. For v0.2.3+, consider backporting these features to the main codebase.
 
 #### Endpoints
 ```
-GET  /api/model/ollama/status    # Check if Ollama is running (NEW - 2025-10-14)
-GET  /api/model/available        # List locally installed Ollama models
-GET  /api/model/current          # Get currently active model
-POST /api/model/switch           # Switch active model with health check
+# Provider Detection (UI Bundle only)
+GET  /api/model/providers/detect           # Detect all running providers with model lists
+GET  /api/model/providers/all/models       # Get models from ALL detected providers
+GET  /api/model/providers/{provider}/models # Get models for specific provider
+
+# Provider Status
+GET  /api/model/ollama/status    # Check if Ollama is running
+GET  /api/model/lmstudio/status  # Check if LM Studio server is running (UI Bundle only)
+
+# Model Operations
+GET  /api/model/available        # List locally installed models (filters embedding models)
+GET  /api/model/current          # Get currently active model with provider info
+POST /api/model/switch           # Switch active model with auto-provider detection + health check
 POST /api/model/pull             # Pull new model (blocking)
-POST /api/model/pull-stream      # Pull model with SSE progress streaming
+POST /api/model/pull-stream      # Pull Ollama model with SSE progress streaming
+POST /api/model/download-gguf-stream # Download GGUF from HuggingFace for LM Studio (UI Bundle only)
 DELETE /api/model/uninstall/{model_name} # Uninstall model, auto-switch if active
 
-# Context Window Management (NEW - 2025-10-09)
+# Context Window Management
 GET  /api/model/contexts         # Get all model context configurations
 GET  /api/model/context/{model_name} # Get specific model's context info (default, max, current)
 POST /api/model/context/{model_name} # Set custom context size (512-200000 tokens)
@@ -2924,36 +2973,82 @@ DELETE /api/model/context/{model_name} # Reset to default context size
 
 #### Features
 
-**Multi-Provider Detection** ([model_switcher.py:28-50](../app/routers/model_switcher.py)) (Updated 2025-10-28)
+**Multi-Provider Detection** (UI Bundle: [model_switcher.py:34-130](../ui-implementation/src-tauri/backend/app/routers/model_switcher.py#L34)) (Updated 2025-12-02)
 - Supports 2 LLM providers: **Ollama** (port 11434) and **LM Studio** (port 1234)
-- Checks provider availability via health check endpoints (`/api/tags` for Ollama, `/v1/models` for LM Studio)
-- Returns `{available: bool, message: str}` per provider
+- Provider configuration dictionary with ports, health endpoints, and API styles:
+  ```python
+  PROVIDERS = {
+      "ollama": {"port": 11434, "health": "/api/tags", "api_style": "ollama"},
+      "lmstudio": {"port": 1234, "health": "/v1/models", "api_style": "openai"},
+  }
+  ```
+- `/api/model/providers/detect` returns comprehensive provider status:
+  ```json
+  {
+    "providers": [
+      {"name": "ollama", "port": 11434, "status": "running", "models": ["qwen2.5:7b", ...], "model_count": 4},
+      {"name": "lmstudio", "port": 1234, "status": "running", "models": [], "model_count": 0}
+    ],
+    "active": "ollama",
+    "count": 2
+  }
+  ```
+- Filters embedding models from model lists (nomic-embed, mxbai-embed, all-minilm, bge-, text-embedding)
 - Used by frontend to detect missing LLM provider installations
 - Shows user-friendly modal with download links for both providers if none are available
 
-**LM Studio Integration** (Added 2025-10-28, Updated 2025-10-29)
+**LM Studio Integration** (Added 2025-10-28, Updated 2025-12-02)
 - **Architecture**: GUI app + CLI tool (`lms.exe`) + Python SDK (`lmstudio`)
 - **Model format**: GGUF files stored in `~/.lmstudio/models/` (NOT `.cache/lm-studio/models/`)
 - **API compatibility**: OpenAI-compatible API on `http://localhost:1234/v1/`
 - **Model listing**: Returns model IDs as-is (e.g., `qwen2.5-7b-instruct`), no normalization to Ollama format
-- **CLI location**: `~/.lmstudio/bin/lms.exe` (installed with LM Studio GUI)
-- **SDK package**: `lmstudio` Python package - **DEPRECATED due to hang issues**
+- **CLI location**: Searches multiple paths:
+  - `~/.lmstudio/bin/lms.exe` (primary)
+  - `%LOCALAPPDATA%/LM Studio/bin/lms.exe` (alternate Windows location)
+- **GGUF Download Mapping** (UI Bundle: [model_switcher.py:41-89](../ui-implementation/src-tauri/backend/app/routers/model_switcher.py#L41)):
+  Pre-mapped Q4_K_M quantizations for HuggingFace auto-download:
+- **Model Name Resolution** ([model_switcher.py:resolve_model_for_lmstudio](../ui-implementation/src-tauri/backend/app/routers/model_switcher.py)) (Added 2025-12-02):
+  Resolves quantized model names (e.g., `qwen2.5:7b-instruct-q8_0`) to HuggingFace download info:
+  1. Checks legacy `MODEL_TO_HUGGINGFACE` mapping for direct match
+  2. Searches `QUANTIZATION_OPTIONS` for matching `ollama_tag`
+  3. Falls back to fuzzy matching on base model name
+  This enables LM Studio downloads with specific quantization selections.
+  | Model | Repo | Size |
+  |-------|------|------|
+  | qwen2.5:3b | bartowski/Qwen2.5-3B-Instruct-GGUF | 1.93 GB |
+  | qwen2.5:7b | bartowski/Qwen2.5-7B-Instruct-GGUF | 4.68 GB |
+  | qwen2.5:14b | bartowski/Qwen2.5-14B-Instruct-GGUF | 8.99 GB |
+  | qwen2.5:32b | bartowski/Qwen2.5-32B-Instruct-GGUF | 19.9 GB |
+  | qwen2.5:72b | bartowski/Qwen2.5-72B-Instruct-GGUF | 47.4 GB |
+  | llama3.2:3b | bartowski/Llama-3.2-3B-Instruct-GGUF | 2.0 GB |
+  | llama3.1:8b | bartowski/Meta-Llama-3.1-8B-Instruct-GGUF | 4.9 GB |
+  | llama3.3:70b | bartowski/Llama-3.3-70B-Instruct-GGUF | 42.5 GB |
+  | mixtral:8x7b | TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF | 26.44 GB |
 - **One-step automation** (Updated 2025-10-29):
   1. CLI import: `lms import --yes --copy --user-repo "publisher/model" /path/to/file.gguf`
   2. ~~SDK load: Skipped due to `client.llm.load_new_instance()` hanging indefinitely~~
   3. Models available via API immediately after CLI import completes
 - **Model unload**: ~~SDK's `loaded_model.unload()` removed~~ LM Studio API caches models until restart
 
-**Model Switching** ([model_switcher.py:425-520](../app/routers/model_switcher.py)) (Updated 2025-10-28)
-- **Multi-provider support**: Can switch between Ollama and LM Studio models
+**Model Switching** (UI Bundle: [model_switcher.py:710-905](../ui-implementation/src-tauri/backend/app/routers/model_switcher.py#L710)) (Updated 2025-12-02)
+- **Auto-provider detection**: Automatically detects which provider owns a model:
+  1. First checks Ollama via `ollama list` subprocess
+  2. Then checks LM Studio via `/v1/models` API
+  3. Returns 404 if model not found in either provider
+- **Multi-provider support**: Can switch between Ollama and LM Studio models seamlessly
 - **Lazy initialization**: Creates `llm_client` if None (happens when app starts with no models)
-- Verifies provider is running and model exists before switching
 - Updates `app.state.llm_client` with new provider's base_url, model_name, and api_style
-- Runs health check (test inference with 10s timeout)
-- **Automatic rollback** on health check failure
-- Updates environment variables (OLLAMA_MODEL, ROAMPAL_LLM_OLLAMA_MODEL, ROAMPAL_LLM_PROVIDER)
-- Persists to .env file with file locking
-- Returns HTTP 503 with rollback details on failure
+- **Health check** with provider-specific endpoints:
+  - Ollama: POST to `/api/chat` with minimal payload
+  - LM Studio: POST to `/v1/chat/completions` (OpenAI-compatible)
+  - 30-second timeout, 2-second delay for model loading
+- **Automatic rollback** on health check failure:
+  - Restores previous model_name, base_url, AND api_style
+  - Returns HTTP 503 with rollback details
+- **Environment persistence**:
+  - Updates `ROAMPAL_LLM_PROVIDER`, `OLLAMA_MODEL`, `ROAMPAL_LLM_OLLAMA_MODEL` (Ollama)
+  - Updates `ROAMPAL_LLM_PROVIDER`, `ROAMPAL_LLM_LMSTUDIO_MODEL` (LM Studio)
+  - Persists to .env file with asyncio file locking
 
 **Model Installation** ([model_switcher.py:262-657](../app/routers/model_switcher.py)) (Updated 2025-10-28)
 - **Multi-provider support**: Ollama and LM Studio installation workflows
@@ -2967,6 +3062,83 @@ DELETE /api/model/context/{model_name} # Reset to default context size
 - **Auto-switch**: Automatically switches to newly installed model after successful load
 - 10-minute timeout for large models
 - WebSocket and SSE endpoints for flexible client support
+
+**Quantization Selection & VRAM Management** ([model_registry.py](../ui-implementation/src-tauri/backend/app/routers/model_registry.py)) (Added 2025-12-02)
+
+Allows users to select specific quantization levels before downloading models, with automatic GPU detection to recommend appropriate quantizations based on available VRAM.
+
+**Architecture:**
+- **GPU Detection**: Uses `nvidia-smi` subprocess to detect NVIDIA GPUs and query VRAM (total, used, free)
+- **VRAM Headroom**: Reserves ~2GB for system/context, recommends models that fit within available VRAM
+- **Quality Ratings**: 1-5 scale (Low → Highest) for each quantization level
+- **Auto-recommendation**: Pre-selects the highest quality quantization that fits in detected VRAM
+
+**API Endpoints** ([model_registry.py:470-654](../ui-implementation/src-tauri/backend/app/routers/model_registry.py)):
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/model/gpu` | Detect GPU info (name, VRAM total/free/used, recommended quant) |
+| `GET /api/model/catalog` | Full catalog of models with all quantization options |
+| `GET /api/model/recommendations?vram_gb=X` | Filtered models that fit in specified VRAM |
+| `GET /api/model/{model_name}/quantizations` | Quantization options for specific model with `fits_in_vram` flag |
+
+**Quantization Options** ([model_registry.py:87-259](../ui-implementation/src-tauri/backend/app/routers/model_registry.py)):
+```python
+QUANTIZATION_OPTIONS = {
+    "qwen2.5:7b": {
+        "Q2_K": {"size_gb": 2.8, "vram_gb": 3.5, "quality": 1, "ollama_tag": "qwen2.5:7b-instruct-q2_K"},
+        "Q3_K_M": {"size_gb": 3.4, "vram_gb": 4.0, "quality": 2, "ollama_tag": "qwen2.5:7b-instruct-q3_K_M"},
+        "Q4_K_M": {"size_gb": 4.68, "vram_gb": 5.5, "quality": 3, "default": True, "ollama_tag": "qwen2.5:7b"},
+        "Q5_K_M": {"size_gb": 5.3, "vram_gb": 6.0, "quality": 4, "ollama_tag": "qwen2.5:7b-instruct-q5_K_M"},
+        "Q6_K": {"size_gb": 6.1, "vram_gb": 7.0, "quality": 4, "ollama_tag": "qwen2.5:7b-instruct-q6_K"},
+        "Q8_0": {"size_gb": 8.1, "vram_gb": 9.0, "quality": 5, "ollama_tag": "qwen2.5:7b-instruct-q8_0"},
+    },
+    # Similar entries for: qwen2.5:3b, 14b, 32b, 72b, llama3.2:3b, llama3.1:8b, llama3.3:70b, mixtral:8x7b
+}
+```
+
+**Supported Models** (9 total with 6 quantization levels each):
+| Model | Size Range | VRAM Range |
+|-------|-----------|------------|
+| qwen2.5:3b | 1.0-2.0 GB | 1.5-2.5 GB |
+| qwen2.5:7b | 2.8-8.1 GB | 3.5-9.0 GB |
+| qwen2.5:14b | 5.3-15.7 GB | 6.5-17.0 GB |
+| qwen2.5:32b | 12-37 GB | 14-40 GB |
+| qwen2.5:72b | 27-81 GB | 30-85 GB |
+| llama3.2:3b | 1.3-3.2 GB | 2.0-4.0 GB |
+| llama3.1:8b | 3.0-8.5 GB | 4.0-10.0 GB |
+| llama3.3:70b | 26-78 GB | 30-82 GB |
+| mixtral:8x7b | 10-30 GB | 12-32 GB |
+
+**UI Integration** ([ConnectedChat.tsx:90-113, 141-184, 2769-2930](../ui-implementation/src/components/ConnectedChat.tsx)):
+- **Quantization Selector Modal**: Opens when clicking Install on supported models
+- **GPU Info Banner**: Shows detected GPU name and available VRAM
+- **Quality Stars**: Visual 1-5 star rating for each quantization
+- **VRAM Requirements**: Shows size (GB) and VRAM needed for each option
+- **Fits in VRAM Indicator**: Green checkmark for options that fit, red warning for those that don't
+- **Pre-selected Option**: Highest quality quant that fits is auto-selected
+- **Ollama Tag Mapping**: Each quantization maps to specific Ollama pull tag (e.g., `qwen2.5:7b-instruct-q8_0`)
+
+**Provider Availability Protection** ([ConnectedChat.tsx:2572, 2706, 2944](../ui-implementation/src/components/ConnectedChat.tsx)) (Added 2025-12-02, Updated 2025-12-02)
+
+Install buttons are disabled when the corresponding LLM provider is not available, preventing failed download attempts.
+
+**Implementation:**
+- **Model List Install Buttons**: Disabled when provider unavailable
+  - Ollama: `!availableProviders.find(p => p.name === 'ollama')?.available`
+  - LM Studio: `!availableProviders.find(p => p.name === 'lmstudio')?.available`
+- **Quantization Modal Install Button**: Also checks `viewProvider` availability (line 2944)
+  - Prevents downloads when modal opened but provider went offline
+  - Shows tooltip: "{Provider} is not running"
+- **Tooltip on Hover**: Shows explanation when button is disabled:
+  - Ollama: "Install Ollama to download models"
+  - LM Studio: "Start LM Studio server to install"
+- **Visual Feedback**: Disabled buttons show `opacity-50` and `cursor-not-allowed`
+
+**User Experience:**
+- Warning banner appears at top of model list when provider unavailable
+- Install buttons grayed out with hover tooltip explaining why
+- User must install/start provider before downloading models
+- Auto-polling (every 10s) re-enables buttons when provider becomes available
 
 **Model Uninstallation** ([model_switcher.py:1298-1443](../app/routers/model_switcher.py)) (Updated 2025-10-31)
 - **Multi-provider aware**: Detects provider ownership before uninstalling
@@ -3247,11 +3419,12 @@ ROAMPAL_REQUIRE_AUTH=false
 ### Memory Retention Policies
 - **Working Memory**: 24 hours
 - **History**: 30 days (configurable)
-- **Patterns**: Permanent (demoted if score < 0.3)
+- **Patterns**: Permanent (demoted if score < 0.4, was 0.3 before v0.2.3)
 - **Books**: Permanent
 - **High-value threshold**: 0.9 score (preserved beyond retention period)
 - **Promotion threshold**: 0.7 score (minimum for promotion)
-- **Deletion threshold**: 0.2 score (standard deletion)
+- **Demotion threshold**: 0.4 score (patterns → history, raised from 0.3 in v0.2.3)
+- **Deletion threshold**: 0.2 score (history deletion)
 - **New item deletion threshold**: 0.1 score (for items < 7 days old, more lenient)
 
 ## Storage Layout
@@ -3553,6 +3726,49 @@ When the AI is processing queries, it shows real-time status:
 - Rate limiting: 100 req/min (always enabled)
 - Sanitized logging
 - CORS restrictions
+
+### Desktop App Process Lifecycle (v0.2.3)
+
+The Tauri desktop app manages the Python backend process with proper cleanup on window close.
+
+**Implementation:** [main.rs:410-424](../ui-implementation/src-tauri/src/main.rs#L410-L424)
+
+**Process Management:**
+```rust
+// Backend process is tracked in shared state
+struct BackendProcess(Arc<Mutex<Option<Child>>>);
+
+// Window close handler kills the backend
+main_window.on_window_event(move |event| {
+    match event {
+        tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+            if let Ok(mut backend) = backend_clone.lock() {
+                if let Some(mut child) = backend.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();  // Wait for full termination
+                }
+            }
+        }
+        _ => {}
+    }
+});
+```
+
+**Key Events Handled:**
+| Event | Description |
+|-------|-------------|
+| `CloseRequested` | User clicks X button - kills backend immediately |
+| `Destroyed` | Window destroyed - fallback cleanup |
+
+**Why Both Events?**
+- `CloseRequested` fires first when user clicks X (before window closes)
+- `Destroyed` fires after window is already gone (backup handler)
+- Using both ensures backend is killed in all close scenarios
+
+**Previous Issue (Fixed v0.2.3):**
+- Only handled `Destroyed` event, not `CloseRequested`
+- Backend processes became orphaned when closing via X button
+- Users had to manually kill Python processes via Task Manager
 
 ## Performance Optimization
 

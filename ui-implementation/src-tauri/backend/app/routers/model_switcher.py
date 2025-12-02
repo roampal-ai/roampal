@@ -22,6 +22,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import httpx
 
+from app.routers.model_registry import QUANTIZATION_OPTIONS, HUGGINGFACE_REPOS
+
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["model-switcher"])
 
@@ -37,7 +39,58 @@ PROVIDERS = {
     "lmstudio": {"port": 1234, "health": "/v1/models", "models": "/v1/models", "api_style": "openai"},
 }
 
-# GGUF model mapping for LM Studio downloads
+def resolve_model_for_lmstudio(model_name: str) -> Dict[str, Any]:
+    """
+    Resolve a model name (possibly with quantization suffix) to HuggingFace download info.
+
+    Handles:
+    - Base names: "qwen2.5:7b" -> default Q4_K_M
+    - Ollama tags: "qwen2.5:7b-instruct-q8_0" -> Q8_0 quantization
+    - Direct matches in MODEL_TO_HUGGINGFACE
+
+    Returns: {"repo": "...", "file": "...", "size_gb": ...} or None
+    """
+    # First check direct match in legacy mapping
+    if model_name in MODEL_TO_HUGGINGFACE:
+        return MODEL_TO_HUGGINGFACE[model_name]
+
+    # Try to parse quantization from model name
+    # Patterns: "model:size-instruct-q4_K_M" or "model:size-q4_K_M"
+    for base_model, quants in QUANTIZATION_OPTIONS.items():
+        for quant_level, quant_info in quants.items():
+            ollama_tag = quant_info.get("ollama_tag", "")
+            if ollama_tag and model_name.lower() == ollama_tag.lower():
+                # Found matching quantization
+                repo = HUGGINGFACE_REPOS.get(base_model)
+                if repo and "file" in quant_info:
+                    return {
+                        "repo": repo,
+                        "file": quant_info["file"],
+                        "size_gb": quant_info.get("size_gb", 0)
+                    }
+
+    # Try fuzzy match - extract base model and check
+    # e.g., "qwen2.5:7b-instruct-q8_0" -> base="qwen2.5:7b"
+    for base_model in QUANTIZATION_OPTIONS.keys():
+        if model_name.startswith(base_model):
+            # Found base model, now find the quant
+            suffix = model_name[len(base_model):].lower()
+            for quant_level, quant_info in QUANTIZATION_OPTIONS[base_model].items():
+                if quant_level.lower() in suffix:
+                    repo = HUGGINGFACE_REPOS.get(base_model)
+                    if repo and "file" in quant_info:
+                        return {
+                            "repo": repo,
+                            "file": quant_info["file"],
+                            "size_gb": quant_info.get("size_gb", 0)
+                        }
+            # No specific quant found, use default
+            if base_model in MODEL_TO_HUGGINGFACE:
+                return MODEL_TO_HUGGINGFACE[base_model]
+
+    return None
+
+# GGUF model mapping for LM Studio downloads (legacy - now uses QUANTIZATION_OPTIONS)
 MODEL_TO_HUGGINGFACE = {
     "qwen2.5:7b": {
         "repo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
@@ -275,13 +328,14 @@ async def download_gguf_stream(request_body: Dict[str, Any] = Body(...)):
 
     model_name = request_body.get('model', '')
 
-    # Validate model exists in mapping
-    if model_name not in MODEL_TO_HUGGINGFACE:
+    # Resolve model name to HuggingFace info (supports quantization suffixes)
+    resolved_model_info = resolve_model_for_lmstudio(model_name)
+    if not resolved_model_info:
         raise HTTPException(404, f"Model {model_name} not available for LM Studio auto-download")
 
     async def generate():
-        # Get model info inside generator (closure scope issue)
-        model_info = MODEL_TO_HUGGINGFACE[model_name]
+        # Use resolved model info (closure captures it)
+        model_info = resolved_model_info
 
         # Acquire download lock INSIDE generator to ensure it's held during the actual download
         logger.info(f"[LOCK DEBUG] Generator started, attempting to acquire lock for {model_name}")

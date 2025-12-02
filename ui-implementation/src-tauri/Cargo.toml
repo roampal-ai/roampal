@@ -1,6 +1,6 @@
 [package]
 name = "roampal"
-version = "0.1.6"
+version = "0.2.3"
 description = "Roampal - Your AI that actually remembers"
 authors = ["Roampal Team"]
 edition = "2021"
