@@ -14,7 +14,7 @@ Stop re-explaining yourself every conversation. Roampal remembers your context, 
   <img src="docs/screenshot.png" alt="Roampal - Chat with Knowledge Graph" width="800">
 </p>
 
-> **Headline Result**: 130 adversarial scenarios. Plain vector search: 0-3%. Roampal: **100%**. 63% fewer tokens. [(Full benchmarks)](docs/BENCHMARKS.md)
+> **Vector search: 3.3%. Roampal: 100%. Same queries. (p=0.001)** [(Full benchmarks)](docs/BENCHMARKS.md)
 
 <p align="center">
   <a href="https://github.com/roampal-ai/roampal">
@@ -62,25 +62,66 @@ But that advice FAILED last time. You needed the debugger.
 
 **Roampal's Solution**: Track outcomes. When advice works, boost it (+0.2). When it fails, penalize it (-0.3). After a few conversations, the system **knows** debugger > print statements—for YOU.
 
-**Result**: 100% vs 0-3% accuracy on 130 adversarial scenarios [(full stats)](docs/BENCHMARKS.md)
+### Benchmark Results
 
-### Performance
+*Tests measure the retrieval system, not LLM generation. Real embeddings, synthetic scenarios.*
 
-| Metric | Result |
-|--------|--------|
-| **Accuracy** | **100% vs 0-3%** on 130 adversarial scenarios |
-| **Token Efficiency** | **63% fewer** tokens per query (20 vs 55-93) |
-| **Learning Curve** | **58% → 93%** accuracy as outcomes accumulate |
-| **Latency (p95)** | Sub-100ms |
+**Roampal vs Vector DB** (30 adversarial coding scenarios):
+| Condition | Accuracy |
+|-----------|----------|
+| Plain vector search | 3.3% (1/30) |
+| **Roampal** | **100%** (30/30) |
 
-**Why this matters**: Better answers with less context. Lower API costs, faster responses, and it keeps getting smarter over time.
+p=0.001, Cohen's d=7.49
+
+---
+
+**4-Way Comparison** (what each component adds):
+| Approach | Accuracy | Improvement |
+|----------|----------|-------------|
+| RAG Baseline | 10% | - |
+| + Reranker | 20% | +10 pts |
+| **+ Outcomes** | **50%** | **+40 pts** |
+
+Outcome learning beats rerankers **4×**.
+
+---
+
+**Learning Curve** (how fast it learns):
+| Maturity | Uses | Accuracy |
+|----------|------|----------|
+| Cold Start | 0 | 10% |
+| Early | 3 | **100%** |
+| Mature | 20 | 100% |
+
+Just 3 uses → 100% accuracy. p=0.005.
 
 <details>
-<summary>Statistical Details</summary>
+<summary>Full 4-Way Comparison (MRR, nDCG@5)</summary>
 
-- Coding (30 scenarios): p=0.001, Cohen's d=7.49
-- Finance (100 scenarios): p<0.001, McNemar χ²=98
-- Learning curve: p=0.005, Cohen's d=13.4
+**200 adversarial tests across 5 maturity levels × 10 scenarios**
+
+| Condition | Top-1 | MRR | nDCG@5 |
+|-----------|-------|-----|--------|
+| RAG Baseline | 10% | 0.550 | 0.668 |
+| Reranker Only | 20% | 0.600 | 0.705 |
+| **Outcomes Only** | **50%** | **0.750** | **0.815** |
+| Full Roampal | 48% | 0.740 | 0.808 |
+
+**Statistical Significance**:
+- Cold→Mature: p=0.005** (highly significant)
+- Full vs RAG (MRR): p=0.015*
+- Full vs Reranker (MRR): p=0.037*
+
+</details>
+
+<details>
+<summary>More benchmarks</summary>
+
+- **Finance** (100 scenarios): 0% → 100%
+- **Token efficiency**: 63% fewer tokens (20 vs 55-93)
+- **Latency**: p95 < 100ms
+- **Infrastructure**: 40/40 tests pass, 1000 concurrent stores
 
 [Full methodology →](docs/BENCHMARKS.md)
 </details>
