@@ -203,7 +203,7 @@ Works with any tool-calling model via Ollama or LM Studio:
 |----------|-------------|
 | [Architecture](docs/architecture.md) | 5-tier memory, knowledge graphs, technical deep-dive |
 | [Benchmarks](docs/BENCHMARKS.md) | Test methodology, statistical significance |
-| [Release Notes](docs/RELEASE_NOTES_0.2.1.md) | Latest: Enhanced retrieval, causal learning |
+| [Release Notes](docs/RELEASE_NOTES_0.2.5.md) | Latest: MCP Client, Thinking Models, Chronological UI |
 
 ---
 

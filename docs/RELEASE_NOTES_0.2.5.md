@@ -204,41 +204,7 @@ Previously, thinking tags would briefly "flash" in the UI during streaming befor
 - Tool execution events still show in real-time
 - Status indicator shows "Thinking..." during reasoning phase
 
-### 8. Real-Time Token Streaming Restored (v0.2.5)
-
-Token streaming has been **restored** after temporarily being replaced with buffered responses.
-
-**The Problem**:
-Buffered response model (waiting for complete response before displaying) caused:
-- 5+ seconds of nothing visible while LLM generated
-- Tool chaining not visible in real-time
-- Poor user experience
-
-**The Fix**:
-- Backend now streams `token` events as LLM generates (agent_chat.py:742-744)
-- Frontend builds `events[]` timeline for chronological rendering
-- Thinking tags still stripped at end (best of both worlds)
-
-**User Experience**:
-```
-Before (buffered):
-[5 seconds of nothing]
-✓ searching "preferences"  · 3 results
-All text appears at once...
-
-After (streaming restored):
-Let me search for that...        ← Text appears immediately
-⋯ searching "preferences"        ← Tool starts mid-stream
-✓ searching "preferences" · 3    ← Tool completes
-Based on the results, you...     ← More text continues
-```
-
-**Technical Details**:
-- Events timeline: `message.events[]` stores `{type, timestamp, data}` for each event
-- Chronological rendering: TerminalMessageThread.tsx renders events in order
-- Backward compatible: Falls back to static order if no events array
-
-### 9. True Chronological Text/Tool Interleaving (v0.2.5)
+### 8. True Chronological Text/Tool Interleaving (v0.2.5)
 
 Text segments now render **around** tool executions in true chronological order.
 
@@ -273,7 +239,7 @@ Based on your past experience with Python...
 **Book Memory Wisdom Applied**:
 > "Event sourcing: event is a self-contained description" - DDIA Ch. 11
 
-### 10. LLM Prompt Improvements (v0.2.5)
+### 9. LLM Prompt Improvements (v0.2.5)
 
 MCP tool descriptions refined for clarity and consistent tool usage.
 

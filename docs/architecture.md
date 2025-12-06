@@ -5651,13 +5651,11 @@ elif in_thinking:
 
 **Impact**: Transparent AI reasoning visible to users in collapsible blocks
 
-#### T2.5: Token Streaming with Timeline Events (v0.2.5 RESTORED)
+#### T2.5: Token Streaming with Timeline Events (v0.2.5)
 
-**Problem (v0.2.5 Initial)**: Buffered response model was introduced to handle thinking tag extraction, but it broke the real-time streaming experience. Users saw 5+ seconds of nothing, then all text at once. Tool chaining wasn't visible.
+**Goal**: Stream tokens in real-time while also supporting thinking tag filtering. Both goals achievable without sacrificing either.
 
-**Solution (v0.2.5 RESTORED)**: Stream tokens in real-time AND strip thinking tags at the end. Both goals are achievable without sacrificing either.
-
-**The Pipeline (Restored):**
+**The Pipeline:**
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ LLM (qwen3, deepseek, etc.)                                             │
@@ -5744,7 +5742,7 @@ Let me search for that...        ← Text appears first
 Based on the results, you...     ← More text after tool
 ```
 
-**Impact**: Real-time streaming restored. Tool chaining visible in order. Thinking tags still stripped cleanly.
+**Impact**: Real-time streaming with tool visibility. Thinking tags stripped cleanly.
 
 #### T3: Tool Execution Status Events
 
