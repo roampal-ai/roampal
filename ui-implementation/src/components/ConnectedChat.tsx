@@ -776,7 +776,30 @@ export const ConnectedChat: React.FC = () => {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        // Try to extract error details from response body
+        // Read body as text first (can only read once), then try to parse as JSON
+        let errorDetail = `HTTP error! status: ${response.status}`;
+        try {
+          const errorText = await response.text();
+          if (errorText) {
+            try {
+              const errorBody = JSON.parse(errorText);
+              if (errorBody.detail) {
+                errorDetail = errorBody.detail;
+              } else if (errorBody.message) {
+                errorDetail = errorBody.message;
+              } else if (errorBody.error) {
+                errorDetail = errorBody.error;
+              }
+            } catch {
+              // Not JSON, use the text directly
+              errorDetail = errorText.slice(0, 200);
+            }
+          }
+        } catch {
+          // Ignore - use default error message
+        }
+        throw new Error(errorDetail);
       }
 
       const reader = response.body?.getReader();
@@ -886,18 +909,30 @@ export const ConnectedChat: React.FC = () => {
       // Check if error was due to abort
       if (error.name === 'AbortError') {
         setInstallProgress(`Download cancelled for ${modelName}`);
+        // Quick close for cancellation
+        setTimeout(() => {
+          setInstallingModelName(null);
+          setInstallingProvider(null);
+          setShowInstallPopup(false);
+          setInstallProgress('');
+          setDownloadDetails({ downloaded: '', total: '', speed: '' });
+          setDownloadAbortController(null);
+        }, 2000);
       } else {
-        setInstallProgress(`Error installing ${modelName}: ${error.message || error}`);
+        // Format error message nicely
+        const errorMsg = error.message || String(error);
+        setInstallProgress(`❌ ${errorMsg}`);
+        setDownloadProgress(0);
+        // Give users 5 seconds to read error messages
+        setTimeout(() => {
+          setInstallingModelName(null);
+          setInstallingProvider(null);
+          setShowInstallPopup(false);
+          setInstallProgress('');
+          setDownloadDetails({ downloaded: '', total: '', speed: '' });
+          setDownloadAbortController(null);
+        }, 5000);
       }
-      setDownloadProgress(0);
-      setTimeout(() => {
-        setInstallingModelName(null);
-        setInstallingProvider(null);
-        setShowInstallPopup(false);
-        setInstallProgress('');
-        setDownloadDetails({ downloaded: '', total: '', speed: '' });
-        setDownloadAbortController(null);
-      }, 3000);
     }
   };
   
@@ -1000,11 +1035,17 @@ export const ConnectedChat: React.FC = () => {
     }
   };
   
-  // Model token limits for agent mode capability (October 2025)
+  // Model token limits for agent mode capability (December 2025)
   const MODEL_TOKEN_LIMITS: Record<string, number> = {
     // AGENT-CAPABLE (12K+ context)
     'gpt-oss:120b': 128000,
     'gpt-oss:20b': 128000,
+    // Llama 4 - Massive context windows
+    'llama4:scout': 10000000,  // 10M context
+    'llama4:maverick': 1000000,  // 1M context
+    // Qwen3 Series
+    'qwen3:32b': 32768,
+    'qwen3-coder:30b': 262144,  // 256K context
     'llama3.2:8b': 131072,
     'llama3.2:3b': 131072,
     'llama3.2:1b': 131072,
@@ -1015,7 +1056,6 @@ export const ConnectedChat: React.FC = () => {
     'gemma3:12b': 128000,
     'gemma3:4b': 128000,
     'qwen3:235b': 262144,  // MoE with 256K context
-    'qwen3:32b': 40960,
     'qwen3:14b': 40960,
     'qwen3:8b': 40960,
     'qwen3:4b': 262144,  // 256K context
@@ -1025,7 +1065,7 @@ export const ConnectedChat: React.FC = () => {
     'mistral:7b': 32768,
   };
 
-  // Models categorized by capability (Updated October 2025 - Tool Capable Only)
+  // Models categorized by capability (Updated December 2025 - Tool Capable Only)
   const curatedModels = [
     // Recommended for Chat + Memory - Models with verified tool calling support
     {
@@ -1033,16 +1073,24 @@ export const ConnectedChat: React.FC = () => {
       description: 'Models with native tool calling support for Roampal\'s memory system',
       icon: 'sparkles',
       models: [
-        // OpenAI Open Source (NEW)
+        // OpenAI Open Source
         { name: 'gpt-oss:120b', description: 'OpenAI\'s flagship open model - Native tools', size: '80GB', tokens: 128000, agentCapable: true, license: 'Apache 2.0', badge: 'top' },
         { name: 'gpt-oss:20b', description: 'OpenAI\'s efficient model - Excellent tools', size: '16GB', tokens: 128000, agentCapable: true, license: 'Apache 2.0', badge: 'recommended' },
 
-        // Meta Llama Series (Tool Support)
+        // Meta Llama 4 Series - MoE with massive context
+        { name: 'llama4:scout', description: 'MoE 109B - 10M context, native tools', size: '65GB', tokens: 10000000, agentCapable: true, license: 'Meta License', badge: 'top' },
+        { name: 'llama4:maverick', description: 'MoE 401B - 128 experts, 1M context', size: '243GB', tokens: 1000000, agentCapable: true, license: 'Meta License' },
+
+        // Meta Llama 3 Series (Tool Support)
         { name: 'llama3.3:70b', description: 'Meta\'s latest 70B - Native tools, 128K context', size: '43GB', tokens: 131072, agentCapable: true, license: 'Meta License' },
 
-        // Qwen Series (Best Tool Support)
+        // Qwen3 Series (Native Hermes tools)
+        { name: 'qwen3:32b', description: 'Alibaba flagship - Native Hermes tools', size: '20GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0', badge: 'recommended' },
+        { name: 'qwen3-coder:30b', description: 'MoE 30B - 256K context, tool calling', size: '18GB', tokens: 262144, agentCapable: true, license: 'Apache 2.0', badge: 'recommended' },
+
+        // Qwen 2.5 Series (Best Tool Support)
         { name: 'qwen2.5:72b', description: 'Massive Qwen - Superior tool calling', size: '41GB', tokens: 32768, agentCapable: true, license: 'Qwen License' },
-        { name: 'qwen2.5:32b', description: 'Powerful Qwen - Excellent tools', size: '20GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0', badge: 'recommended' },
+        { name: 'qwen2.5:32b', description: 'Powerful Qwen - Excellent tools', size: '20GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
         { name: 'qwen2.5:14b', description: 'Larger Qwen - Great tool performance', size: '9.0GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
         { name: 'qwen2.5:7b', description: 'Best-in-class tool calling', size: '4.7GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0', badge: 'recommended' },
 
@@ -1089,10 +1137,18 @@ export const ConnectedChat: React.FC = () => {
       'gpt-oss:120b': '80GB • OpenAI flagship open model • Native tools',
       'gpt-oss:20b': '16GB • OpenAI efficient model • Excellent tools',
 
+      // Llama 4 Series - MoE with massive context
+      'llama4:scout': '65GB • MoE 109B • 10M context • Native tools',
+      'llama4:maverick': '243GB • MoE 401B • 128 experts • 1M context',
+
       // Llama 3 Series (Tool Support)
       'llama3.3:70b': '43GB • Meta latest 70B • Native tools',
       'llama3.1:8b': '4.7GB ⚠️ Unreliable tools • Use qwen2.5:7b',
       'llama3.2:3b': '2.0GB ⚠️ May hallucinate tool calls',
+
+      // Qwen3 Series (Native Hermes tools)
+      'qwen3:32b': '20GB • Alibaba flagship • Native tools',
+      'qwen3-coder:30b': '18GB • MoE 30B • 256K context • Tool calling',
 
       // Qwen 2.5 Series (Best Tool Support)
       'qwen2.5:72b': '41GB • Massive Qwen • Superior tools',
@@ -2561,7 +2617,10 @@ export const ConnectedChat: React.FC = () => {
                                       // Check if model has quantization options (in our registry)
                                       const hasQuantOptions = [
                                         'qwen2.5:7b', 'qwen2.5:14b', 'qwen2.5:32b', 'qwen2.5:72b', 'qwen2.5:3b',
-                                        'llama3.2:3b', 'llama3.1:8b', 'llama3.3:70b', 'mixtral:8x7b'
+                                        'llama3.2:3b', 'llama3.1:8b', 'llama3.3:70b', 'mixtral:8x7b',
+                                        'gpt-oss:20b', 'gpt-oss:120b',
+                                        'llama4:scout', 'llama4:maverick',
+                                        'qwen3:32b', 'qwen3-coder:30b'
                                       ].includes(model.name);
                                       if (hasQuantOptions) {
                                         openQuantSelector(model.name);
@@ -2695,7 +2754,10 @@ export const ConnectedChat: React.FC = () => {
                                       // Check if model has quantization options (in our registry)
                                       const hasQuantOptions = [
                                         'qwen2.5:7b', 'qwen2.5:14b', 'qwen2.5:32b', 'qwen2.5:72b', 'qwen2.5:3b',
-                                        'llama3.2:3b', 'llama3.1:8b', 'llama3.3:70b', 'mixtral:8x7b'
+                                        'llama3.2:3b', 'llama3.1:8b', 'llama3.3:70b', 'mixtral:8x7b',
+                                        'gpt-oss:20b', 'gpt-oss:120b',
+                                        'llama4:scout', 'llama4:maverick',
+                                        'qwen3:32b', 'qwen3-coder:30b'
                                       ].includes(model.name);
                                       if (hasQuantOptions) {
                                         openQuantSelector(model.name);

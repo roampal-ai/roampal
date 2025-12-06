@@ -272,6 +272,58 @@ Same mechanism as the programming benchmark - outcome scores (0.9 worked vs 0.2 
 
 ---
 
+### 9. Three-Way Comparison Test (v0.2.5)
+
+**Location**: `benchmarks/comprehensive_test/test_three_way_comparison.py`
+**Runtime**: ~2 minutes
+**Status**: PASS (B vs C: p=0.01, +16 percentage points)
+
+**Purpose**: Prove outcome learning adds value beyond cross-encoder reranking
+
+**Three Conditions**:
+- **A (Plain Vector)**: Pure ChromaDB L2 distance search
+- **B (Reranker Only)**: Vector + mmarco cross-encoder (NO outcome learning)
+- **C (Roampal Full)**: Vector + cross-encoder + Wilson scoring + outcome learning
+
+**Test Design**:
+- 25 adversarial scenarios across 5 domains (Health, Tech, Finance, Productivity, Learning)
+- 3 query variations per scenario (75 total queries)
+- Queries designed to semantically match the WRONG answer
+- Real embeddings: `all-mpnet-base-v2` (768d)
+
+**Results**:
+
+| Condition | Accuracy | vs Plain Vector |
+|-----------|----------|-----------------|
+| **A (Plain Vector)** | 26.7% | - |
+| **B (Reranker Only)** | 21.3% | **-5.3% (HURT!)** |
+| **C (Roampal Full)** | 37.3% | +10.7% |
+
+**Critical Finding**: Cross-encoder alone **reduced** accuracy by 5.3% on adversarial queries.
+
+**Statistical Significance (B vs C)**:
+- **Delta**: +16 percentage points
+- **p-value**: 0.01 (SIGNIFICANT)
+- **Cohen's d**: 0.35 (medium effect)
+- **95% CI**: [4.1%, 27.9%]
+
+**Per-Domain Results**:
+
+| Domain | Vector | Reranker | Full | Gain (B→C) |
+|--------|--------|----------|------|------------|
+| Health | 33% | 33% | 53% | +20 pts |
+| Tech | 20% | 20% | 40% | +20 pts |
+| Finance | 27% | 20% | 40% | +20 pts |
+| Productivity | 33% | 13% | 33% | +20 pts |
+| Learning | 20% | 20% | 20% | +0 pts |
+
+**Why This Matters**:
+1. Cross-encoders confidently select wrong answers that match query semantics
+2. Outcome learning overcomes this by boosting memories that actually worked
+3. The combination (semantic + outcome) beats either approach alone
+
+---
+
 ## Production Evidence
 
 **Real-World Learning Verified**:

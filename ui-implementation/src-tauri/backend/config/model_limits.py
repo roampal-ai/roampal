@@ -24,12 +24,14 @@ _model_cache = {}
 _cache_lock = threading.Lock()
 
 # Model configurations: (max_tokens, safe_char_limit, per_tool_limit, base_iterations)
-# Updated Sept 2025 with latest models
+# Updated Dec 2025 with latest models from registry
 MODEL_CONFIGURATIONS = {
     # Small models (4K-8K context)
     "codellama:7b": (4096, 8000, 1500, 4),
     "qwen3:4b": (8192, 10000, 2000, 5),
     "qwen3:8b": (8192, 10000, 2000, 5),
+    "qwen2.5:3b": (8192, 10000, 2000, 5),  # Small Qwen 2.5
+    "llama3.2:3b": (8192, 10000, 2000, 5),  # Small Llama 3.2
     "mistral:7b-instruct-v0.3": (8192, 10000, 2000, 5),
 
     # Medium models (16K-32K context)
@@ -44,6 +46,7 @@ MODEL_CONFIGURATIONS = {
     "qwen2.5:14b": (32768, 80000, 8000, 7),
     "qwen2.5:32b": (32768, 80000, 8000, 7),
     "qwen2.5-coder:32b": (32768, 80000, 8000, 7),
+    "mixtral:8x7b": (32768, 80000, 8000, 8),  # MoE - slightly more iterations
     "mistral:7b": (32768, 80000, 8000, 7),
     "gemma3:1b": (32768, 80000, 8000, 5),  # Text-only, limited capability
 
@@ -55,7 +58,20 @@ MODEL_CONFIGURATIONS = {
     "llama3.3:70b": (131072, 320000, 32000, 10),
     "llama3.1:8b": (131072, 320000, 32000, 10),
     "llama3.1:70b": (131072, 320000, 32000, 10),
+    "llama3.2:8b": (131072, 320000, 32000, 8),  # Llama 3.2 medium
+    "qwen2.5:72b": (131072, 320000, 32000, 10),  # Large Qwen 2.5
     "phi3:3.8b": (128000, 300000, 30000, 6),  # Large context but limited reasoning
+    "gpt-oss:20b": (128000, 300000, 30000, 10),  # OpenAI OSS efficient model
+
+    # Extra Large models (256K+ context)
+    "qwen3-coder:30b": (262144, 600000, 60000, 10),  # MoE 30B, 256K context, 3.3B active
+
+    # Massive models (1M+ context)
+    "llama4:maverick": (1048576, 2500000, 250000, 12),  # MoE 401B, 128 experts, 1M context
+    "gpt-oss:120b": (131072, 320000, 32000, 12),  # OpenAI OSS flagship
+
+    # Ultra context models (10M+)
+    "llama4:scout": (10485760, 25000000, 2500000, 12),  # MoE 109B, 10M context
 
     # Reference models (not in Ollama)
     "claude-3-opus": (200000, 500000, 50000, 12),  # Reference only
@@ -218,7 +234,7 @@ def get_model_config(model_name: str) -> Tuple[int, int, int, int]:
         config = MODEL_CONFIGURATIONS["llama3.1:70b"]
     elif "34b" in model_lower or "30b" in model_lower:
         # Medium-large model
-        config = MODEL_CONFIGURATIONS["yi:34b"]
+        config = MODEL_CONFIGURATIONS["qwen3:32b"]
     elif "13b" in model_lower or "14b" in model_lower:
         # Medium model
         config = MODEL_CONFIGURATIONS["codellama:13b"]

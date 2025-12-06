@@ -1,32 +1,26 @@
 import React, { useRef, useEffect, useMemo, useState } from 'react';
-import { Terminal, CheckCircle, XCircle, AlertCircle, Loader2, Brain, Search, Wrench, MessageSquare, CheckCircle2, ChevronDown, ChevronRight, BookOpen, Sparkles, Database } from 'lucide-react';
+import { Terminal, CheckCircle, XCircle, AlertCircle, Loader2, Search, Wrench, MessageSquare, CheckCircle2, ChevronDown, ChevronRight, BookOpen, Database } from 'lucide-react';
 import { MemoryCitation } from './MemoryCitation';
 import { CodeChangePreview } from './CodeChangePreview';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 
-// Thinking Block Component - Terminal-style (inline, matches CitationsBlock)
-const ThinkingBlock: React.FC<{ thinking: string }> = ({ thinking }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const lineCount = thinking.split('\n').length;
+// Animated Thinking Dots Component - cycles through "Thinking." -> "Thinking.." -> "Thinking..."
+const ThinkingDots: React.FC = () => {
+  const [dots, setDots] = useState(1);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDots(d => d >= 3 ? 1 : d + 1);
+    }, 400);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
-    <div className="mb-3 font-mono">
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-400 transition-colors"
-      >
-        <span className="text-zinc-600">{isExpanded ? '▼' : '▶'}</span>
-        <span className="text-zinc-500">reasoning ({lineCount} {lineCount === 1 ? 'line' : 'lines'})</span>
-      </button>
-
-      {isExpanded && (
-        <div className="mt-2 pl-4 border-l border-zinc-800/50 text-xs text-zinc-500 leading-relaxed whitespace-pre-wrap">
-          {thinking}
-        </div>
-      )}
-    </div>
+    <span className="text-blue-400 font-mono">
+      Thinking{'.'.repeat(dots)}
+    </span>
   );
 };
 
@@ -43,8 +37,8 @@ const CitationsBlock: React.FC<{ citations: any[] }> = ({ citations }) => {
   };
 
   return (
-    <div className="mt-2 pt-2 border-t border-zinc-800/30 font-mono flex justify-end">
-      <div className="text-right">
+    <div className="mt-2 pt-2 border-t border-zinc-800/30 font-mono">
+      <div>
         <button
           onClick={() => setIsExpanded(!isExpanded)}
           className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-400 transition-colors"
@@ -101,13 +95,17 @@ interface Message {
     description: string;
     detail?: string;
     metadata?: Record<string, any>;
+    resultCount?: number;
+    arguments?: Record<string, any>;
+    resultPreview?: string;
   }>;
   code_changes?: any[]; // For future code change previews
   events?: Array<{
-    type: 'thinking' | 'tool_execution' | 'text';
+    type: 'thinking' | 'tool_execution' | 'text' | 'text_segment';
     timestamp: number;
     data: any;
   }>; // Chronological event timeline
+  _lastTextEndIndex?: number; // v0.2.5: Internal tracking for text segment boundaries
 }
 
 interface TerminalMessageThreadProps {
@@ -135,126 +133,10 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // Memoize processing message to prevent recalculation
+  // v0.2.5: Only show real status from backend, no fallback "Thinking..." text
   const getProcessingMessage = useMemo(() => () => {
-    // Always return a message, even if processingStatus is null or empty string
-    if (processingStatus && processingStatus.trim()) {
-      return processingStatus;
-    }
-
-    // Find the last user message
-    const lastUserMessage = messages.filter(m => m.sender === 'user').pop();
-    if (!lastUserMessage) return 'Processing...';
-
-    const text = lastUserMessage.content.toLowerCase();
-
-    // Analyze intent and return appropriate message
-    if (text.includes('find') || text.includes('search') || text.includes('look for') || text.includes('where')) {
-      if (text.includes('file')) return 'Finding files...';
-      if (text.includes('function') || text.includes('method')) return 'Searching for functions...';
-      if (text.includes('error') || text.includes('bug')) return 'Searching for errors...';
-      return 'Searching...';
-    }
-
-    if (text.includes('edit') || text.includes('change') || text.includes('modify') || text.includes('update')) {
-      if (text.includes('code')) return 'Editing code...';
-      if (text.includes('file')) return 'Modifying file...';
-      return 'Making changes...';
-    }
-
-    if (text.includes('create') || text.includes('make') || text.includes('new') || text.includes('add')) {
-      if (text.includes('file')) return 'Creating file...';
-      if (text.includes('function')) return 'Creating function...';
-      if (text.includes('component')) return 'Creating component...';
-      return 'Creating...';
-    }
-
-    if (text.includes('fix') || text.includes('repair') || text.includes('solve')) {
-      return 'Fixing issue...';
-    }
-
-    if (text.includes('delete') || text.includes('remove')) {
-      return 'Removing...';
-    }
-
-    if (text.includes('run') || text.includes('execute')) {
-      if (text.includes('test')) return 'Running tests...';
-      if (text.includes('build')) return 'Building...';
-      return 'Executing...';
-    }
-
-    if (text.includes('explain') || text.includes('what') || text.includes('how')) {
-      return 'Analyzing...';
-    }
-
-    if (text.includes('list') || text.includes('show')) {
-      return 'Gathering information...';
-    }
-
-    if (text.includes('install')) {
-      return 'Installing...';
-    }
-
-    if (text.includes('debug')) {
-      return 'Debugging...';
-    }
-
-    if (text.includes('refactor')) {
-      return 'Refactoring code...';
-    }
-
-    if (text.includes('optimize') || text.includes('improve')) {
-      return 'Optimizing...';
-    }
-
-    if (text.includes('test') && !text.includes('run')) {
-      if (text.includes('write')) return 'Writing tests...';
-      return 'Testing...';
-    }
-
-    if (text.includes('review') || text.includes('check')) {
-      return 'Reviewing...';
-    }
-
-    if (text.includes('analyze') || text.includes('understand')) {
-      return 'Analyzing code...';
-    }
-
-    if (text.includes('document')) {
-      return 'Documenting...';
-    }
-
-    if (text.includes('connect') || text.includes('integrate')) {
-      return 'Connecting...';
-    }
-
-    if (text.includes('deploy') || text.includes('publish')) {
-      return 'Deploying...';
-    }
-
-    if (text.includes('configure') || text.includes('setup')) {
-      return 'Configuring...';
-    }
-
-    if (text.includes('import') || text.includes('export')) {
-      return 'Processing data...';
-    }
-
-    if (text.includes('compile') || text.includes('transpile')) {
-      return 'Compiling...';
-    }
-
-    if (text.includes('validate')) {
-      return 'Validating...';
-    }
-
-    if (text.includes('migrate')) {
-      return 'Migrating...';
-    }
-
-    // Default fallback
-    return 'Processing...';
-  }, [messages, processingStatus, processingStage]);
+    return processingStatus?.trim() || '';
+  }, [processingStatus]);
 
   // Only scroll when messages length changes (new message added)
   const prevMessageCount = useRef(messages.length);
@@ -291,6 +173,16 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
   };
 
   const renderContent = (content: string) => {
+    // v0.2.5: Strip thinking tags as safety net (backend should already strip, but defense-in-depth)
+    // FIX: Strip entire thinking BLOCK, not just tags
+    const stripThinkingTags = (text: string) => {
+      // First: Strip complete thinking blocks (closed tags)
+      let cleaned = text.replace(/<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi, '');
+      // Second: Strip unclosed thinking blocks (to end of text or double newline)
+      cleaned = cleaned.replace(/<think(?:ing)?>([\s\S]*?)(?=\n\n|$)/gi, '');
+      return cleaned.trim();
+    };
+
     // Custom callout syntax parser (:::success, :::warning, :::info)
     const processCallouts = (text: string) => {
       return text.replace(/:::(\w+)\n([\s\S]*?):::/g, (_, type, content) => {
@@ -298,7 +190,7 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
       });
     };
 
-    const processedContent = processCallouts(content);
+    const processedContent = processCallouts(stripThinkingTags(content));
 
     return (
       <div className="markdown-content">
@@ -371,6 +263,38 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
 
           // Paragraphs
           p: ({node, ...props}) => <p className="text-zinc-300 text-sm my-1 whitespace-pre-wrap" {...props} />,
+
+          // Tables (v0.2.4)
+          table: ({node, ...props}) => (
+            <div className="my-3 overflow-x-auto">
+              <table className="min-w-full text-sm border-collapse" {...props} />
+            </div>
+          ),
+          thead: ({node, ...props}) => <thead className="border-b border-zinc-700" {...props} />,
+          tbody: ({node, ...props}) => <tbody className="divide-y divide-zinc-800/50" {...props} />,
+          tr: ({node, ...props}) => <tr className="hover:bg-zinc-900/30" {...props} />,
+          th: ({node, ...props}) => (
+            <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider" {...props} />
+          ),
+          td: ({node, ...props}) => (
+            <td className="px-3 py-2 text-zinc-300" {...props} />
+          ),
+
+          // Links (v0.2.4)
+          a: ({node, href, ...props}) => (
+            <a
+              href={href}
+              className="text-blue-400 hover:text-blue-300 underline underline-offset-2"
+              target="_blank"
+              rel="noopener noreferrer"
+              {...props}
+            />
+          ),
+
+          // Horizontal rule (v0.2.4)
+          hr: ({node, ...props}) => (
+            <hr className="my-4 border-t border-zinc-800" {...props} />
+          ),
         }}
       >
         {processedContent}
@@ -419,30 +343,69 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
                   {/* Render events in chronological order if timeline exists */}
                   {message.events && message.events.length > 0 ? (
                     <>
-                      {message.events.map((event, idx) => {
-                        if (event.type === 'tool_execution') {
-                          const tool = event.data;
-                          const isRunning = tool.status === 'running';
-                          const resultCount = tool.metadata?.result_count || tool.metadata?.fragmentCount;
-                          return (
-                            <div key={idx} className="text-xs font-mono mb-3">
-                              <div className={`text-zinc-500 ${isRunning ? 'animate-pulse-subtle' : ''}`}>
-                                {isRunning ? '⋯ ' : '✓ '}
-                                {tool.description || (tool.tool === 'search_memory' ? 'Searching memory' : tool.tool)}
-                                {!isRunning && resultCount !== undefined ? ` · ${resultCount} results` : ''}
-                              </div>
-                            </div>
-                          );
-                        } else if (event.type === 'text' && event.data.firstChunk && message.content) {
-                          // Text started - render the actual content here in timeline
-                          return (
-                            <div key={idx} className="text-zinc-100 text-sm leading-relaxed mb-6">
-                              {renderContent(message.content)}
-                            </div>
-                          );
+                      {/* v0.2.5: Check if we have text_segment events for true interleaving */}
+                      {(() => {
+                        const hasTextSegments = message.events.some((e: any) => e.type === 'text_segment');
+                        const hasTools = message.events.some((e: any) => e.type === 'tool_execution');
+
+                        // Calculate live streaming text (after last segment boundary)
+                        let liveStreamingText = '';
+                        if (message.streaming && hasTools && message.content) {
+                          const lastEndIndex = message._lastTextEndIndex || 0;
+                          liveStreamingText = message.content.slice(lastEndIndex);
                         }
-                        return null;
-                      })}
+
+                        return (
+                          <>
+                            {message.events.map((event: any, idx: number) => {
+                              if (event.type === 'tool_execution') {
+                                const tool = event.data;
+                                // v0.2.5: If message is no longer streaming, tool must be completed
+                                const isRunning = message.streaming && tool.status === 'running';
+                                const resultCount = tool.metadata?.result_count || tool.metadata?.fragmentCount;
+                                return (
+                                  <div key={idx} className="text-xs font-mono mb-3">
+                                    <div className={`text-zinc-500 ${isRunning ? 'animate-pulse-subtle' : ''}`}>
+                                      {isRunning ? '⋯ ' : '✓ '}
+                                      {tool.description || (tool.tool === 'search_memory' ? 'Searching memory' : tool.tool)}
+                                      {!isRunning && resultCount !== undefined && (
+                                        <>
+                                          {` · ${resultCount} results`}
+                                          {tool.resultPreview && (
+                                            <span className="text-zinc-600"> · {tool.resultPreview}</span>
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              } else if (event.type === 'text_segment') {
+                                // v0.2.5: Render this specific text segment (true chronological interleaving)
+                                return (
+                                  <div key={idx} className="text-zinc-100 text-sm leading-relaxed mb-2">
+                                    {renderContent(event.data.content)}
+                                  </div>
+                                );
+                              } else if (event.type === 'text' && event.data.firstChunk && message.content && !hasTextSegments && !hasTools) {
+                                // DEPRECATED: Fallback for old messages without text_segment events AND no tools
+                                // Only render full content if no segments exist (backwards compat)
+                                return (
+                                  <div key={idx} className="text-zinc-100 text-sm leading-relaxed mb-6">
+                                    {renderContent(message.content)}
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })}
+                            {/* v0.2.5: Show live streaming text (accumulating after last tool) */}
+                            {liveStreamingText && (
+                              <div className="text-zinc-100 text-sm leading-relaxed mb-2">
+                                {renderContent(liveStreamingText)}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </>
                   ) : (
                     /* Fallback to old static order if no timeline */
@@ -451,22 +414,39 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
                       {message.toolExecutions && message.toolExecutions.length > 0 && (
                         <div className="text-xs font-mono mb-3">
                           {message.toolExecutions.map((tool, idx) => {
-                            const isRunning = tool.status === 'running';
-                            const resultCount = tool.metadata?.result_count || tool.metadata?.fragmentCount;
+                            // v0.2.5: If message is no longer streaming, tool must be completed
+                            const isRunning = message.streaming && tool.status === 'running';
+                            // v0.2.4: Fix - store saves resultCount directly, not in metadata
+                            const resultCount = tool.resultCount ?? tool.metadata?.result_count ?? tool.metadata?.fragmentCount;
+                            const query = tool.arguments?.query || tool.metadata?.query;
+
+                            // Build description with query if available (v0.2.4)
+                            let description = tool.description;
+                            if (!description) {
+                              if (tool.tool === 'search_memory' && query) {
+                                description = `searching "${query.length > 40 ? query.substring(0, 40) + '...' : query}"`;
+                              } else {
+                                description = tool.tool;
+                              }
+                            }
 
                             return (
                               <div key={idx} className={`text-zinc-500 ${isRunning ? 'animate-pulse-subtle' : ''}`}>
                                 {isRunning ? '⋯ ' : '✓ '}
-                                {tool.description || (tool.tool === 'search_memory' ? 'Searching memory' : tool.tool)}
-                                {!isRunning && resultCount !== undefined ? ` · ${resultCount} results` : ''}
+                                {description}
+                                {!isRunning && resultCount !== undefined && (
+                                  <>
+                                    {` · ${resultCount} results`}
+                                    {tool.resultPreview && (
+                                      <span className="text-zinc-600"> · {tool.resultPreview}</span>
+                                    )}
+                                  </>
+                                )}
                               </div>
                             );
                           })}
                         </div>
                       )}
-
-                      {/* 1.5. THINKING BLOCK - LLM reasoning */}
-                      {message.thinking && <ThinkingBlock thinking={message.thinking} />}
 
                       {/* 2. RESPONSE CONTENT */}
                       {message.content && (
@@ -517,28 +497,26 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
           </div>
         ))}
 
-        {/* Global processing indicator - only show when no assistant message is currently streaming */}
-        {((isProcessing || processingStatus) && !messages.some(m => m.sender === 'assistant' && m.streaming)) && (
+        {/* Global processing indicator - "Thinking..." while processing */}
+        {/* Hide when tools are actively running (those show inline ⋯ indicators) */}
+        {(() => {
+          // Check if any tool is currently running in any message
+          const hasRunningTool = messages.some(msg =>
+            msg.toolExecutions?.some(tool => tool.status === 'running') ||
+            msg.events?.some(e => e.type === 'tool_execution' && e.data?.status === 'running')
+          );
+
+          // Only show "Thinking..." if processing AND no tools are running
+          return isProcessing && !hasRunningTool && (
             <div className="flex items-start gap-3">
               <div className="flex-1">
                 <div className="text-sm text-zinc-500 flex items-center gap-2">
-                  {(() => {
-                    const msg = getProcessingMessage();
-                    if (msg.includes('Searching') || msg.includes('Finding')) {
-                      return <Search className="w-4 h-4 animate-pulse" />;
-                    } else if (msg.includes('Analyzing') || msg.includes('Thinking')) {
-                      return <Sparkles className="w-4 h-4 animate-pulse" />;
-                    } else if (msg.includes('documentation')) {
-                      return <BookOpen className="w-4 h-4 animate-pulse" />;
-                    } else {
-                      return <Loader2 className="w-4 h-4 animate-spin" />;
-                    }
-                  })()}
-                  <span>{getProcessingMessage()}</span>
+                  <ThinkingDots />
                 </div>
               </div>
             </div>
-        )}
+          );
+        })()}
       </div>
 
       <div ref={messagesEndRef} />

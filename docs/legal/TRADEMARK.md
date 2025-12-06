@@ -64,10 +64,10 @@ If you're unsure whether your use of the "Roampal" name is appropriate, please r
 
 ## License Compatibility
 
-These trademark guidelines do NOT restrict your rights under the MIT License to use, modify, and distribute the software. They only govern the use of the "Roampal" trademark itself.
+These trademark guidelines do NOT restrict your rights under the Apache 2.0 License to use, modify, and distribute the software. They only govern the use of the "Roampal" trademark itself.
 
 You may:
-- Use all the code freely under MIT License
+- Use all the code freely under Apache 2.0 License
 - Create any modifications you want
 - Distribute commercially
 - Use in proprietary products

@@ -24,6 +24,8 @@ MODEL_CONTEXTS = {
     "llama3.2": {"default": 32768, "max": 131072},
     "llama3.3": {"default": 32768, "max": 131072},
     "llama3": {"default": 32768, "max": 131072},  # Generic llama3
+    "qwen3-coder": {"default": 32768, "max": 262144},  # MoE 30B, 256K context
+    "qwen3": {"default": 32768, "max": 32768},  # Qwen3 models
     "qwen2.5": {"default": 32768, "max": 32768},
     "qwen2": {"default": 32768, "max": 32768},
     "qwen": {"default": 32768, "max": 32768},

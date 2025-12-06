@@ -78,5 +78,5 @@ Notes
 
 Open Source
 -----------
-Roampal is open source (MIT License).
-Source code: https://github.com/[your-repo]/roampal
+Roampal is open source (Apache 2.0 License).
+Source code: https://github.com/roampal-ai/roampal

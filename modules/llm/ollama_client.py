@@ -417,8 +417,8 @@ class OllamaClient(LLMClientInterface):
 
         import re
 
-        # Strip thinking blocks ONLY for JSON responses (outcome detection, routing, etc.)
-        # For chat responses, agent_chat.py extracts thinking for UI display
+        # Strip thinking blocks for JSON responses (outcome detection, routing, etc.)
+        # For chat responses, thinking tags pass through unfiltered
         if strip_thinking:
             text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
 

@@ -3,6 +3,7 @@ import { DataManagementModal } from './DataManagementModal';
 import { MemoryBankModal } from './MemoryBankModal';
 import { ModelContextSettings } from './ModelContextSettings';
 import { IntegrationsPanel } from './IntegrationsPanel';
+import { MCPServersPanel } from './MCPServersPanel';
 import { apiFetch } from '../utils/fetch';
 import { ROAMPAL_CONFIG } from '../config/roampal';
 
@@ -17,7 +18,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
   const [showMemoryBankModal, setShowMemoryBankModal] = useState(false);
   const [showModelContextSettings, setShowModelContextSettings] = useState(false);
   const [showIntegrationsPanel, setShowIntegrationsPanel] = useState(false);
+  const [showMCPServersPanel, setShowMCPServersPanel] = useState(false);
   const [currentModel, setCurrentModel] = useState<string>('');
+  const [currentProvider, setCurrentProvider] = useState<string>('');
   const [providers, setProviders] = useState<any[]>([]);
 
   // Open Integrations tab if specified by initialTab
@@ -34,7 +37,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
         const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/current`);
         if (response.ok) {
           const data = await response.json();
-          setCurrentModel(data.model || '');
+          setCurrentModel(data.current_model || data.model || '');
+          setCurrentProvider(data.provider || '');
         }
       } catch (error) {
         console.error('Failed to fetch current model:', error);
@@ -73,6 +77,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
 
   const handleIntegrationsClick = () => {
     setShowIntegrationsPanel(true);
+  };
+
+  const handleMCPServersClick = () => {
+    setShowMCPServersPanel(true);
   };
 
   if (!isOpen) return null;
@@ -168,6 +176,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
               </button>
             </div>
 
+            {/* MCP Tool Servers */}
+            <div className="space-y-2">
+              <button
+                onClick={handleMCPServersClick}
+                className="w-full flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors text-left"
+              >
+                <svg className="w-5 h-5 flex-shrink-0 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+                </svg>
+                <span className="flex-1 truncate">MCP Tool Servers</span>
+              </button>
+            </div>
+
             {/* Other Settings */}
             <div className="space-y-2">
               <button
@@ -215,12 +236,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
         isOpen={showModelContextSettings}
         onClose={() => setShowModelContextSettings(false)}
         currentModel={currentModel}
+        currentProvider={currentProvider}
       />
 
       {/* Integrations Panel */}
       <IntegrationsPanel
         isOpen={showIntegrationsPanel}
         onClose={() => setShowIntegrationsPanel(false)}
+      />
+
+      {/* MCP Servers Panel */}
+      <MCPServersPanel
+        isOpen={showMCPServersPanel}
+        onClose={() => setShowMCPServersPanel(false)}
       />
     </>
   );

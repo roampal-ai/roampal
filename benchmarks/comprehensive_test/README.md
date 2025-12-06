@@ -200,6 +200,69 @@ python test_learning_speed.py
 - Context specialization: 100%
 - Learning efficiency: 100%
 
+### 13. Comprehensive 4-Way Benchmark (200 tests, ~5 min)
+**Purpose**: Definitive comparison of RAG vs Reranker vs Outcomes vs Full Roampal
+
+```bash
+cd benchmarks/comprehensive_test
+python test_comprehensive_benchmark.py
+```
+
+**Design**: 4 conditions × 5 maturity levels × 10 adversarial scenarios = 200 tests
+
+**Conditions**:
+- RAG Baseline: Pure ChromaDB L2 distance
+- Reranker Only: Vector + ms-marco cross-encoder (no outcomes)
+- Outcomes Only: Vector + Wilson scoring (no reranker)
+- Full Roampal: Vector + reranker + Wilson scoring
+
+**Metrics**: Top-1 Accuracy, MRR, nDCG@5, Token Efficiency
+
+**Results**:
+| Condition | Top-1 | MRR | nDCG@5 |
+|-----------|-------|-----|--------|
+| RAG Baseline | 10% | 0.550 | 0.668 |
+| Reranker Only | 20% | 0.600 | 0.705 |
+| Outcomes Only | 50% | 0.750 | 0.815 |
+| Full Roampal | 48% | 0.740 | 0.808 |
+
+**Learning Curve** (Full Roampal):
+| Maturity | Uses | Top-1 | MRR |
+|----------|------|-------|-----|
+| Cold Start | 0 | 0% | 0.500 |
+| Early | 3 | 60% | 0.800 |
+| Mature | 20 | 60% | 0.800 |
+
+**Key Finding**: Outcome learning (+50 pts) dominates reranker (+10 pts) by 5×
+
+**Statistical Significance**:
+- Cold→Mature: p=0.0051** (highly significant)
+- Full vs RAG (MRR): p=0.0150*
+- Full vs Reranker (MRR): p=0.0368*
+
+### 14. Learning Curve Test (50 tests, ~2 min)
+**Purpose**: Prove outcome history improves adversarial resistance
+
+```bash
+cd benchmarks/comprehensive_test
+python test_learning_curve.py
+```
+
+**Design**: 10 scenarios × 5 maturity levels (cold_start → mature)
+
+**Results**:
+| Maturity | Uses | Accuracy |
+|----------|------|----------|
+| Cold Start | 0 | 10% |
+| Early | 3 | 100% |
+| Established | 5 | 100% |
+| Proven | 10 | 100% |
+| Mature | 20 | 100% |
+
+**Improvement**: +90 percentage points (10% → 100%)
+
+**Key Finding**: Just 3 uses is enough for 100% accuracy on adversarial queries
+
 ## What Gets Tested
 
 ### Core Infrastructure

@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { VariableSizeList as List } from 'react-window';
 import {
   TrashIcon,
   ArchiveBoxIcon,
@@ -34,6 +35,10 @@ interface MemoryBankModalProps {
   onClose: () => void;
 }
 
+// Fixed height for virtualized list items (approximate)
+const ITEM_HEIGHT = 120;
+const ITEM_WITH_TAGS_HEIGHT = 148;
+
 export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClose }) => {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [archivedMemories, setArchivedMemories] = useState<Memory[]>([]);
@@ -43,6 +48,28 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+
+  // Virtualization refs
+  const listRef = useRef<List>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerHeight, setContainerHeight] = useState(400);
+
+  // Measure container height on mount and resize
+  useEffect(() => {
+    const updateHeight = () => {
+      if (containerRef.current) {
+        setContainerHeight(containerRef.current.clientHeight);
+      }
+    };
+    updateHeight();
+    window.addEventListener('resize', updateHeight);
+    return () => window.removeEventListener('resize', updateHeight);
+  }, [isOpen]);
+
+  // Reset scroll position when filters change
+  useEffect(() => {
+    listRef.current?.scrollTo(0);
+  }, [searchQuery, selectedTags, view]);
 
   useEffect(() => {
     if (isOpen) {
@@ -142,6 +169,116 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
   });
 
   const allTags = Array.from(new Set(memories.flatMap(m => m.tags)));
+
+  // Calculate item size based on whether it has tags
+  const getItemSize = useCallback((index: number) => {
+    const memory = filteredMemories[index];
+    return memory?.tags?.length > 0 ? ITEM_WITH_TAGS_HEIGHT : ITEM_HEIGHT;
+  }, [filteredMemories]);
+
+  const getArchivedItemSize = useCallback((index: number) => {
+    const memory = archivedMemories[index];
+    return memory?.tags?.length > 0 ? ITEM_WITH_TAGS_HEIGHT : ITEM_HEIGHT;
+  }, [archivedMemories]);
+
+  // Active memory row renderer
+  const ActiveMemoryRow = useCallback(({ index, style }: { index: number; style: React.CSSProperties }) => {
+    const memory = filteredMemories[index];
+    if (!memory) return null;
+
+    return (
+      <div style={{ ...style, paddingBottom: 12 }}>
+        <div className="p-4 bg-zinc-800 border border-zinc-700 rounded-lg hover:border-zinc-600 transition-colors mx-1">
+          <div className="flex justify-between items-start mb-3">
+            <div className="flex-1">
+              <p className="text-sm text-zinc-200 mb-2 line-clamp-3">{memory.text}</p>
+              {memory.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {memory.tags.map(tag => (
+                    <span
+                      key={tag}
+                      className="px-2 py-0.5 text-xs bg-zinc-700 text-zinc-400 rounded"
+                    >
+                      #{tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex gap-1 ml-3 flex-shrink-0">
+              <button
+                onClick={() => handleArchive(memory.id)}
+                className="p-1.5 text-zinc-400 hover:text-yellow-400 hover:bg-zinc-700 rounded transition-colors"
+                title="Archive"
+              >
+                <ArchiveBoxIcon className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => handleDelete(memory.id)}
+                className="p-1.5 text-zinc-400 hover:text-red-400 hover:bg-zinc-700 rounded transition-colors"
+                title="Delete"
+              >
+                <TrashIcon className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          <div className="flex gap-4 text-xs text-zinc-500">
+            <span>{new Date(memory.created_at).toLocaleDateString()}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }, [filteredMemories, handleArchive, handleDelete]);
+
+  // Archived memory row renderer
+  const ArchivedMemoryRow = useCallback(({ index, style }: { index: number; style: React.CSSProperties }) => {
+    const memory = archivedMemories[index];
+    if (!memory) return null;
+
+    return (
+      <div style={{ ...style, paddingBottom: 12 }}>
+        <div className="p-4 bg-zinc-800/50 border border-zinc-700/50 rounded-lg mx-1">
+          <div className="flex justify-between items-start mb-3">
+            <div className="flex-1">
+              <p className="text-sm text-zinc-400 mb-2 line-clamp-3">{memory.text}</p>
+              {memory.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {memory.tags.map(tag => (
+                    <span
+                      key={tag}
+                      className="px-2 py-0.5 text-xs bg-zinc-700/50 text-zinc-500 rounded"
+                    >
+                      #{tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex gap-1 ml-3 flex-shrink-0">
+              <button
+                onClick={() => handleRestore(memory.id)}
+                className="p-1.5 text-zinc-400 hover:text-green-400 hover:bg-zinc-700 rounded transition-colors"
+                title="Restore"
+              >
+                <ArrowPathIcon className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => handleDelete(memory.id)}
+                className="p-1.5 text-zinc-400 hover:text-red-400 hover:bg-zinc-700 rounded transition-colors"
+                title="Delete"
+              >
+                <TrashIcon className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          <div className="flex gap-4 text-xs text-zinc-600">
+            <span>Archived: {new Date(memory.archived_at!).toLocaleDateString()}</span>
+            {memory.archived_reason && <span>Reason: {memory.archived_reason}</span>}
+          </div>
+        </div>
+      </div>
+    );
+  }, [archivedMemories, handleRestore, handleDelete]);
 
   if (!isOpen) return null;
 
@@ -251,8 +388,8 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
           </div>
         )}
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4">
+        {/* Content - Virtualized Lists */}
+        <div ref={containerRef} className="flex-1 overflow-hidden p-4">
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
@@ -268,49 +405,16 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
                 </p>
               </div>
             ) : (
-              <div className="space-y-3">
-                {filteredMemories.map(memory => (
-                  <div
-                    key={memory.id}
-                    className="p-4 bg-zinc-800 border border-zinc-700 rounded-lg hover:border-zinc-600 transition-colors"
-                  >
-                    <div className="flex justify-between items-start mb-3">
-                      <div className="flex-1">
-                        <p className="text-sm text-zinc-200 mb-2">{memory.text}</p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {memory.tags.map(tag => (
-                            <span
-                              key={tag}
-                              className="px-2 py-0.5 text-xs bg-zinc-700 text-zinc-400 rounded"
-                            >
-                              #{tag}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex gap-1 ml-3">
-                        <button
-                          onClick={() => handleArchive(memory.id)}
-                          className="p-1.5 text-zinc-400 hover:text-yellow-400 hover:bg-zinc-700 rounded transition-colors"
-                          title="Archive"
-                        >
-                          <ArchiveBoxIcon className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(memory.id)}
-                          className="p-1.5 text-zinc-400 hover:text-red-400 hover:bg-zinc-700 rounded transition-colors"
-                          title="Delete"
-                        >
-                          <TrashIcon className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                    <div className="flex gap-4 text-xs text-zinc-500">
-                      <span>{new Date(memory.created_at).toLocaleDateString()}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <List
+                ref={listRef}
+                height={containerHeight - 32}
+                itemCount={filteredMemories.length}
+                itemSize={getItemSize}
+                width="100%"
+                className="scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent"
+              >
+                {ActiveMemoryRow}
+              </List>
             )
           ) : view === 'archived' ? (
             archivedMemories.length === 0 ? (
@@ -319,55 +423,20 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
                 <p className="text-zinc-500">No archived memories</p>
               </div>
             ) : (
-              <div className="space-y-3">
-                {archivedMemories.map(memory => (
-                  <div
-                    key={memory.id}
-                    className="p-4 bg-zinc-800/50 border border-zinc-700/50 rounded-lg"
-                  >
-                    <div className="flex justify-between items-start mb-3">
-                      <div className="flex-1">
-                        <p className="text-sm text-zinc-400 mb-2">{memory.text}</p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {memory.tags.map(tag => (
-                            <span
-                              key={tag}
-                              className="px-2 py-0.5 text-xs bg-zinc-700/50 text-zinc-500 rounded"
-                            >
-                              #{tag}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex gap-1 ml-3">
-                        <button
-                          onClick={() => handleRestore(memory.id)}
-                          className="p-1.5 text-zinc-400 hover:text-green-400 hover:bg-zinc-700 rounded transition-colors"
-                          title="Restore"
-                        >
-                          <ArrowPathIcon className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(memory.id)}
-                          className="p-1.5 text-zinc-400 hover:text-red-400 hover:bg-zinc-700 rounded transition-colors"
-                          title="Delete"
-                        >
-                          <TrashIcon className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                    <div className="flex gap-4 text-xs text-zinc-600">
-                      <span>Archived: {new Date(memory.archived_at!).toLocaleDateString()}</span>
-                      {memory.archived_reason && <span>Reason: {memory.archived_reason}</span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <List
+                height={containerHeight - 32}
+                itemCount={archivedMemories.length}
+                itemSize={getArchivedItemSize}
+                width="100%"
+                className="scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent"
+              >
+                {ArchivedMemoryRow}
+              </List>
             )
           ) : (
             // Stats view
             stats && (
-              <div className="space-y-6">
+              <div className="space-y-6 overflow-y-auto h-full">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="p-4 bg-zinc-800 border border-zinc-700 rounded-lg">
                     <div className="text-2xl font-bold text-cyan-400">{stats.active}</div>

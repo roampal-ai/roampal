@@ -196,6 +196,15 @@ class ChromaDBAdapter:
         try:
             # Check if collection is empty first
             await self._ensure_initialized()
+
+            # v0.2.4: Refresh collection to see changes from other processes (e.g., UI uploads)
+            # ChromaDB's PersistentClient caches collection state; re-fetching syncs with disk
+            if self.client and self.collection_name:
+                self.collection = self.client.get_or_create_collection(
+                    name=self.collection_name,
+                    metadata={"hnsw:space": "l2"}
+                )
+
             if self.collection and self.collection.count() == 0:
                 logger.debug(f"[ChromaDB] Collection '{self.collection_name}' is empty, returning empty results")
                 return []

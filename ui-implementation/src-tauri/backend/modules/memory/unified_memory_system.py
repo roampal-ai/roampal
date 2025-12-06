@@ -10,12 +10,13 @@ import re
 import asyncio
 import math
 import os
-from typing import List, Dict, Any, Optional, Literal, Set
+from typing import List, Dict, Any, Optional, Literal, Set, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
 from filelock import FileLock
 from dataclasses import dataclass, field
+from scipy import stats  # For Wilson score confidence interval
 
 from modules.memory.chromadb_adapter import ChromaDBAdapter
 from modules.memory.file_memory_adapter import FileMemoryAdapter
@@ -42,6 +43,53 @@ AutonomousRouter = None  # Legacy import, no longer needed
 logger = logging.getLogger(__name__)
 
 CollectionName = Literal["books", "working", "history", "patterns", "memory_bank"]
+
+def wilson_score_lower(successes: float, total: int, confidence: float = 0.95) -> float:
+    """
+    Calculate the lower bound of Wilson score confidence interval (v0.2.5).
+
+    This solves the "cold start" ranking problem where a memory with 1 success / 1 use (100%)
+    would outrank a proven memory with 90/100 (90%). Wilson score uses statistical confidence
+    intervals to favor proven records over lucky new ones.
+
+    Args:
+        successes: Number of successful outcomes (works + partial)
+        total: Total number of uses
+        confidence: Confidence level (0.95 = 95% confidence interval)
+
+    Returns:
+        Lower bound of confidence interval (0.0 to 1.0)
+        - 1/1 success → ~0.20 (low confidence due to small sample)
+        - 90/100 success → ~0.84 (high confidence due to large sample)
+        - 0/0 → 0.5 (neutral for untested memories)
+
+    Formula: Wilson score interval lower bound
+    p̃ = (p + z²/2n - z√(p(1-p)/n + z²/4n²)) / (1 + z²/n)
+
+    Reference: https://en.wikipedia.org/wiki/Binomial_proportion_confidence_interval#Wilson_score_interval
+    """
+    if total == 0:
+        return 0.5  # Neutral score for untested memories
+
+    # z-score for confidence level (1.96 for 95% confidence)
+    z = stats.norm.ppf(1 - (1 - confidence) / 2)
+
+    p = successes / total  # Observed proportion
+    n = total
+
+    # Wilson score formula
+    denominator = 1 + z * z / n
+    center = p + z * z / (2 * n)
+
+    # Variance term under the square root
+    variance = p * (1 - p) / n + z * z / (4 * n * n)
+
+    # Lower bound of confidence interval
+    lower_bound = (center - z * math.sqrt(variance)) / denominator
+
+    return max(0.0, lower_bound)  # Ensure non-negative
+
+
 # ContextType is now any string - LLM discovers topics organically (coding, fitness, finance, etc.)
 ContextType = str
 
@@ -158,10 +206,15 @@ class UnifiedMemorySystem:
     NEW_ITEM_DELETION_THRESHOLD = 0.1  # More lenient for items < 7 days old
 
     def __init__(self, data_dir: str = "./data", use_server: bool = True, llm_service=None):
-        # Use DATA_PATH from settings.py which properly handles AppData path resolution
-        # DATA_PATH already combines ROAMPAL_DATA_DIR with AppData when env var is set
-        data_dir = DATA_PATH
-        logger.info(f"Using data directory from settings.DATA_PATH: {data_dir}")
+        # Check for benchmark mode - allows tests to use isolated data directories
+        if os.environ.get("ROAMPAL_BENCHMARK_MODE") == "true" and data_dir != "./data":
+            # Benchmark mode: use the passed data_dir for test isolation
+            logger.info(f"[BENCHMARK] Using isolated data directory: {data_dir}")
+        else:
+            # Normal mode: Use DATA_PATH from settings.py which properly handles AppData path resolution
+            # DATA_PATH already combines ROAMPAL_DATA_DIR with AppData when env var is set
+            data_dir = DATA_PATH
+            logger.info(f"Using data directory from settings.DATA_PATH: {data_dir}")
 
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
@@ -197,12 +250,17 @@ class UnifiedMemorySystem:
         if llm_service and is_enabled("ENABLE_LLM_MEMORY_SCORING"):
             logger.info("LLM memory scoring enabled")
 
-        # Cross-encoder for reranking (v2.1 Enhanced Retrieval)
+        # Cross-encoder for reranking (v2.5 Enhanced Retrieval with Multilingual Support)
+        # Uses mmarco multilingual model for better non-English support
         self.reranker = None
         try:
             from sentence_transformers import CrossEncoder
-            self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-            logger.info("Cross-encoder reranker loaded for enhanced retrieval (v2.1)")
+            # v0.2.5: Switch to mmarco multilingual model for global user support
+            # mmarco: Multilingual cross-encoder trained on 14 languages
+            # Improves ranking for non-English users (Spanish, German, French, Chinese, etc.)
+            # Slight overhead vs ms-marco but dramatically better international accuracy
+            self.reranker = CrossEncoder('cross-encoder/mmarco-mMiniLMv2-L12-H384-v1')
+            logger.info("Cross-encoder reranker loaded (mmarco multilingual) for enhanced retrieval (v2.5)")
         except Exception as e:
             logger.warning(f"Cross-encoder reranker not available: {e}")
 
@@ -1433,14 +1491,52 @@ Prefix (one sentence, max 20 words):"""
             unique_known = [s for s in known_solutions if s.get("id") not in existing_ids]
             all_results = unique_known + all_results
 
-        # LEARNING-AWARE RANKING: Adaptive weighting based on memory quality and maturity
+        # LEARNING-AWARE RANKING with WILSON SCORING (v0.2.5): Statistical confidence for memory ranking
+        # Wilson score solves "cold start" problem where 1/1 (100%) would beat 90/100 (90%)
+        # By using lower confidence bounds, proven memories outrank lucky new ones
         for r in all_results:
             metadata = r.get("metadata", {})
-            learned_score = metadata.get("score", 0.5)  # Default to neutral 0.5
+            raw_score = metadata.get("score", 0.5)  # Raw score from outcome tracking
             uses = metadata.get("uses", 0)
             confidence = metadata.get("confidence", 0.7)
             distance = r.get("distance", 1.0)
             collection = r.get("collection", "")
+
+            # WILSON SCORING (v0.2.5): Calculate success count from outcome history
+            # Parse outcome_history to count successes vs failures
+            successes = 0
+            try:
+                outcome_history = json.loads(metadata.get("outcome_history", "[]"))
+                for entry in outcome_history:
+                    if isinstance(entry, dict):
+                        outcome = entry.get("outcome", "")
+                        if outcome == "worked":
+                            successes += 1
+                        elif outcome == "partial":
+                            successes += 0.5  # Partial counts as half success
+            except:
+                # Fallback: estimate from raw score and uses
+                if uses > 0:
+                    successes = int(raw_score * uses)
+
+            # Apply Wilson score lower bound for statistical confidence
+            # This penalizes memories with few samples, rewarding proven track records
+            wilson_learned_score = wilson_score_lower(successes, uses)
+
+            # Blend Wilson score with raw score (Wilson dominates for low sample sizes)
+            # - uses=0: use raw_score (no history to learn from)
+            # - uses=1-2: 50/50 blend (building confidence)
+            # - uses>=3: mostly Wilson score (trust the statistics)
+            if uses == 0:
+                learned_score = raw_score
+            elif uses < 3:
+                blend = uses / 3  # 0.33 for 1 use, 0.67 for 2 uses
+                learned_score = (1 - blend) * raw_score + blend * wilson_learned_score
+            else:
+                learned_score = wilson_learned_score
+
+            # Store Wilson score for transparency
+            r["wilson_score"] = wilson_learned_score
 
             # Convert L2 distance to similarity (lower distance = higher similarity)
             # ChromaDB uses L2 (Euclidean) distance which can be >> 1.0
@@ -1457,23 +1553,35 @@ Prefix (one sentence, max 20 words):"""
             if uses >= 5 and learned_score >= 0.8:
                 # PROVEN HIGH-VALUE MEMORY
                 # Has been used 5+ times and consistently successful
-                # Weight: 40% embedding, 60% learned (trust the history)
-                embedding_weight = 0.4
-                learned_weight = 0.6
+                # Benchmark: 100% accuracy at this level
+                # Wilson scoring protects against small-sample luck
+                # 20% embedding preserves semantic veto power for cross-domain queries
+                # Weight: 20% embedding, 80% learned
+                embedding_weight = 0.2
+                learned_weight = 0.8
 
             elif uses >= 3 and learned_score >= 0.7:
                 # ESTABLISHED MEMORY
                 # Has been used multiple times with good success
-                # Weight: 45% embedding, 55% learned
-                embedding_weight = 0.45
-                learned_weight = 0.55
+                # Benchmark: 3 uses = 100% accuracy (10% -> 100%)
+                # Weight: 25% embedding, 75% learned
+                embedding_weight = 0.25
+                learned_weight = 0.75
+
+            elif uses >= 2 and learned_score >= 0.5:
+                # EMERGING PATTERN (positive)
+                # Has been used a few times with decent success
+                # Weight: 35% embedding, 65% learned
+                embedding_weight = 0.35
+                learned_weight = 0.65
 
             elif uses >= 2:
-                # EMERGING PATTERN
-                # Has been used a few times, building track record
-                # Weight: 50/50 split (balanced)
-                embedding_weight = 0.5
-                learned_weight = 0.5
+                # FAILING PATTERN
+                # Has been used but mostly failing (score < 0.5)
+                # Demote: let embedding similarity dominate
+                # Weight: 70% embedding, 30% learned
+                embedding_weight = 0.7
+                learned_weight = 0.3
 
             elif collection == "memory_bank":
                 # MEMORY BANK SPECIAL CASE
@@ -1755,108 +1863,132 @@ Prefix (one sentence, max 20 words):"""
 
     async def get_cold_start_context(self, limit: int = 5) -> Optional[str]:
         """
-        Generate cold-start user profile from Content KG top entities.
+        Generate cold-start context from multiple sources (v0.2.5 Enhanced).
 
-        Uses Content KG to find most important entities (by mention count),
-        then retrieves their source memory_bank documents.
+        Pulls from:
+        - memory_bank: User identity, preferences, goals, learning aspirations, skill gaps (sorted by quality × log(mentions))
+        - patterns: Proven solutions (top 1-2)
+        - history: Recent context (top 1)
+
+        Uses quality × log(mentions+1) scoring so frequently-mentioned AND high-quality
+        facts rank highest. Prevents trivia from dominating over important rare facts,
+        and prevents one-off high-importance facts from beating proven knowledge.
 
         Args:
-            limit: Maximum number of memory_bank facts to include
+            limit: Maximum total items to include (distributed across sources)
 
         Returns:
-            Formatted string with top memory_bank facts, or None if unavailable
+            Formatted string with context from multiple sources, or None if unavailable
         """
-        if not self.content_graph or len(self.content_graph.entities) == 0:
-            logger.info("[COLD-START] Content KG empty, falling back to vector search")
-            # Fallback to vector search
+        all_context = []
+
+        # STEP 1: Get memory_bank facts (primary - user identity/preferences)
+        memory_bank_limit = max(3, limit - 2)  # Reserve 2 slots for patterns/history
+
+        if self.content_graph and len(self.content_graph.entities) > 0:
+            # Sort entities by quality × log(mentions+1) instead of just mentions
+            all_entities = self.content_graph.get_all_entities(min_mentions=1)
+            sorted_entities = sorted(
+                all_entities,
+                key=lambda e: e.get("avg_quality", 0.5) * math.log(e.get("mentions", 1) + 1),
+                reverse=True
+            )[:15]  # Take top 15 for document extraction
+
+            logger.info(f"[COLD-START] Top entities (quality×log(mentions)): {[(e['entity'], round(e.get('avg_quality', 0.5) * math.log(e.get('mentions', 1) + 1), 2)) for e in sorted_entities[:5]]}")
+
+            # Collect unique memory_bank document IDs from sorted entities
+            seen_ids = set()
+            memory_ids = []
+
+            for entity in sorted_entities:
+                for doc_id in entity.get("documents", []):
+                    if doc_id not in seen_ids and doc_id.startswith("memory_bank_"):
+                        seen_ids.add(doc_id)
+                        memory_ids.append(doc_id)
+                        if len(memory_ids) >= memory_bank_limit:
+                            break
+                if len(memory_ids) >= memory_bank_limit:
+                    break
+
+            if memory_ids:
+                logger.info(f"[COLD-START] Retrieving {len(memory_ids)} memory_bank documents")
+                try:
+                    adapter = self.collections["memory_bank"]
+                    result = await adapter.get_vectors_by_ids(memory_ids)
+                    documents = result.get('documents') if result else []
+                    if documents:
+                        for i, doc_id in enumerate(result.get("ids", [])):
+                            if i < len(documents) and documents[i]:
+                                all_context.append({
+                                    "id": doc_id,
+                                    "content": documents[i],
+                                    "source": "memory_bank",
+                                    "metadata": result.get("metadatas", [])[i] if i < len(result.get("metadatas", [])) else {}
+                                })
+                except Exception as e:
+                    logger.warning(f"[COLD-START] memory_bank retrieval failed: {e}")
+
+        # Fallback to vector search if no memory_bank results yet
+        if not all_context:
+            logger.info("[COLD-START] No KG results, falling back to vector search for memory_bank")
             try:
+                # v0.2.5: Include learning/growth terms for agent self-improvement context
                 results = await self.search(
-                    query="user identity name projects current work goals",
+                    query="user identity name projects current work goals preferences learning aspirations skill gaps agent growth",
                     collections=["memory_bank"],
-                    limit=limit
+                    limit=memory_bank_limit
                 )
-                return self._format_cold_start_results(results)
+                for r in results:
+                    all_context.append({
+                        "id": r.get("id", ""),
+                        "content": r.get("content") or r.get("text", ""),
+                        "source": "memory_bank",
+                        "metadata": r.get("metadata", {})
+                    })
             except Exception as e:
-                logger.error(f"[COLD-START] Fallback search failed: {e}")
-                return None
+                logger.warning(f"[COLD-START] memory_bank vector search failed: {e}")
 
-        # Get top entities by mentions (most important)
-        top_entities = self.content_graph.get_all_entities(min_mentions=1)[:10]
-
-        if not top_entities:
-            logger.info("[COLD-START] No entities in Content KG yet")
-            return None
-
-        logger.info(f"[COLD-START] Top entities: {[e['entity'] for e in top_entities[:5]]}")
-
-        # Collect unique memory_bank document IDs from top entities
-        seen_ids = set()
-        memory_ids = []
-
-        for entity in top_entities:
-            for doc_id in entity.get("documents", []):
-                # Only include memory_bank documents
-                if doc_id not in seen_ids and doc_id.startswith("memory_bank_"):
-                    seen_ids.add(doc_id)
-                    memory_ids.append(doc_id)
-                    if len(memory_ids) >= limit:
-                        break
-            if len(memory_ids) >= limit:
-                break
-
-        if not memory_ids:
-            logger.info("[COLD-START] No memory_bank documents found in top entities")
-            return None
-
-        logger.info(f"[COLD-START] Retrieving {len(memory_ids)} memory_bank documents: {memory_ids}")
-
-        # Retrieve actual memory_bank documents by ID
-        memories = []
+        # STEP 2: Get top pattern (proven solution)
         try:
-            adapter = self.collections["memory_bank"]
-            result = await adapter.get_vectors_by_ids(memory_ids)
-
-            logger.info(f"[COLD-START] ChromaDB result keys: {result.keys() if result else 'None'}")
-
-            # ChromaDB returns {ids: [...], documents: [...], metadatas: [...]}
-            # Note: documents can be None if IDs don't exist
-            documents = result.get('documents') if result else None
-            if documents is None:
-                documents = []
-
-            logger.info(f"[COLD-START] Documents count: {len(documents)}")
-
-            if result and documents:
-                for i, doc_id in enumerate(result.get("ids", [])):
-                    if i < len(documents):
-                        memories.append({
-                            "id": doc_id,
-                            "content": documents[i],
-                            "text": documents[i],
-                            "metadata": result.get("metadatas", [])[i] if i < len(result.get("metadatas", [])) else {}
-                        })
-                logger.info(f"[COLD-START] Retrieved {len(memories)} memory_bank documents")
-            else:
-                logger.warning(f"[COLD-START] ChromaDB returned empty or no documents (requested IDs may not exist)")
+            pattern_results = await self.search(
+                query="proven solution effective approach",
+                collections=["patterns"],
+                limit=1
+            )
+            for r in pattern_results:
+                all_context.append({
+                    "id": r.get("id", ""),
+                    "content": r.get("content") or r.get("text", ""),
+                    "source": "patterns",
+                    "metadata": r.get("metadata", {})
+                })
         except Exception as e:
-            logger.error(f"[COLD-START] Failed to retrieve memory_bank documents: {e}", exc_info=True)
+            logger.debug(f"[COLD-START] patterns search failed: {e}")
+
+        # STEP 3: Get recent history (what happened last session)
+        try:
+            history_results = await self.search(
+                query="recent conversation context",
+                collections=["history"],
+                limit=1
+            )
+            for r in history_results:
+                all_context.append({
+                    "id": r.get("id", ""),
+                    "content": r.get("content") or r.get("text", ""),
+                    "source": "history",
+                    "metadata": r.get("metadata", {})
+                })
+        except Exception as e:
+            logger.debug(f"[COLD-START] history search failed: {e}")
+
+        if not all_context:
+            logger.info("[COLD-START] No context available from any source")
             return None
 
-        # If Content KG had entities but retrieval returned 0 documents (stale IDs), fall back to vector search
-        if not memories:
-            logger.warning(f"[COLD-START] Content KG entities point to non-existent documents (stale data), falling back to vector search")
-            try:
-                results = await self.search(
-                    query="user identity name projects current work goals",
-                    collections=["memory_bank"],
-                    limit=5
-                )
-                return self._format_cold_start_results(results)
-            except Exception as e:
-                logger.error(f"[COLD-START] Fallback vector search failed: {e}")
-                return None
+        logger.info(f"[COLD-START] Total context items: {len(all_context)} (memory_bank: {sum(1 for c in all_context if c['source'] == 'memory_bank')}, patterns: {sum(1 for c in all_context if c['source'] == 'patterns')}, history: {sum(1 for c in all_context if c['source'] == 'history')})")
 
-        return self._format_cold_start_results(memories)
+        return self._format_cold_start_results(all_context)
 
     def _smart_truncate(self, text: str, max_len: int = 250) -> str:
         """Truncate text at sentence/word boundary, not mid-word"""
@@ -1878,7 +2010,7 @@ Prefix (one sentence, max 20 words):"""
         return truncated + '...'
 
     def _format_cold_start_results(self, results: List[Dict]) -> Optional[str]:
-        """Format cold-start memories into system message with injection protection"""
+        """Format cold-start context from multiple sources with injection protection (v0.2.5)"""
         if not results:
             return None
 
@@ -1895,12 +2027,35 @@ Prefix (one sentence, max 20 words):"""
             logger.warning("[COLD-START] All results filtered by Layer 4 injection protection")
             return None
 
-        logger.info(f"[COLD-START] Formatted {len(safe_results)} safe memory_bank facts")
+        # Group by source for cleaner output
+        memory_bank_items = [r for r in safe_results if r.get("source") == "memory_bank"]
+        pattern_items = [r for r in safe_results if r.get("source") == "patterns"]
+        history_items = [r for r in safe_results if r.get("source") == "history"]
 
-        context_summary = "[User Profile] (auto-loaded from your most important stored facts):\n" + "\n".join([
-            f"- {self._smart_truncate((r.get('content') or r.get('text', '')).replace(chr(10), ' '), 250)}"
-            for r in safe_results
-        ])
+        # Build formatted sections
+        sections = []
+
+        if memory_bank_items:
+            sections.append("[User Profile] (identity, preferences, goals):\n" + "\n".join([
+                f"- {self._smart_truncate((r.get('content') or r.get('text', '')).replace(chr(10), ' '), 250)}"
+                for r in memory_bank_items
+            ]))
+
+        if pattern_items:
+            sections.append("[Proven Patterns] (what worked before):\n" + "\n".join([
+                f"- {self._smart_truncate((r.get('content') or r.get('text', '')).replace(chr(10), ' '), 200)}"
+                for r in pattern_items
+            ]))
+
+        if history_items:
+            sections.append("[Recent Context] (last session):\n" + "\n".join([
+                f"- {self._smart_truncate((r.get('content') or r.get('text', '')).replace(chr(10), ' '), 200)}"
+                for r in history_items
+            ]))
+
+        context_summary = "\n\n".join(sections)
+
+        logger.info(f"[COLD-START] Formatted {len(safe_results)} items (memory_bank: {len(memory_bank_items)}, patterns: {len(pattern_items)}, history: {len(history_items)})")
 
         return context_summary
 
@@ -2210,10 +2365,12 @@ Prefix (one sentence, max 20 words):"""
         else:
             time_weight = 1.0
 
+        # Always increment uses - all outcomes count as a trial for Wilson scoring
+        uses += 1
+
         if outcome == "worked":
             score_delta = 0.2 * time_weight
             new_score = min(1.0, current_score + score_delta)
-            uses += 1
             if context:
                 contexts = json.loads(metadata.get("success_contexts", "[]"))
                 contexts.append(context)
@@ -2231,7 +2388,6 @@ Prefix (one sentence, max 20 words):"""
         else:  # partial
             score_delta = 0.05 * time_weight
             new_score = min(1.0, current_score + score_delta)
-            uses += 1
 
         # Log score update for transparency/debugging
         logger.info(
@@ -2409,11 +2565,15 @@ Prefix (one sentence, max 20 words):"""
                 cached_uses = cached_metadata.get("uses", 0)
 
                 # Apply outcome scoring (same logic as main doc_id)
+                # v0.2.5: Always increment uses for Wilson scoring accuracy
+                cached_uses += 1
+
                 if outcome == "worked":
                     cached_score = min(1.0, cached_score + 0.2)
-                    cached_uses += 1
                 elif outcome == "failed":
                     cached_score = max(0.0, cached_score - 0.3)
+                elif outcome == "partial":
+                    cached_score = min(1.0, cached_score + 0.05)
 
                 # Update metadata
                 cached_updates = {
@@ -3837,7 +3997,7 @@ Prefix (one sentence, max 20 words):"""
             Document ID
         """
         # CAPACITY CHECK - prevent unbounded growth
-        MAX_MEMORY_BANK_ITEMS = 500  # Reasonable limit for single-user system
+        MAX_MEMORY_BANK_ITEMS = 1000  # Increased limit for power users
         try:
             current_count = self.collections["memory_bank"].collection.count()
             if current_count >= MAX_MEMORY_BANK_ITEMS:

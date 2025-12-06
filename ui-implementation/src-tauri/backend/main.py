@@ -63,14 +63,22 @@ from app.routers.system_health import router as system_health_router
 from app.routers.data_management import router as data_management_router
 from backend.api.book_upload_api import router as book_upload_router
 from app.routers.mcp import router as mcp_router
+from app.routers.mcp_servers import router as mcp_servers_router  # v0.2.5: External MCP tool servers
 
 # Configure logging for production with rotation
+# IMPORTANT: Logs go to AppData, NOT the install directory
+# This prevents personal info (username in paths) from being included in releases
 from logging.handlers import RotatingFileHandler
 log_level = os.getenv('ROAMPAL_LOG_LEVEL', 'INFO')
 
+# Create logs directory in AppData (same parent as DATA_PATH)
+logs_dir = Path(DATA_PATH).parent / 'logs'
+logs_dir.mkdir(parents=True, exist_ok=True)
+log_file_path = logs_dir / 'roampal.log'
+
 # Create rotating file handler (10MB max, keep 3 backups)
 file_handler = RotatingFileHandler(
-    'roampal.log',
+    str(log_file_path),
     maxBytes=10*1024*1024,  # 10MB
     backupCount=3,          # Keep 3 old files (roampal.log.1, .2, .3)
     encoding='utf-8'
@@ -178,7 +186,7 @@ async def _inject_cold_start_if_needed(session_id: str, tool_response: str, memo
 
             if context_summary:
                 logger.info(f"[MCP] Cold-start injection for {session_id}: {len(context_summary)} chars")
-                return f"""═══ USER PROFILE (auto-loaded) ═══
+                return f"""═══ KNOWN CONTEXT (auto-loaded) ═══
 {context_summary}
 
 ═══ Tool Response ═══
@@ -480,6 +488,23 @@ async def lifespan(app: FastAPI):
         )
         logger.info("✓ Agent service initialized at startup")
 
+        # v0.2.5: Initialize MCP Client Manager for external tool servers
+        try:
+            from modules.mcp_client.manager import MCPClientManager, set_mcp_manager
+            mcp_manager = MCPClientManager(Path(DATA_PATH))
+            await mcp_manager.initialize()
+            set_mcp_manager(mcp_manager)
+            app.state.mcp_manager = mcp_manager
+            server_count = len([s for s in mcp_manager.servers.values() if s.status == "connected"])
+            tool_count = len(mcp_manager.get_all_tools())
+            if server_count > 0:
+                logger.info(f"✓ MCP Client Manager initialized ({server_count} servers, {tool_count} external tools)")
+            else:
+                logger.info("✓ MCP Client Manager initialized (no servers configured)")
+        except Exception as e:
+            logger.warning(f"⚠️  MCP Client Manager initialization failed: {e}")
+            app.state.mcp_manager = None
+
         if app.state.memory:
             logger.info("✓ Memory system successfully connected")
         else:
@@ -544,6 +569,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Error closing LLM client: {e}", exc_info=True)
 
+    # v0.2.5: Cleanup MCP connections
+    if hasattr(app.state, 'mcp_manager') and app.state.mcp_manager:
+        try:
+            logger.info("Disconnecting MCP servers...")
+            await app.state.mcp_manager.disconnect_all()
+            logger.info("✓ MCP servers disconnected")
+        except Exception as e:
+            logger.error(f"Error disconnecting MCP servers: {e}", exc_info=True)
+
     logger.info("✓ Roampal shutdown complete")
 
 # Create app
@@ -589,6 +623,7 @@ app.include_router(data_management_router)  # Data management (export/delete col
 app.include_router(book_upload_router)  # Document processor (books collection)
 app.include_router(system_health_router, prefix="/api/system", tags=["system"])  # System health and disk monitoring
 app.include_router(mcp_router)  # MCP integrations (Claude Desktop, Claude Code, Cursor)
+app.include_router(mcp_servers_router)  # v0.2.5: External MCP tool server management
 
 @app.get("/health")
 async def health():
@@ -778,7 +813,7 @@ async def run_mcp_server():
         return [
             types.Tool(
                 name="search_memory",
-                description="""Search Roampal's 5-tier persistent memory (books, working, history, patterns, memory_bank).
+                description="""Search your 5-tier persistent memory (books, working, history, patterns, memory_bank).
 
 AUTO-ROUTING: Omit 'collections' → system uses learned KG routing patterns
 MANUAL: ["memory_bank"]=user info, ["books"]=docs, ["working"]=today, ["history"]=past, ["patterns"]=solutions
@@ -864,7 +899,7 @@ Use this for stable user info, not session learnings (those go in record_respons
 
 Returns: Past solutions, failure warnings, tool effectiveness stats, recommended collections
 
-This is Roampal's "intuition" - pattern matching in knowledge graphs (5-10ms, no embeddings).
+This is your "intuition" - pattern matching in knowledge graphs (5-10ms, no embeddings).
 
 Workflow: get_context_insights(q) → read insights → search_memory(recommended_collections) → respond""",
                 inputSchema={
@@ -892,7 +927,7 @@ Scoring:
 • Also scores any memories from your last search_memory call with same outcome
 • High scores (≥0.7) promote to history, proven patterns (≥0.9) to patterns, low (<0.2) deleted
 
-This is how Roampal learns what works. Be honest with outcomes.""",
+This is how the memory learns what works. Be honest with outcomes.""",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -903,7 +938,15 @@ This is how Roampal learns what works. Be honest with outcomes.""",
                         "outcome": {
                             "type": "string",
                             "enum": ["worked", "failed", "partial", "unknown"],
-                            "description": "How helpful was your response: 'worked' (satisfied), 'failed' (didn't help), 'partial' (mixed), 'unknown' (no feedback)",
+                            "description": """How helpful was your response: 'worked' (satisfied), 'failed' (didn't help), 'partial' (mixed), 'unknown' (no feedback)
+
+IMPORTANT - Use 'failed' when:
+• User says the answer was wrong or unhelpful
+• Retrieved memory led you to give incorrect advice
+• User had to correct you or provide the right answer
+• The memory you used was outdated or misleading
+
+Don't default to 'worked' - be honest so bad memories get demoted.""",
                             "default": "unknown"
                         }
                     },
@@ -1017,17 +1060,19 @@ This is how Roampal learns what works. Be honest with outcomes.""",
                 # Cache doc_ids from scorable collections for outcome-based scoring
                 # Per architecture.md line 572-573: Cache doc_ids + query + collections for record_response scoring
                 cached_doc_ids = []
-                result_collections = set()  # Track which collections actually returned results
+                result_collections = set()  # Track which collections actually returned results (ALL, for KG routing)
                 if results:
                     for r in results:
                         metadata = r.get('metadata', {})
                         collection = r.get('collection') or metadata.get('collection', 'unknown')
                         doc_id = r.get('doc_id') or r.get('id')
 
-                        # Only cache from scorable collections (not books or memory_bank)
+                        # Track ALL collections for KG routing updates (architecture.md line 1088-1104)
+                        result_collections.add(collection)
+
+                        # Only cache doc_ids from scorable collections (not books or memory_bank)
                         if collection in ['working', 'history', 'patterns'] and doc_id:
                             cached_doc_ids.append(doc_id)
-                            result_collections.add(collection)
 
                 _mcp_search_cache[session_id] = {
                     "doc_ids": cached_doc_ids,

@@ -4,7 +4,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri-FFC131?logo=tauri)](https://tauri.app/)
 [![Multi-Provider](https://img.shields.io/badge/LLM-Ollama%20%7C%20LM%20Studio-blue)](https://roampal.ai)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 
 **The memory layer that learns what actually works**
 
@@ -185,7 +185,7 @@ Works with any tool-calling model via Ollama or LM Studio:
 
 ## Pricing
 
-**Free & open-source** (MIT License)
+**Free & open-source** (Apache 2.0 License)
 
 - Build from source → completely free
 - Pre-built executable: **$9.99 one-time** (saves hours of setup)

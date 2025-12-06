@@ -7,6 +7,7 @@ interface ModelContextSettingsProps {
   isOpen: boolean;
   onClose: () => void;
   currentModel?: string;
+  currentProvider?: string;
 }
 
 interface ModelContextInfo {
@@ -15,12 +16,14 @@ interface ModelContextInfo {
   max: number;
   current: number;
   is_override: boolean;
+  provider?: string;
 }
 
 export const ModelContextSettings: React.FC<ModelContextSettingsProps> = ({
   isOpen,
   onClose,
   currentModel,
+  currentProvider,
 }) => {
   const [modelContexts, setModelContexts] = useState<ModelContextInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,23 +44,28 @@ export const ModelContextSettings: React.FC<ModelContextSettingsProps> = ({
 
         const data = await response.json();
         const installedModels = (data.models || [])
-          .map((m: any) => typeof m === 'string' ? m : m.name)
-          .filter((m: string) => m && m.length > 0 && !m.includes('embed'));
+          .filter((m: any) => {
+            const name = typeof m === 'string' ? m : m.name;
+            return name && name.length > 0 && !name.includes('embed');
+          });
 
         // Fetch context info for each installed model
         const contexts: ModelContextInfo[] = [];
-        for (const model of installedModels) {
+        for (const modelData of installedModels) {
+          const modelName = typeof modelData === 'string' ? modelData : modelData.name;
+          const modelProvider = typeof modelData === 'object' ? modelData.provider : 'ollama';
           try {
-            const info = await modelContextService.getModelContext(model);
+            const info = await modelContextService.getModelContext(modelName);
             contexts.push({
-              model,
+              model: modelName,
               default: info.default,
               max: info.max,
               current: info.current,
               is_override: info.is_override,
+              provider: modelProvider,
             });
           } catch (error) {
-            console.error(`Failed to fetch context for ${model}:`, error);
+            console.error(`Failed to fetch context for ${modelName}:`, error);
           }
         }
 
@@ -169,6 +177,7 @@ export const ModelContextSettings: React.FC<ModelContextSettingsProps> = ({
             <div className="space-y-4">
               {modelContexts.map((context) => {
                 const isCurrentModel = context.model === currentModel;
+                const isModelLMStudio = context.provider === 'lmstudio';
 
                 return (
                   <div
@@ -199,7 +208,7 @@ export const ModelContextSettings: React.FC<ModelContextSettingsProps> = ({
                           Default: {formatTokens(context.default)} • Max: {formatTokens(context.max)}
                         </div>
                       </div>
-                      {context.is_override && (
+                      {context.is_override && !isModelLMStudio && (
                         <button
                           onClick={() => handleReset(context.model)}
                           className="text-xs px-2 py-1 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 rounded transition-colors"
@@ -217,9 +226,14 @@ export const ModelContextSettings: React.FC<ModelContextSettingsProps> = ({
                         step={512}
                         value={context.current}
                         onChange={(e) => handleContextChange(context.model, parseInt(e.target.value))}
-                        className="flex-1 h-2 bg-zinc-700 rounded-lg appearance-none cursor-pointer slider"
+                        disabled={isModelLMStudio}
+                        className={`flex-1 h-2 bg-zinc-700 rounded-lg appearance-none slider ${
+                          isModelLMStudio ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+                        }`}
                       />
-                      <span className="text-sm font-medium text-blue-400 w-16 text-right">
+                      <span className={`text-sm font-medium w-16 text-right ${
+                        isModelLMStudio ? 'text-zinc-500' : 'text-blue-400'
+                      }`}>
                         {formatTokens(context.current)}
                       </span>
                     </div>
@@ -227,6 +241,11 @@ export const ModelContextSettings: React.FC<ModelContextSettingsProps> = ({
                       <span>{formatTokens(Math.min(512, context.default))}</span>
                       <span>{formatTokens(context.max)}</span>
                     </div>
+                    {isModelLMStudio && (
+                      <p className="text-xs text-yellow-500/70 mt-2">
+                        LM Studio manages context internally
+                      </p>
+                    )}
                   </div>
                 );
               })}
@@ -237,8 +256,15 @@ export const ModelContextSettings: React.FC<ModelContextSettingsProps> = ({
         {/* Footer */}
         <div className="p-6 border-t border-zinc-800">
           <div className="text-xs text-zinc-500 mb-4">
-            <strong>Note:</strong> Context window size affects how much text the model can process at once.
-            Larger contexts use more memory but allow processing more context at once. Changes apply immediately.
+            <p>
+              Context window size affects how much text the model can process at once.
+              Larger contexts use more memory.
+            </p>
+            {modelContexts.some(m => m.provider === 'lmstudio') && (
+              <p className="text-yellow-500/80 mt-2">
+                LM Studio models: context is managed by LM Studio, not Roampal.
+              </p>
+            )}
           </div>
           <button
             onClick={onClose}

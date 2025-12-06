@@ -12,7 +12,7 @@ AVAILABLE_TOOLS = [
 
 **What's Inside:**
 • memory_bank = Your persistent identity layer (3 layers: user context, system mastery, agent growth) - permanent, quality-ranked by importance×confidence
-• books = Uploaded PDFs, documents, technical references (user's personal library)
+• books = Curated knowledge the user gave YOU (PDFs, documents, technical references)
 • history = Past conversations across ALL sessions (searchable dialogue archive)
 • patterns = Learned solutions that worked (proven methods)
 • working = Recent context from current session
@@ -44,7 +44,7 @@ AUTOMATIC ROUTING (recommended):
 - Gets smarter over time as it learns which collections work best for different queries
 
 MANUAL OVERRIDE (when you know exactly where to look):
-- ["books"] = Uploaded documents/PDFs
+- ["books"] = Curated knowledge user gave YOU
 - ["working"] = Recent conversation exchanges (last 24 hours) - use for "today", "recent", "just now"
 - ["history"] = Past conversation exchanges (30+ days) - use for "last week", "previously"
 - ["patterns"] = Learned solutions/behaviors that worked

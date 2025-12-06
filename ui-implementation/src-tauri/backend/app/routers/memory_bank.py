@@ -39,7 +39,7 @@ async def list_memories(
     request: Request,
     include_archived: bool = False,
     tags: Optional[str] = None,
-    limit: int = 50
+    limit: int = 1000  # v0.2.5: increased from 50 to match storage capacity
 ):
     """
     List all memories from memory_bank collection.
@@ -98,7 +98,7 @@ async def list_memories(
 @router.get("/archived")
 async def get_archived_memories(
     request: Request,
-    limit: int = 50
+    limit: int = 1000  # v0.2.5: increased from 50 to match storage capacity
 ):
     """
     Get only archived memories.

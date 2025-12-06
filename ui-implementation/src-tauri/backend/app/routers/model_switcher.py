@@ -137,6 +137,16 @@ MODEL_TO_HUGGINGFACE = {
         "file": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
         "size_gb": 1.93
     },
+    "qwen3:32b": {
+        "repo": "bartowski/Qwen_Qwen3-32B-GGUF",
+        "file": "Qwen_Qwen3-32B-Q4_K_M.gguf",
+        "size_gb": 19.8
+    },
+    "qwen3:8b": {
+        "repo": "bartowski/Qwen_Qwen3-8B-GGUF",
+        "file": "Qwen_Qwen3-8B-Q4_K_M.gguf",
+        "size_gb": 5.0
+    },
     # gpt-oss models should be downloaded via Ollama (native MXFP4 support)
     # The GGUF versions don't quantize well - bartowski does not recommend them
 }

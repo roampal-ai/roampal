@@ -121,7 +121,8 @@ class OllamaClient(LLMClientInterface):
         payload = {
             "model": actual_model,
             "messages": messages,
-            "stream": False
+            "stream": False,
+            "think": False  # Disable thinking mode (qwen3, etc.) - much faster responses
         }
 
         # Initialize options to avoid UnboundLocalError in fallback path
@@ -131,6 +132,7 @@ class OllamaClient(LLMClientInterface):
         from config.model_contexts import get_context_size
         num_ctx = get_context_size(actual_model)
         options["num_ctx"] = num_ctx
+        options["num_gpu"] = 99  # Force max GPU layers - Ollama is too conservative by default
 
         # Universal generation params - apply for all models from configuration
         from config.model_limits import get_generation_params
@@ -387,7 +389,8 @@ class OllamaClient(LLMClientInterface):
         payload = {
             "model": actual_model,
             "messages": messages,
-            "stream": False
+            "stream": False,
+            "think": False  # Disable thinking mode (qwen3, etc.) - much faster responses
         }
 
         # Tools are called via <tool_call> tags in the response, not Ollama's native API
@@ -399,7 +402,7 @@ class OllamaClient(LLMClientInterface):
         if "deepseek" not in actual_model.lower():
             from config.model_limits import get_generation_params
             gen_params = get_generation_params(actual_model)
-            options = {}
+            options = {"num_gpu": 99}  # Force max GPU layers
 
             if gen_params.get("num_predict"):
                 options["num_predict"] = gen_params["num_predict"]
@@ -410,8 +413,7 @@ class OllamaClient(LLMClientInterface):
             if gen_params.get("stop"):
                 options["stop"] = gen_params["stop"]
 
-            if options:
-                payload["options"] = options
+            payload["options"] = options  # Always set options now (at minimum num_gpu)
 
             if format:
                 payload["format"] = format
@@ -637,14 +639,18 @@ class OllamaClient(LLMClientInterface):
         payload = {
             "model": actual_model,
             "messages": messages,
-            "stream": True
+            "stream": True,
+            "think": False  # Disable thinking mode (qwen3, etc.) - much faster responses
         }
 
         # Use centralized context configuration
         from config.model_contexts import get_context_size
         num_ctx = get_context_size(actual_model)
-        payload["options"] = {"num_ctx": num_ctx}
-        logger.info(f"[STREAM WITH TOOLS] Set context window to {num_ctx} for {actual_model}")
+        payload["options"] = {
+            "num_ctx": num_ctx,
+            "num_gpu": 99  # Force full GPU offload - fixes Ollama's conservative default
+        }
+        logger.info(f"[STREAM WITH TOOLS] Set context window to {num_ctx} for {actual_model} (num_gpu=99)")
 
         # Only pass tools to models that support native API
         if tools and supports_native_tools:
@@ -705,6 +711,8 @@ class OllamaClient(LLMClientInterface):
                 # Stream OpenAI-style SSE responses
                 # Accumulator for tool calls (OpenAI streams them in chunks)
                 tool_call_accumulator = {}  # {index: {"id": "", "name": "", "arguments": ""}}
+                # Track reasoning mode for qwen3 - emit <think> tag once at start, </think> once at end
+                in_reasoning_mode = False
 
                 async for line in response.aiter_lines():
                     line_count += 1
@@ -717,6 +725,11 @@ class OllamaClient(LLMClientInterface):
 
                         if data_str == "[DONE]":
                             logger.info(f"[STREAM DEBUG] OpenAI stream complete")
+                            
+                            # Close <think> tag if still open at end of stream
+                            if in_reasoning_mode:
+                                yield {"type": "text", "content": "</think>"}
+                                in_reasoning_mode = False
 
                             # Yield accumulated tool calls before finishing
                             if tool_call_accumulator:
@@ -744,17 +757,68 @@ class OllamaClient(LLMClientInterface):
 
                         try:
                             chunk = json.loads(data_str)
+
+                            # Check for error responses from LM Studio / OpenAI-compatible servers
+                            if "error" in chunk:
+                                error_msg = chunk.get("error", {}).get("message", str(chunk.get("error")))
+                                logger.error(f"[OPENAI STREAM] Server returned error: {error_msg}")
+
+                                # Provide helpful context-specific error messages
+                                if "context" in error_msg.lower() and ("overflow" in error_msg.lower() or "length" in error_msg.lower()):
+                                    user_msg = (
+                                        f"**Context Length Error:** LM Studio loaded this model with only 4096 context, but Roampal needs ~6000 tokens.\n\n"
+                                        f"**Fix in LM Studio (must be done there, not in Roampal):**\n"
+                                        f"1. In LM Studio, **unload** the model first\n"
+                                        f"2. Change the Context Length slider to at least **8192** (16384+ recommended)\n"
+                                        f"3. **Load** the model again\n\n"
+                                        f"*LM Studio ignores context settings unless you reload the model. Roampal's context settings only work with Ollama.*\n\n"
+                                        f"*Or use Ollama instead:* `ollama pull {actual_model}` - it handles context automatically."
+                                    )
+                                else:
+                                    user_msg = f"**Model Error:** {error_msg}"
+
+                                yield {"type": "text", "content": user_msg}
+                                yield_count += 1
+                                break
+
                             delta = chunk.get("choices", [{}])[0].get("delta", {})
                             finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
 
                             # Log first few chunks for debugging
                             if line_count <= 3:
                                 logger.info(f"[OPENAI STREAM] Chunk {line_count}: delta keys = {list(delta.keys())}, finish_reason = {finish_reason}")
+                                # Log raw chunk for debugging empty responses
+                                logger.info(f"[OPENAI STREAM] Raw chunk {line_count}: {data_str[:500]}")
 
-                            # Handle content
+                            # Handle content (standard OpenAI format)
                             if "content" in delta and delta["content"]:
+                                # Close <think> tag if we were in reasoning mode
+                                if in_reasoning_mode:
+                                    yield {"type": "text", "content": "</think>"}
+                                    in_reasoning_mode = False
                                 yield {"type": "text", "content": delta["content"]}
                                 yield_count += 1
+
+                            # Handle reasoning_content (qwen3 thinking mode)
+                            # v0.2.5: Discard reasoning content entirely - users don't want to see it
+                            # LM Studio doesn't support enable_thinking=False, so we filter here
+                            elif "reasoning_content" in delta and delta["reasoning_content"]:
+                                # Just track that we're in reasoning mode (for proper </think> handling)
+                                # but don't emit the content
+                                if not in_reasoning_mode:
+                                    in_reasoning_mode = True
+                                    logger.debug(f"[OPENAI STREAM] Discarding reasoning_content (thinking mode)")
+                                # Don't yield reasoning content - skip it entirely
+
+                            # Universal fallback: check for any text-like field we haven't handled
+                            # Some models use non-standard field names
+                            elif not delta.get("tool_calls"):
+                                for key in ["text", "message", "response", "output", "generated_text"]:
+                                    if key in delta and delta[key]:
+                                        logger.warning(f"[OPENAI STREAM] Found content in non-standard field '{key}'")
+                                        yield {"type": "text", "content": delta[key]}
+                                        yield_count += 1
+                                        break
 
                             # Handle tool calls (accumulate chunks)
                             if "tool_calls" in delta:

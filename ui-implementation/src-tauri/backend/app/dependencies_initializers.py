@@ -28,7 +28,8 @@ from backend.modules.memory.file_memory_adapter import FileMemoryAdapter
 from backend.modules.web_search.playwright_web_scraper import PlaywrightWebScraper
 from backend.modules.prompt.prompt_engine import PromptEngine
 from backend.modules.intent.og_intent_router import OGIntentRouter
-from backend.modules.scoring.scoring_engine import ScoringEngine
+# REMOVED: Dead code - ScoringEngine module doesn't exist
+# from backend.modules.scoring.scoring_engine import ScoringEngine
 from backend.modules.memory.smart_book_processor import SmartBookProcessor
 # Removed: soul_layer_manager - using enhanced memory collections
 from backend.modules.ingestion.ingestion_manager import IngestionManager

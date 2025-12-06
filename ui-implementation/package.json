@@ -1,7 +1,8 @@
 {
   "name": "roampal-ui",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.2.5",
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=18.0.0",
@@ -10,6 +11,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:dev": "cross-env VITE_API_PORT=8766 tsc && cross-env VITE_API_PORT=8766 vite build",
+    "build:prod": "cross-env VITE_API_PORT=8765 tsc && cross-env VITE_API_PORT=8765 vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "verify:integration": "node scripts/verify-integration.mjs",

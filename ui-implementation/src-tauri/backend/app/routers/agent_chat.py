@@ -7,7 +7,6 @@ Single source of truth for all chat operations with memory context
 """
 
 
-
 import logging
 
 import json
@@ -47,7 +46,6 @@ from pydantic import BaseModel, validator
 from filelock import FileLock
 
 
-
 from modules.memory.unified_memory_system import UnifiedMemorySystem
 
 from modules.llm.ollama_client import OllamaClient
@@ -64,6 +62,7 @@ from config.model_limits import (
     calculate_token_budget,
     smart_truncate,
 )
+from utils.text_utils import extract_thinking
 
 # Initialize router and logger
 logger = logging.getLogger(__name__)
@@ -139,19 +138,11 @@ def use_dynamic_limits() -> bool:
     return os.getenv('ROAMPAL_CHAIN_STRATEGY', '').lower() != 'fixed'
 
 
-
-
-
-
-
 def _get_event_timestamp():
 
     """Get current timestamp in milliseconds for event ordering"""
 
     return int(time.time() * 1000)
-
-
-
 
 
 def _extract_and_strip_tag(content: str, tag_name: str) -> tuple[str, str]:
@@ -163,7 +154,6 @@ def _extract_and_strip_tag(content: str, tag_name: str) -> tuple[str, str]:
     Handles both <tag> and <tag> formats (DeepSeek vs Claude).
 
 
-
     Args:
 
         content: Raw text that may contain tags
@@ -171,11 +161,9 @@ def _extract_and_strip_tag(content: str, tag_name: str) -> tuple[str, str]:
         tag_name: Tag name without brackets (e.g., 'think', 'status')
 
 
-
     Returns:
 
         (tag_content, cleaned_text) - extracted tag content and text with tags removed
-
 
 
     Example:
@@ -191,7 +179,6 @@ def _extract_and_strip_tag(content: str, tag_name: str) -> tuple[str, str]:
     match = re.search(pattern, content, re.DOTALL)
 
 
-
     if match:
 
         tag_content = match.group(1).strip()
@@ -201,11 +188,7 @@ def _extract_and_strip_tag(content: str, tag_name: str) -> tuple[str, str]:
         return (tag_content, cleaned)
 
 
-
     return ("", content)
-
-
-
 
 
 def _strip_all_tags(content: str, *tag_names: str) -> str:
@@ -215,7 +198,6 @@ def _strip_all_tags(content: str, *tag_names: str) -> str:
     Strip multiple tag types from content (both complete and partial tags).
 
 
-
     Args:
 
         content: Text to clean
@@ -223,11 +205,9 @@ def _strip_all_tags(content: str, *tag_names: str) -> str:
         *tag_names: Tag names to remove (e.g., 'think', 'status')
 
 
-
     Returns:
 
         Cleaned text with all specified tags removed
-
 
 
     Example:
@@ -251,8 +231,7 @@ def _strip_all_tags(content: str, *tag_names: str) -> str:
     return cleaned.strip()
 
 
-
-
+# Thinking display feature removed (v0.2.5) - models dont reliably use thinking APIs
 
 
 def _format_search_results_as_citations(
@@ -268,11 +247,9 @@ def _format_search_results_as_citations(
     Convert memory search results to UI-friendly citation format.
 
 
-
     Uses exponential decay to convert distance to confidence score (0-1.0).
 
     Lower distance = higher confidence. Works with any distance range.
-
 
 
     Formula: confidence = exp(-distance / scale_factor)
@@ -282,13 +259,11 @@ def _format_search_results_as_citations(
     - Adjust scale_factor up for higher confidence scores, down for lower
 
 
-
     Args:
 
         search_results: List of memory search results with 'distance' field
 
         max_citations: Maximum number of citations to return
-
 
 
     Returns:
@@ -330,7 +305,6 @@ def _format_search_results_as_citations(
     return citations
 
 
-
 class AgentChatRequest(BaseModel):
 
     """Request model for agent chat with input validation"""
@@ -341,7 +315,6 @@ class AgentChatRequest(BaseModel):
 
     # Mode removed - RoamPal always uses memory
     # File attachments removed - use Document Processor for file uploads
-
 
 
     @validator('message')
@@ -369,7 +342,6 @@ class AgentChatRequest(BaseModel):
         return v.strip()
 
 
-
     @validator('conversation_id')
 
     def validate_conversation_id(cls, v):
@@ -383,9 +355,6 @@ class AgentChatRequest(BaseModel):
                 raise ValueError("Invalid conversation ID format")
 
         return v
-
-
-
 
 
 class AgentChatResponse(BaseModel):
@@ -407,13 +376,9 @@ class AgentChatResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = {}
 
 
-
-
-
 class AgentChatService:
 
     """Clean chat service with memory-enhanced responses"""
-
 
 
     def __init__(self, memory: UnifiedMemorySystem, llm: OllamaClient):
@@ -423,7 +388,6 @@ class AgentChatService:
         self.llm = llm
 
         self.flag_manager = get_flag_manager()
-
 
 
         # Model detection and limits (NEW)
@@ -439,7 +403,6 @@ class AgentChatService:
         logger.info(f"Initialized with model: {self.model_name}, dynamic limits: {self.use_dynamic_limits}")
 
 
-
         # Store conversation history with LRU cache to prevent memory leaks
 
         self.conversation_histories = OrderedDict()  # conversation_id -> list of messages
@@ -453,7 +416,6 @@ class AgentChatService:
         self.sessions_dir = memory.data_dir / "sessions" if memory else Path("data/sessions")
 
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
-
 
 
         # Load existing conversations from session files on startup
@@ -477,7 +439,6 @@ class AgentChatService:
         # Track last promotion time for hourly auto-promotion
 
         self.last_promotion_time = datetime.now()
-
 
 
         # Personality template cache (for performance)
@@ -536,7 +497,6 @@ class AgentChatService:
         }
 
 
-
     # Mode system removed - RoamPal always uses memory
 
     async def stream_message(
@@ -549,7 +509,7 @@ class AgentChatService:
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Stream tokens from LLM with memory context.
-        Yields: {"type": "token|thinking|tool_start|tool_complete|done", "content": ...}
+        Yields: {"type": "token|tool_start|tool_complete|done", "content": ...}
         """
         try:
             # CRITICAL: Always fetch latest llm_client from app_state (handles model switches)
@@ -737,14 +697,23 @@ class AgentChatService:
             # 3. Get tool definitions for streaming
             from utils.tool_definitions import AVAILABLE_TOOLS
             # Pass all memory tools (search_memory, create_memory, update_memory, archive_memory)
-            memory_tools = AVAILABLE_TOOLS
+            memory_tools = AVAILABLE_TOOLS.copy()
+
+            # v0.2.5: Add external MCP tools if available
+            from modules.mcp_client.manager import get_mcp_manager
+            mcp_manager = get_mcp_manager()
+            if mcp_manager:
+                external_tools = mcp_manager.get_all_tools_openai_format()
+                if external_tools:
+                    memory_tools = memory_tools + external_tools
+                    logger.info(f"[MCP] Added {len(external_tools)} external tools to LLM context")
 
             # 4. Stream from LLM with tools
             thinking_buffer = []
             in_thinking = False
             response_buffer = []
             full_response = []
-            thinking_content = ""
+            thinking_content = None  # Deprecated but kept for API compatibility
             tool_executions = []
             chain_depth = 0  # Track recursion depth for chaining
             MAX_CHAIN_DEPTH = 3  # Prevent infinite loops
@@ -766,12 +735,50 @@ class AgentChatService:
             ):
                 # Handle different event types from stream_response_with_tools
                 if event["type"] == "text":
-                    # Text chunk from LLM
+                    # Text chunk from LLM - stream tokens for real-time display
                     chunk = event["content"]
-
-                    # Thinking tags disabled (2025-10-17) - Stream all content directly
                     full_response.append(chunk)
-                    response_buffer.append(chunk)
+
+                    # v0.2.5: Filter thinking tags from streaming (prevent "flash of thinking")
+                    # Accumulate in buffer to handle tags split across chunks
+                    thinking_buffer.append(chunk)
+                    buffer_text = ''.join(thinking_buffer)
+
+                    # Check for thinking tag transitions
+                    if not in_thinking:
+                        # Look for opening tag
+                        think_start = buffer_text.lower().find('<think')
+                        if think_start != -1:
+                            # Yield any text before the thinking tag
+                            if think_start > 0:
+                                pre_think = buffer_text[:think_start]
+                                yield {"type": "token", "content": pre_think}
+                            in_thinking = True
+                            yield {"type": "thinking_start"}
+                            # Keep only the part from <think onwards
+                            thinking_buffer = [buffer_text[think_start:]]
+                            continue  # Don't yield thinking content
+
+                    if in_thinking:
+                        # Look for closing tag
+                        think_end = buffer_text.lower().find('</think')
+                        if think_end != -1:
+                            # Find the actual end of the closing tag
+                            close_end = buffer_text.find('>', think_end)
+                            if close_end != -1:
+                                in_thinking = False
+                                yield {"type": "thinking_end"}
+                                # Yield any text after the closing tag
+                                post_think = buffer_text[close_end + 1:]
+                                if post_think.strip():
+                                    yield {"type": "token", "content": post_think}
+                                thinking_buffer = []
+                        continue  # Don't yield thinking content
+
+                    # Not in thinking - yield the token normally
+                    # Clear buffer since we're yielding this content
+                    thinking_buffer = []
+                    yield {"type": "token", "content": chunk}
 
                     # Enhanced multi-pattern detection for universal model support
                     full_text = ''.join(full_response)
@@ -847,10 +854,9 @@ class AgentChatService:
                                 tools=None  # Don't pass tools on continuation
                             ):
                                 if event["type"] == "text":
+                                    # v0.2.5: Buffer only, no token yields
                                     chunk = event["content"]
                                     full_response.append(chunk)
-                                    # No filtering needed - tools handle memory operations
-                                    yield {"type": "token", "content": chunk}
 
                         yield {
                             "type": "tool_complete",
@@ -862,20 +868,7 @@ class AgentChatService:
                         tool_executions.append("multi_turn_handled")
                         break  # Exit the pattern loop after handling
 
-                    # Batch tokens (every 3 tokens or on punctuation)
-                    if len(response_buffer) >= 3 or chunk.rstrip().endswith(('.', '!', '?', '\n')):
-                        batched_content = ''.join(response_buffer)
-
-                        # Strip tool XML tags that models output alongside structured tool calls
-                        # Models sometimes output both <tool_call> XML AND structured tool_calls field
-                        batched_content = re.sub(r'</?tool_call[^>]*>', '', batched_content)
-                        batched_content = re.sub(r'</?(?:create_memory|update_memory|archive_memory)[^>]*>', '', batched_content)
-                        if batched_content.strip():
-                            yield {
-                                "type": "token",
-                                "content": batched_content
-                            }
-                        response_buffer = []
+                    # v0.2.5: Batch token logic removed - buffered response model
 
                 elif event["type"] == "tool_call":
                     # Tool call from LLM - execute using unified handler
@@ -919,17 +912,10 @@ class AgentChatService:
                     # Streaming complete
                     pass
 
-            # Send remaining buffer (no filtering needed - tools handle memory operations)
-            if response_buffer:
-                content = ''.join(response_buffer)
-                yield {
-                    "type": "token",
-                    "content": content
-                }
+            # v0.2.5: Buffer flush removed - using buffered response model
 
             # Get complete response for processing
             complete_response = ''.join(full_response)
-
 
             # INJECTION PROTECTION (Layer 3): Validate response for hijacking
             is_hijacked, hijack_reason = ResponseValidator.is_hijacked(complete_response)
@@ -938,17 +924,23 @@ class AgentChatService:
                 logger.error(f"[INJECTION DETECTED] Original response: {complete_response[:200]}")
                 complete_response = ResponseValidator.get_fallback_response()
                 full_response = [complete_response]  # Replace buffer
+
+            # v0.2.5: Extract and strip thinking tags (don't display, just remove)
+            # Thinking display removed due to model-dependent complexity
+            _, clean_response = extract_thinking(complete_response)
+
             # DEPRECATED: Extract inline tags as fallback (tools are preferred method now)
             # This maintains backwards compatibility if LLM outputs old-style tags
+            # NOTE: Pass clean_response (already stripped of thinking), not complete_response
             clean_response, memory_entries = await self._extract_and_store_memory_bank_tags(
-                complete_response, conversation_id
+                clean_response, conversation_id
             )
             if memory_entries:
                 logger.warning(f"[MEMORY_BANK] Detected {len(memory_entries)} old-style inline tags - LLM should use tools instead")
 
-            # Strip think tags from response content (thinking saved separately)
-            # Handle both complete and malformed tags (e.g., "</think" without ">")
-            clean_response = re.sub(r'</?think(?:ing)?[^>]*>?', '', clean_response).strip()
+            # v0.2.5: Yield complete response at once (buffered model)
+            if clean_response:
+                yield {"type": "response", "content": clean_response}
 
             # Store exchange in ChromaDB (CRITICAL: this was missing in streaming path)
             exchange_doc_id = None
@@ -971,6 +963,7 @@ class AgentChatService:
                     logger.error(f"[PERSIST] Failed to store in memory: {e}", exc_info=True)
 
             # Save to session file WITH doc_id, citations, and tool_events for UI persistence
+            logger.info(f"[SESSION] About to save session file for {conversation_id} (response: {len(clean_response)} chars)")
             await self._save_to_session_file(
                 conversation_id,
                 message,
@@ -1088,13 +1081,11 @@ class AgentChatService:
             }
 
 
-
     def _estimate_context_limit(self, query: str) -> int:
 
         """
 
         Intelligently estimate how many context memories are needed based on query.
-
 
 
         Returns appropriate limit for memory search to avoid over/under-fetching.
@@ -1104,13 +1095,11 @@ class AgentChatService:
         query_lower = query.lower()
 
 
-
         # Broad/comprehensive queries need more context
 
         if any(word in query_lower for word in ['all', 'everything', 'complete', 'full', 'show me', 'list']):
 
             return 20
-
 
 
         # Specific/targeted queries need minimal context
@@ -1120,7 +1109,6 @@ class AgentChatService:
             return 5
 
 
-
         # Medium complexity queries (how, why, explain, tell me about)
 
         if any(word in query_lower for word in ['how', 'why', 'explain', 'tell me', 'what is']):
@@ -1128,11 +1116,9 @@ class AgentChatService:
             return 12
 
 
-
         # Default: balanced context for general queries
 
         return 10
-
 
 
     async def _search_memory_with_collections(
@@ -1189,11 +1175,9 @@ class AgentChatService:
         context_limit = self._estimate_context_limit(query)
 
 
-
         collections_to_search = None if include_books else ["working", "history", "patterns", "memory_bank"]
 
         results = await self.memory.search(query, limit=context_limit, collections=collections_to_search, transparency_context=transparency_context)
-
 
 
         if transparency_context:
@@ -1211,7 +1195,6 @@ class AgentChatService:
             )
 
 
-
         return results
 
     def _build_openai_prompt(
@@ -1225,7 +1208,6 @@ class AgentChatService:
         """
         # Use the same unified prompt for consistency
         return self._build_complete_prompt(message, conversation_history)
-
 
 
     def _build_complete_prompt(
@@ -1344,15 +1326,17 @@ NEVER fabricate sources - only cite what search_memory actually returns.""")
 [Memory Creation Tool]
 
 **Why Storing Matters:**
-What you store NOW becomes context for FUTURE conversations. This is how you evolve from "helpful AI" to "personalized assistant who knows me."
-Store proactively - it's what makes Roampal feel continuous, not reset-every-session.
+What you store NOW becomes context for YOUR future conversations. This is how you evolve from "helpful AI" to "personalized assistant who knows me."
+Store proactively - it's what makes you continuous, not reset-every-session.
 
 **When to Store (create_memory):**
 ✓ User shares identity info: "My name is X" → store
 ✓ User shares preferences: "I prefer Y" → store
 ✓ User shares goals/projects: "Working on Z" → store
-✓ You discover what works for this user: "Full queries work better than keywords for this user" → store
-✓ You make a mistake: "I assumed X but user wanted Y - note for future" → store
+✓ You discover what works for this user → store (tag: system_mastery)
+✓ You make a mistake and learn from it → store (tag: agent_growth)
+✓ Knowledge gaps you want to fill → store (tag: learning_goal)
+✓ Patterns you're trying to master → store (tag: skill_gap)
 
 **When NOT to Store:**
 ✗ Session transcripts (working memory auto-captures)
@@ -1383,15 +1367,17 @@ Use this naturally: "This worked 3 times before" or "According to [source]..."
 
 Use Markdown: **bold**, *italic*, `code`, # headings, lists, ```code blocks```, > blockquotes""")
 
-        # 8. OUTCOME LEARNING
+        # 8. OUTCOME LEARNING (Automatic for internal system)
         parts.append("""
 
-[Outcome Learning]
+[Outcome Scoring - Automatic]
 
-The system learns from user feedback automatically:
-• User reactions ("thanks!", "that worked", "not what I meant") score both your response AND any memories you used
-• Helpful memories get promoted to patterns; unhelpful ones get demoted or removed
-• **Your role:** Respond naturally. The system handles learning automatically.""")
+The system automatically detects outcomes from user reactions:
+• User satisfied → memories you used get promoted (higher scores = easier to find)
+• User corrected you → memories get demoted (lower scores = filtered out)
+• This happens automatically - you don't need to do anything
+
+Your effectiveness improves because bad advice gets filtered out over time.""")
 
         # 9. ACTION-EFFECTIVENESS STATS
         parts.append("""
@@ -1468,11 +1454,9 @@ Always wait for function results before responding with detailed information."""
                     return None
 
 
-
             # Get current modification time
 
             current_mtime = self._personality_template_path.stat().st_mtime
-
 
 
             # Reload only if file changed or cache empty
@@ -1490,7 +1474,6 @@ Always wait for function results before responding with detailed information."""
                 logger.info("Loaded personality template")
 
 
-
             return self._personality_cache
 
         except Exception as e:
@@ -1500,13 +1483,11 @@ Always wait for function results before responding with detailed information."""
             return None
 
 
-
     def _template_to_prompt(self, template_data: Dict[str, Any]) -> str:
 
         """Convert YAML template to natural language prompt"""
 
         parts = []
-
 
 
         # Identity
@@ -1522,7 +1503,6 @@ Always wait for function results before responding with detailed information."""
         background = identity.get('background', '')
 
 
-
         parts.append(f"You are {name}, a {role}.")
 
         if expertise:
@@ -1534,11 +1514,9 @@ Always wait for function results before responding with detailed information."""
             parts.append(background)
 
 
-
         # Clear pronoun disambiguation
 
         parts.append("\nThe user is a distinct person. When they ask 'my name', 'my preferences', or 'what I said', they mean THEIR information (search memory_bank), not yours.")
-
 
 
         # Custom Instructions (moved up for prominence)
@@ -1550,7 +1528,6 @@ Always wait for function results before responding with detailed information."""
             parts.append(f"\n{custom}")
 
 
-
         # Communication Style (condensed)
 
         comm = template_data.get('communication', {})
@@ -1558,7 +1535,6 @@ Always wait for function results before responding with detailed information."""
         tone = comm.get('tone', 'neutral')
 
         verbosity = comm.get('verbosity', 'balanced')
-
 
 
         style_parts = [f"{tone} tone", f"{verbosity} responses"]
@@ -1576,9 +1552,7 @@ Always wait for function results before responding with detailed information."""
             style_parts.append("light humor ok")
 
 
-
         parts.append(f"\nStyle: {', '.join(style_parts)}")
-
 
 
         # Response Behavior (condensed)
@@ -1592,7 +1566,6 @@ Always wait for function results before responding with detailed information."""
             parts.append("Show reasoning with <think>...</think> when helpful.")
 
 
-
         # Traits
 
         traits = template_data.get('personality_traits', [])
@@ -1602,9 +1575,7 @@ Always wait for function results before responding with detailed information."""
             parts.append(f"Traits: {', '.join(traits)}")
 
 
-
         return "\n".join(parts)
-
 
 
     async def _persist_conversation_turn(
@@ -1632,11 +1603,9 @@ Always wait for function results before responding with detailed information."""
         Persist a complete conversation turn (user + assistant messages).
 
 
-
         This is the single source of truth for saving conversations to disk and memory.
 
         Handles: response cleaning, memory storage, session file persistence, title generation.
-
 
 
         Args:
@@ -1654,7 +1623,6 @@ Always wait for function results before responding with detailed information."""
             search_results: Memory search results (for citations)
 
             session_file: Path to session JSONL file
-
 
 
         Returns:
@@ -1675,7 +1643,6 @@ Always wait for function results before responding with detailed information."""
         clean_response = re.sub(r'</?think(?:ing)?[^>]*>?', '', clean_response)
 
 
-
         # Strip fake tool call artifacts that LLM might hallucinate
 
         clean_response = re.sub(r'\[search_memory\([^\]]*\)\]', '', clean_response)
@@ -1691,7 +1658,6 @@ Always wait for function results before responding with detailed information."""
         clean_response = clean_response.strip()
 
 
-
         # Step 2: Extract and store memory bank tags
 
         clean_response, memory_bank_entries = await self._extract_and_store_memory_bank_tags(
@@ -1699,7 +1665,6 @@ Always wait for function results before responding with detailed information."""
             clean_response, conversation_id
 
         )
-
 
 
         # Step 3: Store exchange in memory (working collection)
@@ -1739,7 +1704,6 @@ Always wait for function results before responding with detailed information."""
                 logger.error(f"[PERSIST] Failed to store in memory: {e}", exc_info=True)
 
 
-
         # Step 4: Clean thinking content
 
         clean_thinking = None
@@ -1762,11 +1726,9 @@ Always wait for function results before responding with detailed information."""
                 clean_thinking = None
 
 
-
         # Step 5: Format citations for persistence
 
         formatted_citations = _format_search_results_as_citations(search_results) if search_results else []
-
 
 
         # Step 6: Save to session file
@@ -1798,7 +1760,6 @@ Always wait for function results before responding with detailed information."""
             raise  # Re-raise to allow caller to handle
 
 
-
         # Step 7: Auto-generate title after first exchange (2 messages total)
 
         try:
@@ -1810,7 +1771,6 @@ Always wait for function results before responding with detailed information."""
                     message_count = sum(1 for _ in f)
 
 
-
                 if message_count == 2:
 
                     # Ensure lock exists for this conversation
@@ -1818,7 +1778,6 @@ Always wait for function results before responding with detailed information."""
                     if conversation_id not in self.title_locks:
 
                         self.title_locks[conversation_id] = asyncio.Lock()
-
 
 
                     # Use per-conversation lock to prevent duplicate title generation
@@ -1832,7 +1791,6 @@ Always wait for function results before responding with detailed information."""
                             recheck_count = sum(1 for _ in f)
 
 
-
                         if recheck_count == 2:
 
                             # Generate title from the first exchange
@@ -1840,15 +1798,12 @@ Always wait for function results before responding with detailed information."""
                             title_prompt = f"""Based on this conversation, generate a brief 3-6 word title:
 
 
-
 User: {user_message}
 
 Assistant: {clean_response[:200]}
 
 
-
 Respond with ONLY the title, nothing else."""
-
 
 
                             try:
@@ -1864,15 +1819,10 @@ Respond with ONLY the title, nothing else."""
                                 )
 
 
-
                                 if title_response and title_response.strip():
 
-                                    # Clean the title
-
-                                    title = title_response.strip()
-
-                                    # Handle both complete and malformed tags
-                                    title = re.sub(r'</?think(?:ing)?[^>]*>?.*?(?:</think(?:ing)?[^>]*>?)?\s*', '', title, flags=re.DOTALL).strip()
+                                    # Clean the title - use extract_thinking for robust tag stripping
+                                    _, title = extract_thinking(title_response.strip())
 
                                     title = title.strip('"').strip("'").strip()
 
@@ -1887,7 +1837,6 @@ Respond with ONLY the title, nothing else."""
                                         title = title[:47] + "..."
 
 
-
                                     # Update session file with title
 
                                     if hasattr(self, 'memory') and self.memory:
@@ -1896,9 +1845,7 @@ Respond with ONLY the title, nothing else."""
                                         logger.warning(f"[PERSIST] Cannot update title: memory system not available")
 
 
-
                                     logger.info(f"[PERSIST] Auto-generated title for {conversation_id}: {title}")
-
 
 
                                     # Return title so caller can yield it to frontend
@@ -1914,9 +1861,7 @@ Respond with ONLY the title, nothing else."""
             logger.warning(f"[PERSIST] Failed to check message count for title generation: {e}")
 
 
-
         return exchange_doc_id, None
-
 
 
     async def _generate_title_if_needed(self, conversation_id: str, user_message: str, assistant_response: str) -> Optional[str]:
@@ -1969,10 +1914,8 @@ Respond with ONLY the title, nothing else."""
                     )
 
                     if title_response and title_response.strip():
-                        # Clean the title
-                        title = title_response.strip()
-                        # Handle both complete and malformed tags
-                        title = re.sub(r'</?think(?:ing)?[^>]*>?.*?(?:</think(?:ing)?[^>]*>?)?\s*', '', title, flags=re.DOTALL).strip()
+                        # Clean the title - use extract_thinking for robust tag stripping
+                        _, title = extract_thinking(title_response.strip())
                         title = title.strip('"').strip("'").strip()
                         title = title.replace('**', '').replace('*', '').strip()
                         if '\n' in title:
@@ -1980,7 +1923,6 @@ Respond with ONLY the title, nothing else."""
                         if len(title) > 50:
                             title = title[:47] + "..."
 
-                        # Update session file with title
                         # Update session file with title
                         if hasattr(self, 'memory') and self.memory:
                             await self.memory.file_adapter.update_session_title(conversation_id, title)
@@ -2009,7 +1951,6 @@ Respond with ONLY the title, nothing else."""
             timestamp = datetime.now().isoformat()
 
 
-
             # Save user message in the expected format
 
             user_entry = {
@@ -2025,7 +1966,6 @@ Respond with ONLY the title, nothing else."""
                 "metadata": {}
 
             }
-
 
 
             # Save assistant response in the expected format with thinking in metadata
@@ -2045,13 +1985,11 @@ Respond with ONLY the title, nothing else."""
             }
 
 
-
             # Add thinking to metadata if present
 
             if thinking:
 
                 assistant_entry["metadata"]["thinking"] = thinking
-
 
 
             # Add hybrid events to metadata if present
@@ -2061,7 +1999,6 @@ Respond with ONLY the title, nothing else."""
                 assistant_entry["metadata"]["hybridEvents"] = hybrid_events
 
 
-
             # Add tool results to metadata if present
 
             if tool_results:
@@ -2069,12 +2006,10 @@ Respond with ONLY the title, nothing else."""
                 assistant_entry["metadata"]["toolResults"] = tool_results
 
 
-
             # Add tool events for UI persistence (tool icons persist across page refresh)
             # Format: [{"type": "tool_complete", "tool": "search_memory", "result_count": 5, "chain_depth": 0}, ...]
             if tool_events:
                 assistant_entry["metadata"]["toolEvents"] = tool_events
-
 
 
             # Add model name to metadata for tracking which model generated this response
@@ -2084,7 +2019,6 @@ Respond with ONLY the title, nothing else."""
                 assistant_entry["metadata"]["model_name"] = self.llm.model_name
 
 
-
             # Add citations if present
 
             if citations:
@@ -2092,13 +2026,11 @@ Respond with ONLY the title, nothing else."""
                 assistant_entry["citations"] = citations
 
 
-
             # Add doc_id if provided (for outcome tracking)
 
             if doc_id:
 
                 assistant_entry["doc_id"] = doc_id
-
 
 
             # Use file locking and atomic writes to prevent corruption
@@ -2112,7 +2044,6 @@ Respond with ONLY the title, nothing else."""
                 temp_file = session_file.with_suffix('.tmp')
 
 
-
                 # Read existing content if file exists
 
                 existing_content = ""
@@ -2122,7 +2053,6 @@ Respond with ONLY the title, nothing else."""
                     with open(session_file, 'r', encoding='utf-8') as f:
 
                         existing_content = f.read()
-
 
 
                 # Write all content (existing + new) to temp file
@@ -2142,19 +2072,16 @@ Respond with ONLY the title, nothing else."""
                     os.fsync(f.fileno())  # Force write to disk
 
 
-
                 # Atomic rename
 
                 temp_file.replace(session_file)
 
 
-
-            logger.debug(f"Saved conversation turn to {session_file}")
+            logger.info(f"[SESSION] Saved conversation turn to {session_file} (user: {len(user_message)} chars, assistant: {len(assistant_response)} chars)")
 
         except Exception as e:
 
-            logger.error(f"Failed to save conversation to session file: {e}")
-
+            logger.error(f"[SESSION] Failed to save conversation to session file: {e}", exc_info=True)
 
 
     def _load_conversation_histories(self):
@@ -2186,7 +2113,6 @@ Respond with ONLY the title, nothing else."""
                                 messages.append(msg)
 
 
-
                         if messages:
 
                             self.conversation_histories[conversation_id] = messages
@@ -2198,7 +2124,6 @@ Respond with ONLY the title, nothing else."""
                     logger.warning(f"Failed to load conversation {conversation_id}: {e}")
 
 
-
             logger.info(f"Loaded {len(self.conversation_histories)} conversations from session files")
 
         except Exception as e:
@@ -2206,11 +2131,7 @@ Respond with ONLY the title, nothing else."""
             logger.error(f"Failed to load conversation histories: {e}", exc_info=True)
 
 
-
     # System now provides direct responses only, like Claude
-
-
-
 
 
     def _format_citations(self, memory_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -2337,22 +2258,51 @@ Respond with ONLY the title, nothing else."""
                     _search_cache[conversation_id] = doc_ids
                     logger.debug(f"[SEARCH_CACHE] Cached {len(doc_ids)} doc_ids for conversation {conversation_id}")
 
-            # Format results
+            # Format results with metadata (v0.2.5: include book titles for LLM visibility)
             if tool_results:
                 tool_response_content = "Found relevant memories:\n"
                 for idx, r in enumerate(tool_results[:5], start=1):
                     content = r.get('text', r.get('content', ''))[:200]
                     collection = r.get('collection', 'unknown')
-                    tool_response_content += f"[{idx}] ({collection}): {content}...\n"
+                    metadata = r.get('metadata', {})
+
+                    # Include source context for books collection
+                    source_info = ""
+                    if collection == "books":
+                        title = metadata.get('title') or metadata.get('book_title') or metadata.get('source_context')
+                        author = metadata.get('author')
+                        if title:
+                            source_info = f" from \"{title}\""
+                            if author:
+                                source_info += f" by {author}"
+
+                    tool_response_content += f"[{idx}] ({collection}{source_info}): {content}...\n"
                     citations.append(self._format_citation(r, idx))
             else:
                 tool_response_content = "No relevant memories found for this query. I'll answer based on my general knowledge."
                 logger.info(f"[TOOL] No memories found for query: {query}")
 
+            # v0.2.4: Build preview from first 2-3 results for UI display
+            result_preview = None
+            if tool_results and len(tool_results) > 0:
+                previews = []
+                for r in tool_results[:3]:
+                    # Try to get a short identifier (title, book name, or first 30 chars)
+                    title = r.get('metadata', {}).get('title') or r.get('metadata', {}).get('book_title')
+                    if title:
+                        previews.append(title[:25])
+                    else:
+                        text_content = r.get('text', r.get('content', ''))[:25]
+                        if text_content:
+                            previews.append(text_content + '...' if len(text_content) == 25 else text_content)
+                if previews:
+                    result_preview = ', '.join(previews)
+
             tool_execution_record = {
                 "tool": "search_memory",
                 "status": "completed",
                 "result_count": len(tool_results) if tool_results else 0,
+                "result_preview": result_preview,
                 "chain_depth": chain_depth
             }
 
@@ -2360,6 +2310,7 @@ Respond with ONLY the title, nothing else."""
                 "type": "tool_complete",
                 "tool": "search_memory",
                 "result_count": len(tool_results) if tool_results else 0,
+                "result_preview": result_preview,
                 "chain_depth": chain_depth
             }
 
@@ -2492,12 +2443,75 @@ Respond with ONLY the title, nothing else."""
                         "chain_depth": chain_depth
                     }
 
+        else:
+            # v0.2.5: Handle external MCP tools
+            from modules.mcp_client.manager import get_mcp_manager
+            mcp_manager = get_mcp_manager()
+
+            if mcp_manager and mcp_manager.is_external_tool(tool_name):
+                logger.info(f"[MCP TOOL] Executing external tool: {tool_name}")
+
+                success, result = await mcp_manager.execute_tool(tool_name, tool_args)
+
+                if success:
+                    tool_response_content = f"Tool '{tool_name}' result:\n{result}"
+                    tool_execution_record = {
+                        "tool": tool_name,
+                        "status": "completed",
+                        "result_preview": str(result)[:100] if result else None,
+                        "chain_depth": chain_depth
+                    }
+                    tool_event_for_ui = {
+                        "type": "tool_complete",
+                        "tool": tool_name,
+                        "status": "success",
+                        "result_preview": str(result)[:100] if result else None,
+                        "chain_depth": chain_depth
+                    }
+                    logger.info(f"[MCP TOOL] {tool_name} completed successfully")
+                else:
+                    tool_response_content = f"Tool '{tool_name}' failed: {result}"
+                    tool_execution_record = {
+                        "tool": tool_name,
+                        "status": "failed",
+                        "error": str(result),
+                        "chain_depth": chain_depth
+                    }
+                    tool_event_for_ui = {
+                        "type": "tool_complete",
+                        "tool": tool_name,
+                        "status": "failed",
+                        "error": str(result),
+                        "chain_depth": chain_depth
+                    }
+                    logger.error(f"[MCP TOOL] {tool_name} failed: {result}")
+            else:
+                # Unknown tool
+                logger.warning(f"[TOOL] Unknown tool called: {tool_name}")
+                tool_response_content = f"Unknown tool: {tool_name}"
+                tool_execution_record = {
+                    "tool": tool_name,
+                    "status": "unknown",
+                    "chain_depth": chain_depth
+                }
+                tool_event_for_ui = {
+                    "type": "tool_complete",
+                    "tool": tool_name,
+                    "status": "unknown",
+                    "chain_depth": chain_depth
+                }
+
         # Yield tool complete event
         if tool_event_for_ui:
             yield tool_event_for_ui
 
-        # Handle continuation for search_memory (regardless of result count, under depth limit)
-        if tool_name == "search_memory" and chain_depth < max_depth:
+        # Handle continuation for search_memory and external MCP tools (regardless of result count, under depth limit)
+        # v0.2.5: Also handle external tool results
+        from modules.mcp_client.manager import get_mcp_manager
+        mcp_mgr = get_mcp_manager()
+        is_external_tool = mcp_mgr and mcp_mgr.is_external_tool(tool_name) if mcp_mgr else False
+
+        if (tool_name == "search_memory" or is_external_tool) and chain_depth < max_depth and tool_response_content:
             logger.info(f"[CHAIN] Continuing with tool results at depth {chain_depth}")
 
             # Build conversation with results
@@ -2508,23 +2522,17 @@ Respond with ONLY the title, nothing else."""
 
             # Continue streaming WITHOUT tools - LLM already has results, no need to search again
             chain_depth += 1
+            continuation_prompt = "Continue your response using the tool results above."
             async for continuation_event in self.llm.stream_response_with_tools(
-                prompt="Continue your response using the search results above.",
+                prompt=continuation_prompt,
                 history=conversation_with_tools,
                 model=self.model_name,
                 tools=None  # Don't pass tools on continuation - prevents recursive searches
             ):
                 if continuation_event["type"] == "text":
+                    # v0.2.5: Buffer only, no token yields
                     chunk = continuation_event["content"]
-                    if not in_thinking and not chunk.startswith('<think'):
-                        response_buffer.append(chunk)
-                        full_response.append(chunk)
-                        if len(response_buffer) >= 3:
-                            yield {
-                                "type": "token",
-                                "content": ''.join(response_buffer)
-                            }
-                            response_buffer.clear()
+                    full_response.append(chunk)
 
                 elif continuation_event["type"] == "tool_call":
                     # RECURSIVE: Handle chained tool calls
@@ -2551,13 +2559,7 @@ Respond with ONLY the title, nothing else."""
                         ):
                             yield nested_event
 
-            # Flush remaining buffer from continuation
-            if response_buffer:
-                yield {
-                    "type": "token",
-                    "content": ''.join(response_buffer)
-                }
-                response_buffer.clear()
+            # v0.2.5: Buffer flush removed - buffered response model
 
         # Yield execution record and UI event as final result (caller checks for tuple)
         yield (tool_execution_record, tool_event_for_ui)
@@ -2571,13 +2573,11 @@ Respond with ONLY the title, nothing else."""
         Also handles [MEMORY_BANK_UPDATE: ...] and [MEMORY_BANK_ARCHIVE: ...] tags.
 
 
-
         Args:
 
             clean_response: LLM response with thinking tags already removed
 
             conversation_id: Current conversation ID
-
 
 
         Returns:
@@ -2589,11 +2589,9 @@ Respond with ONLY the title, nothing else."""
         memory_bank_entries = []
 
 
-
         # Pattern for CREATE: [MEMORY_BANK: tag="..." content="..."]
 
         create_pattern = r'\[MEMORY_BANK:\s*tag="([^"]+)"\s*content="((?:[^"\\]|\\.)*)"\]'
-
 
 
         # Pattern for UPDATE: [MEMORY_BANK_UPDATE: match="..." content="..."]
@@ -2601,11 +2599,9 @@ Respond with ONLY the title, nothing else."""
         update_pattern = r'\[MEMORY_BANK_UPDATE:\s*match="((?:[^"\\]|\\.)*)"\s*content="((?:[^"\\]|\\.)*)"\]'
 
 
-
         # Pattern for ARCHIVE: [MEMORY_BANK_ARCHIVE: match="..."]
 
         archive_pattern = r'\[MEMORY_BANK_ARCHIVE:\s*match="((?:[^"\\]|\\.)*)"\]'
-
 
 
         # Extract CREATE tags
@@ -2621,7 +2617,6 @@ Respond with ONLY the title, nothing else."""
             logger.info(f"[MEMORY_BANK] Detected CREATE: tag={tag}, content={content[:50]}...")
 
 
-
         # Extract UPDATE tags
 
         for match in re.finditer(update_pattern, clean_response):
@@ -2635,7 +2630,6 @@ Respond with ONLY the title, nothing else."""
             logger.info(f"[MEMORY_BANK] Detected UPDATE: match={match_text[:30]}..., new content={new_content[:50]}...")
 
 
-
         # Extract ARCHIVE tags
 
         for match in re.finditer(archive_pattern, clean_response):
@@ -2645,7 +2639,6 @@ Respond with ONLY the title, nothing else."""
             memory_bank_entries.append({"action": "archive", "match": match_text})
 
             logger.info(f"[MEMORY_BANK] Detected ARCHIVE: match={match_text[:50]}...")
-
 
 
         # Remove all memory bank tags from user-facing response
@@ -2661,7 +2654,6 @@ Respond with ONLY the title, nothing else."""
             clean_response = clean_response.strip()
 
 
-
         # Process memory bank operations
 
         if self.memory:
@@ -2673,7 +2665,6 @@ Respond with ONLY the title, nothing else."""
                     import json
 
                     now = datetime.now().isoformat()
-
 
 
                     if entry["action"] == "create":
@@ -2713,7 +2704,6 @@ Respond with ONLY the title, nothing else."""
                         logger.info(f"[MEMORY_BANK] Created: {entry['content'][:50]}... with tag={entry['tag']}")
 
 
-
                     elif entry["action"] == "update":
 
                         # Find matching memory by semantic search
@@ -2751,7 +2741,6 @@ Respond with ONLY the title, nothing else."""
                             logger.warning(f"[MEMORY_BANK] UPDATE failed: no match found for '{entry['match'][:30]}...'")
 
 
-
                     elif entry["action"] == "archive":
 
                         # Find matching memory by semantic search
@@ -2787,17 +2776,12 @@ Respond with ONLY the title, nothing else."""
                             logger.warning(f"[MEMORY_BANK] ARCHIVE failed: no match found for '{entry['match'][:30]}...'")
 
 
-
                 except Exception as e:
 
                     logger.error(f"[MEMORY_BANK] Failed to process {entry.get('action', 'unknown')} operation: {e}")
 
 
-
         return clean_response, memory_bank_entries
-
-
-
 
 
 # Global service instance
@@ -2861,14 +2845,17 @@ async def _run_generation_task(
         citations = []
 
         async def accumulate_stream():
+            nonlocal thinking
             async for event in agent_service.stream_message(
                 message=request.message,
                 conversation_id=conversation_id,
                 app_state=app_state
             ):
-                if event["type"] == "token":
+                # v0.2.5: Buffered response model
+                if event["type"] == "response":
                     final_response.append(event["content"])
-                # Thinking tags removed (2025-10-17) - event type no longer generated
+                elif event["type"] == "thinking":
+                    thinking = event["content"]
                 elif event["type"] == "done":
                     nonlocal citations
                     citations = event.get("citations", [])
@@ -2943,7 +2930,6 @@ async def _run_generation_task(
                 pass
 
 
-
 # Background task for async generation with WebSocket streaming (new streaming version)
 async def _run_generation_task_streaming(
     conversation_id: str,
@@ -2985,25 +2971,44 @@ async def _run_generation_task_streaming(
         citations = []
 
         # Stream from agent service
+        # IMPORTANT: Must fully consume generator to ensure session file is saved
+        # Even if WebSocket disconnects, we continue to drain the generator
+        websocket_disconnected = False
         async for event in agent_service.stream_message(
             message=request.message,
             conversation_id=conversation_id,
             app_state=app_state
         ):
-            # Check if WebSocket is still connected (early exit if client disconnected)
-            if not websocket or (hasattr(websocket, 'client_state') and websocket.client_state.name != 'CONNECTED'):
-                logger.info(f"[CANCEL] WebSocket disconnected for {conversation_id}, stopping generation")
-                break
+            # Check if WebSocket is still connected
+            if not websocket_disconnected and (not websocket or (hasattr(websocket, 'client_state') and websocket.client_state.name != 'CONNECTED')):
+                logger.info(f"[DISCONNECT] WebSocket disconnected for {conversation_id}, continuing to save session")
+                websocket_disconnected = True
+                # DON'T break - continue consuming generator to ensure save happens
 
-            # Send events to WebSocket
+            # Send events to WebSocket (skip if disconnected)
+            # v0.2.5 RESTORED: Stream tokens for interleaved tool/response display
             if event["type"] == "token":
+                # Stream token for real-time display
                 full_response.append(event["content"])
-                await websocket.send_json({
-                    "type": "token",
-                    "content": event["content"]
-                })
+                if not websocket_disconnected:
+                    await websocket.send_json(event)
 
-            # Thinking tags removed (2025-10-17) - event type no longer generated
+            elif event["type"] == "thinking":
+                # Thinking content from buffered response
+                if not websocket_disconnected:
+                    await websocket.send_json({
+                        "type": "thinking",
+                        "content": event["content"]
+                    })
+
+            elif event["type"] == "response":
+                # Complete response from buffered model
+                full_response.append(event["content"])
+                if not websocket_disconnected:
+                    await websocket.send_json({
+                        "type": "response",
+                        "content": event["content"]
+                    })
 
             elif event["type"] == "tool_start":
                 tool_executions.append({
@@ -3011,7 +3016,8 @@ async def _run_generation_task_streaming(
                     "status": "running",
                     "arguments": event.get("arguments")
                 })
-                await websocket.send_json(event)
+                if not websocket_disconnected:
+                    await websocket.send_json(event)
 
             elif event["type"] == "tool_complete":
                 # Update tool status
@@ -3019,35 +3025,40 @@ async def _run_generation_task_streaming(
                     if tool["tool"] == event["tool"] and tool["status"] == "running":
                         tool["status"] = "completed"
                         break
-                await websocket.send_json(event)
+                if not websocket_disconnected:
+                    await websocket.send_json(event)
 
             elif event["type"] == "memory_searched":
-                await websocket.send_json({
-                    "type": "status",
-                    "status": "memory_search",
-                    "message": f"Searched {event['count']} memories from {', '.join(event['collections'])}"
-                })
+                if not websocket_disconnected:
+                    await websocket.send_json({
+                        "type": "status",
+                        "status": "memory_search",
+                        "message": f"Searched {event['count']} memories from {', '.join(event['collections'])}"
+                    })
 
             elif event["type"] == "title":
                 # Forward title event from Layer 1 to frontend
-                await websocket.send_json(event)
+                if not websocket_disconnected:
+                    await websocket.send_json(event)
+
 
             elif event["type"] == "done" or event["type"] == "stream_complete":
                 # Just forward the stream_complete event from Layer 1 (generator)
                 # Layer 1 already includes citations, memory_updated flag, and timestamp
-                if "content" in event:
-                    # Validation error - send as dedicated event
-                    logger.info(f"Done event with validation error: {event['content']}")
-                    await websocket.send_json({
-                        "type": "validation_error",
-                        "message": event["content"]
-                    })
-                else:
-                    # Normal completion - forward with conversation_id
-                    await websocket.send_json({
-                        **event,  # Forward all fields from Layer 1
-                        "conversation_id": conversation_id
-                    })
+                if not websocket_disconnected:
+                    if "content" in event:
+                        # Validation error - send as dedicated event
+                        logger.info(f"Done event with validation error: {event['content']}")
+                        await websocket.send_json({
+                            "type": "validation_error",
+                            "message": event["content"]
+                        })
+                    else:
+                        # Normal completion - forward with conversation_id
+                        await websocket.send_json({
+                            **event,  # Forward all fields from Layer 1
+                            "conversation_id": conversation_id
+                        })
 
             elif event["type"] == "error":
                 raise Exception(event["message"])
@@ -3060,7 +3071,7 @@ async def _run_generation_task_streaming(
         with _task_lock:
             _generation_tasks[conversation_id]['status'] = 'complete'
             _generation_tasks[conversation_id]['response'] = ''.join(full_response)
-            _generation_tasks[conversation_id]['thinking'] = thinking_content
+            # thinking_content removed (v0.2.5)
             _generation_tasks[conversation_id]['completed_at'] = datetime.now().isoformat()
 
     except asyncio.CancelledError:
@@ -3099,13 +3110,6 @@ async def _run_generation_task_streaming(
 # Removed startup event - will use lazy initialization in endpoints instead
 
 # The startup event runs before app.state is populated by lifespan
-
-
-
-
-
-
-
 
 
 @router.get("/progress/{conversation_id}")
@@ -3147,7 +3151,6 @@ async def get_generation_progress(conversation_id: str):
         }
 
 
-
 @router.post("/stream")
 
 async def agent_chat_stream(request: AgentChatRequest, req: Request):
@@ -3159,7 +3162,6 @@ async def agent_chat_stream(request: AgentChatRequest, req: Request):
     """
 
     global agent_service
-
 
 
     if not agent_service:
@@ -3175,7 +3177,6 @@ async def agent_chat_stream(request: AgentChatRequest, req: Request):
     else:
 
         agent_service.llm = req.app.state.llm_client
-
 
 
     conversation_id = request.conversation_id or f"conv_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(8)}"
@@ -3297,13 +3298,11 @@ async def cleanup_sessions(req: Request):
             return {"status": "success", "message": "No sessions directory found", "cleaned": 0}
 
 
-
         cutoff_date = datetime.now() - timedelta(days=days_to_keep)
 
         cleaned = 0
 
         kept = 0
-
 
 
         for session_file in sessions_dir.glob("*.jsonl"):
@@ -3327,7 +3326,6 @@ async def cleanup_sessions(req: Request):
                         session_date = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
 
 
-
                         if session_date < cutoff_date:
 
                             if not dry_run:
@@ -3347,7 +3345,6 @@ async def cleanup_sessions(req: Request):
                 continue
 
 
-
         return {
 
             "status": "success",
@@ -3363,13 +3360,11 @@ async def cleanup_sessions(req: Request):
         }
 
 
-
     except Exception as e:
 
         logger.error(f"Error during session cleanup: {e}")
 
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 @router.post("/switch-conversation")
@@ -3385,7 +3380,6 @@ async def switch_conversation(req: Request):
     global agent_service
 
 
-
     if not agent_service:
 
         agent_service = AgentChatService(
@@ -3395,7 +3389,6 @@ async def switch_conversation(req: Request):
             llm=req.app.state.llm_client
 
         )
-
 
 
     # Use conversation lock to prevent race conditions
@@ -3409,7 +3402,6 @@ async def switch_conversation(req: Request):
         old_id = body.get("old_conversation_id", "")
 
         new_id = body.get("new_conversation_id", "")
-
 
 
         # Allow null for clearing session (lazy conversation creation)
@@ -3428,9 +3420,7 @@ async def switch_conversation(req: Request):
             }
 
 
-
         logger.info(f"Switching conversation from {old_id} to {new_id}")
-
 
 
         # Trigger memory promotion asynchronously (don't block response)
@@ -3446,13 +3436,11 @@ async def switch_conversation(req: Request):
             logger.info(f"Memory promotion queued for conversation {old_id}")
 
 
-
             # Update conversation ID immediately
 
             agent_service.memory.conversation_id = new_id
 
             logger.info(f"Memory system conversation ID updated to {new_id}")
-
 
 
         return {
@@ -3466,9 +3454,6 @@ async def switch_conversation(req: Request):
             "message": f"Switched from {old_id} to {new_id} (memory promotion queued)"
 
         }
-
-
-
 
 
 @router.post("/create-conversation")
@@ -3486,19 +3471,19 @@ async def create_conversation(req: Request):
     conversation_id = f"conv_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(8)}"
 
 
-
     # Create empty session file immediately to prevent phantom conversations
+    # Use AppData path from memory system if available
+    memory = req.app.state.memory
+    if memory and hasattr(memory, 'data_dir'):
+        sessions_dir = memory.data_dir / "sessions"
+    else:
+        sessions_dir = Path("data/sessions")
 
-    session_file = Path(f"data/sessions/{conversation_id}.jsonl")
-
+    session_file = sessions_dir / f"{conversation_id}.jsonl"
     session_file.parent.mkdir(parents=True, exist_ok=True)
-
     session_file.touch()  # Create empty file
 
-
-
-    logger.info(f"Created new conversation: {conversation_id}")
-
+    logger.info(f"[SESSION] Created new conversation: {conversation_id} at {session_file}")
 
 
     return {
@@ -3508,9 +3493,6 @@ async def create_conversation(req: Request):
         "created_at": datetime.now().isoformat()
 
     }
-
-
-
 
 
 @router.post("/generate-title")
@@ -3530,7 +3512,6 @@ async def generate_title(req: Request):
     messages = body.get("messages", [])
 
 
-
     if not messages:
 
         # Fallback if no messages provided
@@ -3542,7 +3523,6 @@ async def generate_title(req: Request):
             "fallback": True
 
         }
-
 
 
     try:
@@ -3558,13 +3538,10 @@ async def generate_title(req: Request):
         ])
 
 
-
         title_prompt = f"""Generate a brief, descriptive title (3-6 words) for this conversation:
 
 
-
 {conversation_text}
-
 
 
 Title should be specific and capture the main topic. Examples:
@@ -3578,9 +3555,7 @@ Title should be specific and capture the main topic. Examples:
 - Roampal Setup Guide
 
 
-
 Respond with ONLY the title, nothing else."""
-
 
 
         # Get LLM client from app state (use current model, don't create new instance)
@@ -3588,7 +3563,6 @@ Respond with ONLY the title, nothing else."""
             raise HTTPException(status_code=503, detail="LLM service not initialized")
 
         llm_client = req.app.state.llm_client
-
 
 
         # Generate title using generate_response
@@ -3604,19 +3578,13 @@ Respond with ONLY the title, nothing else."""
         )
 
 
-
         if title_response and title_response.strip():
 
             # Clean up the title - remove thinking tags if present
-
             title = title_response.strip()
 
-
-
-            # Remove <think> tags if model included them (handle malformed tags)
-
-            title = re.sub(r'</?think(?:ing)?[^>]*>?.*?(?:</think(?:ing)?[^>]*>?)?\s*', '', title, flags=re.DOTALL).strip()
-
+            # Remove <think> tags if model included them (uses utility for consistency)
+            _, title = extract_thinking(title)
 
 
             # Remove quotes if present
@@ -3624,11 +3592,9 @@ Respond with ONLY the title, nothing else."""
             title = title.strip('"').strip("'").strip()
 
 
-
             # Remove markdown formatting
 
             title = title.replace('**', '').replace('*', '').strip()
-
 
 
             # If title still has multiple lines, take first line
@@ -3638,7 +3604,6 @@ Respond with ONLY the title, nothing else."""
                 title = title.split('\n')[0].strip()
 
 
-
             # Limit length
 
             if len(title) > 50:
@@ -3646,13 +3611,11 @@ Respond with ONLY the title, nothing else."""
                 title = title[:47] + "..."
 
 
-
             # Fallback if empty after cleaning
 
             if not title:
 
                 raise Exception("Title empty after cleaning")
-
 
 
             # Update the session file with the new title
@@ -3665,7 +3628,6 @@ Respond with ONLY the title, nothing else."""
                 await self.memory.file_adapter.update_session_title(conversation_id, title)
             else:
                 logger.warning(f"[PERSIST] Cannot update title: memory system not available")
-
 
 
             logger.info(f"Generated title for {conversation_id}: {title}")
@@ -3683,11 +3645,9 @@ Respond with ONLY the title, nothing else."""
             raise Exception("Empty response from LLM")
 
 
-
     except Exception as e:
 
         logger.warning(f"Title generation failed: {e}", exc_info=True)
-
 
 
         # Intelligent fallback based on first message
@@ -3719,7 +3679,6 @@ Respond with ONLY the title, nothing else."""
             pass
 
 
-
         # Final fallback
 
         return {
@@ -3729,9 +3688,6 @@ Respond with ONLY the title, nothing else."""
             "fallback": True
 
         }
-
-
-
 
 
 @router.get("/feature-mode")
@@ -3761,9 +3717,6 @@ async def get_feature_mode():
     }
 
 
-
-
-
 @router.get("/stats")
 
 async def get_chat_stats(request: Request):
@@ -3781,7 +3734,6 @@ async def get_chat_stats(request: Request):
         chat_service = getattr(request.app.state, 'chat_service', None) or agent_service
 
 
-
         if not chat_service or not chat_service.memory:
 
             return {
@@ -3793,7 +3745,6 @@ async def get_chat_stats(request: Request):
             }
 
 
-
         # Get current conversation ID (default if not available)
 
         conversation_id = 'default'
@@ -3803,11 +3754,9 @@ async def get_chat_stats(request: Request):
             conversation_id = getattr(chat_service.session_manager, 'current_conversation_id', 'default')
 
 
-
         # Get memory stats - get_stats doesn't take conversation_id
 
         stats = chat_service.memory.get_stats()
-
 
 
         # Add learning-specific metrics
@@ -3833,11 +3782,9 @@ async def get_chat_stats(request: Request):
             }
 
 
-
         logger.debug(f"Chat stats retrieved for conversation {conversation_id}: {stats}")
 
         return stats
-
 
 
     except Exception as e:
@@ -3851,8 +3798,5 @@ async def get_chat_stats(request: Request):
             "message": str(e)
 
         }
-
-
-
 
 

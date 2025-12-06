@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, Bot } from 'lucide-react';
 import { EnhancedMessageDisplay } from './EnhancedMessageDisplay';
-import { ThinkingBlock } from './ThinkingBlock';
 import { ToolExecutionDisplay } from './ToolExecutionDisplay';
 import { apiFetch } from '../utils/fetch';
 import { ROAMPAL_CONFIG } from '../config/roampal';
@@ -132,14 +131,6 @@ export const EnhancedChatMessage: React.FC<EnhancedChatMessageProps> = ({
         ) : (
           // Assistant messages have enhanced display with citations only
           <div className="space-y-3">
-            {/* Show thinking block if present */}
-            {message.thinking && (
-              <ThinkingBlock
-                thinking={message.thinking}
-                isStreaming={message.streaming || false}
-              />
-            )}
-
             {/* Show tool executions if present */}
             {message.toolExecutions && message.toolExecutions.length > 0 && (
               <>

@@ -212,7 +212,7 @@ Roampal uses the following open-source software. We are grateful to the maintain
 
 ## LLM Models (Separate Licenses)
 
-**Note**: Roampal's code is MIT licensed, but AI models have their own licenses.
+**Note**: Roampal's code is Apache 2.0 licensed, but AI models have their own licenses.
 
 ### Ollama (MIT License)
 - **License**: MIT

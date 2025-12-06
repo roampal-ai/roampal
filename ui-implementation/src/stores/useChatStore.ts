@@ -548,7 +548,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
               return {
                 messages,
                 processingStage: 'streaming',
-                processingStatus: 'Receiving response...',
+                processingStatus: 'Thinking...',
                 isStreaming: true
               };
             });
@@ -556,30 +556,45 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
           case 'token':
             // Lazily create assistant message on first token, then append subsequent tokens
+            // v0.2.5 RESTORED: Stream tokens for interleaved tool/response display
             console.log('[WebSocket] Received token:', data.content?.substring(0, 50));
             set((state) => {
               const messages = [...state.messages];
               const lastMsg = messages[messages.length - 1];
+              const tokenContent = data.content || '';
 
-              // Create assistant message on first token if it doesn't exist
+              if (!tokenContent) {
+                return state; // Skip empty tokens
+              }
+
               if (!lastMsg || lastMsg.sender !== 'assistant' || !lastMsg.streaming) {
                 console.log('[WebSocket] Creating assistant message on first token');
+                // v0.2.5: Initialize events timeline for chronological rendering
+                const firstTextEvent = {
+                  type: 'text' as const,
+                  timestamp: Date.now(),
+                  data: { chunk: tokenContent, firstChunk: true }
+                };
                 messages.push({
                   id: `msg-${Date.now()}`,
                   sender: 'assistant',
-                  content: data.content,
+                  content: tokenContent,
                   streaming: true,
                   timestamp: new Date(),
                   thinking: null,
-                  toolExecutions: []
+                  toolExecutions: [],
+                  events: [firstTextEvent]
                 });
               } else {
-                // FIX: Immutable update - preserve all properties including toolExecutions
-                const newContent = (lastMsg.content || '') + data.content;
+                // Immutable update - preserve all properties including toolExecutions and events
+                const newContent = (lastMsg.content || '') + tokenContent;
+                // v0.2.5: Add text event to timeline (only if we have events - timeline mode)
+                const existingEvents = lastMsg.events || [];
                 messages[messages.length - 1] = {
                   ...lastMsg,
                   content: newContent,
-                  toolExecutions: lastMsg.toolExecutions // Preserve during streaming
+                  toolExecutions: lastMsg.toolExecutions,
+                  events: existingEvents  // Don't add every token to events (too granular)
                 };
                 console.log('[WebSocket] Updated message content, now:', newContent.substring(0, 50), 'Length:', newContent.length);
               }
@@ -591,26 +606,47 @@ export const useChatStore = create<ChatState>()((set, get) => ({
             });
             break;
 
-          case 'thinking':
-            console.log('[WebSocket] Received thinking:', data.content?.substring(0, 50));
+          // v0.2.5: Response case - buffered complete response
+          case 'response':
+            console.log('[WebSocket] Full response received:', data.content?.substring(0, 50));
             set((state) => {
               const messages = [...state.messages];
-              const lastMsg = messages[messages.length - 1];
+              let lastMsg = messages[messages.length - 1];
 
-              if (lastMsg?.sender === 'assistant') {
-                // FIX: Immutable update
+              if (lastMsg && lastMsg.sender === 'assistant') {
                 messages[messages.length - 1] = {
                   ...lastMsg,
-                  thinking: data.content,
-                  toolExecutions: lastMsg.toolExecutions // Preserve
+                  content: data.content,
+                  streaming: false
                 };
+              } else {
+                // Edge case: response arrives without prior message
+                messages.push({
+                  id: `msg-${Date.now()}`,
+                  sender: 'assistant' as const,
+                  content: data.content,
+                  streaming: false,
+                  timestamp: new Date(),
+                  toolExecutions: []
+                });
               }
-
               return {
                 messages,
-                processingStatus: 'AI is reasoning...'
+                isStreaming: false,
+                processingStatus: null
               };
             });
+            break;
+
+          // v0.2.5: Thinking state events - show "Thinking..." status
+          case 'thinking_start':
+            console.log('[WebSocket] LLM thinking started');
+            set({ processingStatus: 'Thinking...' });
+            break;
+
+          case 'thinking_end':
+            console.log('[WebSocket] LLM thinking ended');
+            set({ processingStatus: 'Streaming...' });
             break;
 
           case 'tool_start':
@@ -618,6 +654,18 @@ export const useChatStore = create<ChatState>()((set, get) => ({
             set((state) => {
               const messages = [...state.messages];
               let lastMsg = messages[messages.length - 1];
+
+              // v0.2.5: Create tool data and timeline event
+              const toolData = {
+                tool: data.tool,
+                status: 'running' as const,
+                arguments: data.arguments
+              };
+              const toolEvent = {
+                type: 'tool_execution' as const,
+                timestamp: Date.now(),
+                data: toolData
+              };
 
               // Lazy message creation: create assistant message if tool_start arrives before first token
               if (!lastMsg || lastMsg.sender !== 'assistant' || !lastMsg.streaming) {
@@ -629,22 +677,37 @@ export const useChatStore = create<ChatState>()((set, get) => ({
                   streaming: true,
                   timestamp: new Date(),
                   thinking: null,
-                  toolExecutions: [{
-                    tool: data.tool,
-                    status: 'running',
-                    arguments: data.arguments
-                  }]
+                  toolExecutions: [toolData],
+                  events: [toolEvent],  // v0.2.5: Initialize timeline with tool event
+                  _lastTextEndIndex: 0  // v0.2.5: Track text position for segment capture
                 });
               } else {
-                // FIX: Immutable update - create new object with updated toolExecutions
+                // v0.2.5: Capture text segment BEFORE tool starts (true chronological interleaving)
+                const currentContent = lastMsg.content || '';
+                const lastTextEndIndex = lastMsg._lastTextEndIndex || 0;
+                const newTextSegment = currentContent.slice(lastTextEndIndex);
+
                 const existingTools = lastMsg.toolExecutions || [];
+                const existingEvents = [...(lastMsg.events || [])];
+
+                // If there's new text since last boundary, add a text_segment event BEFORE the tool
+                if (newTextSegment.length > 0) {
+                  existingEvents.push({
+                    type: 'text_segment' as const,
+                    timestamp: Date.now() - 1,  // Just before tool
+                    data: { content: newTextSegment }
+                  });
+                  console.log('[WebSocket] Captured text segment before tool:', newTextSegment.substring(0, 50));
+                }
+
+                // Add tool event
+                existingEvents.push(toolEvent);
+
                 messages[messages.length - 1] = {
                   ...lastMsg,
-                  toolExecutions: [...existingTools, {
-                    tool: data.tool,
-                    status: 'running',
-                    arguments: data.arguments
-                  }]
+                  toolExecutions: [...existingTools, toolData],
+                  events: existingEvents,
+                  _lastTextEndIndex: currentContent.length  // Update boundary marker
                 };
               }
 
@@ -677,7 +740,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
                 // FIX: Immutable update - map over tools and create new array
                 const updatedTools = lastMsg.toolExecutions.map((t: any) =>
                   t.tool === data.tool && t.status === 'running'
-                    ? { ...t, status: 'completed', resultCount: data.result_count }
+                    ? { ...t, status: 'completed', resultCount: data.result_count, resultPreview: data.result_preview }
                     : t
                 );
                 messages[messages.length - 1] = {
@@ -739,7 +802,29 @@ export const useChatStore = create<ChatState>()((set, get) => ({
               }
 
               // Refresh lastMsg reference after citation update
-              const updatedLastMsg = messages[messages.length - 1];
+              let updatedLastMsg = messages[messages.length - 1];
+
+              // v0.2.5: Capture trailing text segment (after last tool)
+              if (updatedLastMsg?.sender === 'assistant' && updatedLastMsg.events?.length > 0) {
+                const currentContent = updatedLastMsg.content || '';
+                const lastTextEndIndex = updatedLastMsg._lastTextEndIndex || 0;
+                const trailingText = currentContent.slice(lastTextEndIndex);
+
+                if (trailingText.length > 0) {
+                  const existingEvents = [...(updatedLastMsg.events || [])];
+                  existingEvents.push({
+                    type: 'text_segment' as const,
+                    timestamp: Date.now(),
+                    data: { content: trailingText }
+                  });
+                  messages[messages.length - 1] = {
+                    ...updatedLastMsg,
+                    events: existingEvents
+                  };
+                  updatedLastMsg = messages[messages.length - 1];  // Refresh reference
+                  console.log('[WebSocket] Captured trailing text segment:', trailingText.substring(0, 50));
+                }
+              }
 
               // THEN handle streaming state and message cleanup
               if (updatedLastMsg?.sender === 'assistant' && updatedLastMsg.streaming) {
@@ -752,12 +837,17 @@ export const useChatStore = create<ChatState>()((set, get) => ({
                   console.log('[WebSocket] Removed empty assistant message');
                 } else {
                   // FIX: Immutable update - preserve all properties including toolExecutions AND citations
+                  // v0.2.5: Also mark all tools as completed when stream ends (safety net)
+                  const completedTools = updatedLastMsg.toolExecutions?.map((t: any) => ({
+                    ...t,
+                    status: 'completed'  // Force all tools to completed on stream end
+                  })) || [];
                   messages[messages.length - 1] = {
                     ...updatedLastMsg,
                     streaming: false,
-                    toolExecutions: updatedLastMsg.toolExecutions // Preserve
+                    toolExecutions: completedTools
                   };
-                  console.log('[WebSocket] Keeping message - content:', updatedLastMsg.content?.length || 0, 'tools:', updatedLastMsg.toolExecutions?.length || 0);
+                  console.log('[WebSocket] Keeping message - content:', updatedLastMsg.content?.length || 0, 'tools:', completedTools.length);
                 }
               }
 

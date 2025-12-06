@@ -2,13 +2,13 @@
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:prod",
     "devPath": "http://localhost:5174",
     "distDir": "../dist"
   },
   "package": {
     "productName": "Roampal",
-    "version": "0.2.3"
+    "version": "0.2.5"
   },
   "tauri": {
     "allowlist": {

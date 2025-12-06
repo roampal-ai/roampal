@@ -51,11 +51,7 @@ export function handleEnhancedStreamingEvent(
   if (!assistantMsg) return updatedMessages;
 
   switch (event.type) {
-    case 'thinking':
-      // Show thinking/planning phase
-      assistantMsg.thinking = event.message;
-      assistantMsg.content = ''; // Clear content while thinking
-      break;
+    // thinking case removed (v0.2.5) - feature deprecated
 
     case 'tool_execution':
       // Add tool execution to the list

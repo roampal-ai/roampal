@@ -88,6 +88,44 @@ QUANTIZATION_OPTIONS = {
         "Q4_K_M": {"size_gb": 26.44, "vram_gb": 30.0, "quality": 3, "file": "mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf", "default": True, "ollama_tag": "mixtral:8x7b"},
         "Q5_K_M": {"size_gb": 31.5, "vram_gb": 35.0, "quality": 4, "file": "mixtral-8x7b-instruct-v0.1.Q5_K_M.gguf", "ollama_tag": "mixtral:8x7b-instruct-q5_K_M"},
     },
+    # OpenAI GPT-OSS - Uses native MXFP4 format (4.25 bits), no traditional quants
+    # Both sizes available, 20b fits 16GB VRAM, 120b needs 80GB
+    "gpt-oss:20b": {
+        "MXFP4": {"size_gb": 14.0, "vram_gb": 16.0, "quality": 5, "file": "gpt-oss-20b", "default": True, "ollama_tag": "gpt-oss:20b"},
+    },
+    "gpt-oss:120b": {
+        "MXFP4": {"size_gb": 65.0, "vram_gb": 80.0, "quality": 5, "file": "gpt-oss-120b", "default": True, "ollama_tag": "gpt-oss:120b"},
+    },
+    # Llama 4 Scout - MoE 109B total, 17B active, 10M context window
+    "llama4:scout": {
+        "UD-1.78bit": {"size_gb": 34.0, "vram_gb": 24.0, "quality": 2, "file": "llama4-scout-ud-1.78bit", "ollama_tag": "llama4:scout-ud"},
+        "Q3_K_M": {"size_gb": 47.0, "vram_gb": 50.0, "quality": 2, "file": "Llama-4-Scout-17B-16E-Instruct-Q3_K_M.gguf", "ollama_tag": "llama4:scout-q3_K_M"},
+        "Q4_K_M": {"size_gb": 65.0, "vram_gb": 70.0, "quality": 3, "file": "Llama-4-Scout-17B-16E-Instruct-Q4_K_M.gguf", "default": True, "ollama_tag": "llama4:scout"},
+        "Q6_K": {"size_gb": 82.0, "vram_gb": 85.0, "quality": 4, "file": "Llama-4-Scout-17B-16E-Instruct-Q6_K.gguf", "ollama_tag": "llama4:scout-q6_K"},
+    },
+    # Llama 4 Maverick - MoE 401B total, 17B active, 128 experts, 1M context
+    "llama4:maverick": {
+        "UD-1.78bit": {"size_gb": 122.0, "vram_gb": 96.0, "quality": 2, "file": "llama4-maverick-ud-1.78bit", "ollama_tag": "llama4:maverick-ud"},
+        "Q4_K_M": {"size_gb": 243.0, "vram_gb": 250.0, "quality": 3, "file": "Llama-4-Maverick-17B-128E-Instruct-Q4_K_M.gguf", "default": True, "ollama_tag": "llama4:maverick"},
+    },
+    # Qwen3 8B - Efficient mid-size model with thinking mode
+    "qwen3:8b": {
+        "Q4_K_M": {"size_gb": 5.0, "vram_gb": 6.0, "quality": 3, "file": "Qwen_Qwen3-8B-Q4_K_M.gguf", "default": True, "ollama_tag": "qwen3:8b"},
+        "Q5_K_M": {"size_gb": 6.0, "vram_gb": 7.0, "quality": 4, "file": "Qwen_Qwen3-8B-Q5_K_M.gguf", "ollama_tag": "qwen3:8b-q5_K_M"},
+        "Q8_0": {"size_gb": 8.5, "vram_gb": 10.0, "quality": 5, "file": "Qwen_Qwen3-8B-Q8_0.gguf", "ollama_tag": "qwen3:8b-q8_0"},
+    },
+    # Qwen3 32B - Dense model, strong all-rounder
+    "qwen3:32b": {
+        "Q4_K_M": {"size_gb": 19.8, "vram_gb": 22.0, "quality": 3, "file": "Qwen_Qwen3-32B-Q4_K_M.gguf", "default": True, "ollama_tag": "qwen3:32b"},
+        "Q5_K_M": {"size_gb": 24.0, "vram_gb": 26.0, "quality": 4, "file": "Qwen_Qwen3-32B-Q5_K_M.gguf", "ollama_tag": "qwen3:32b-q5_K_M"},
+        "Q8_0": {"size_gb": 35.0, "vram_gb": 38.0, "quality": 5, "file": "Qwen_Qwen3-32B-Q8_0.gguf", "ollama_tag": "qwen3:32b-q8_0"},
+    },
+    # Qwen3-Coder 30B - MoE 30B total, 3.3B active, 256K context, tool calling fixed by Unsloth
+    "qwen3-coder:30b": {
+        "Q4_K_M": {"size_gb": 18.0, "vram_gb": 20.0, "quality": 3, "file": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf", "default": True, "ollama_tag": "qwen3-coder:30b"},
+        "Q5_K_M": {"size_gb": 22.0, "vram_gb": 24.0, "quality": 4, "file": "Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf", "ollama_tag": "qwen3-coder:30b-q5_K_M"},
+        "Q8_0": {"size_gb": 32.0, "vram_gb": 35.0, "quality": 5, "file": "Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf", "ollama_tag": "qwen3-coder:30b-q8_0"},
+    },
 }
 
 # HuggingFace repo mapping for GGUF downloads
@@ -97,6 +135,8 @@ HUGGINGFACE_REPOS = {
     "qwen2.5:32b": "bartowski/Qwen2.5-32B-Instruct-GGUF",
     "qwen2.5:72b": "bartowski/Qwen2.5-72B-Instruct-GGUF",
     "qwen2.5:3b": "bartowski/Qwen2.5-3B-Instruct-GGUF",
+    "qwen3:32b": "bartowski/Qwen_Qwen3-32B-GGUF",
+    "qwen3:8b": "bartowski/Qwen_Qwen3-8B-GGUF",
     "llama3.2:3b": "bartowski/Llama-3.2-3B-Instruct-GGUF",
     "llama3.1:8b": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
     "llama3.3:70b": "bartowski/Llama-3.3-70B-Instruct-GGUF",
@@ -219,17 +259,25 @@ TOOL_CAPABLE_FAMILIES = {
         "llama3.3:70b", "llama3.1:70b",
         "gpt-oss:20b", "gpt-oss:120b",
         "mixtral:8x7b",
-        "command-r", "command-r-plus"
+        "command-r", "command-r-plus",
+        # Llama 4 - Native tool calling, MoE architecture
+        "llama4:scout", "llama4:maverick",
+        # Qwen3 - Native Hermes-style tool calling
+        "qwen3:32b", "qwen3-coder:30b",
     ],
     "compatible": [
         # Same family as verified, likely works but untested
         "qwen2.5:3b",  # Other qwen2.5 variants
         "llama3.2:3b", "llama3.2:8b", "llama3.1:8b",  # Llama 3.x family
-        "mistral:7b", "phi-4", "phi3"
+        "mistral:7b", "phi-4", "phi3",
+        # Qwen3 smaller variants (same family)
+        "qwen3:8b", "qwen3:4b", "qwen3:14b",
     ],
     "experimental": [
         # Available but known issues with tools
-        "deepseek-r1", "deepseek-coder", "dolphin"
+        "deepseek-r1", "deepseek-coder", "deepseek-v3", "dolphin",
+        # Gemma - No native tool support, needs fine-tuned versions
+        "gemma2:9b", "gemma2:27b",
     ]
 }
 
@@ -278,9 +326,20 @@ def get_model_description(model_name: str, tier: str) -> str:
         "llama3.2:8b": "Latest compact Llama - Tool support",
         "llama3.2:3b": "Ultra-compact Llama - May have inconsistent tools",
 
+        # Llama 4 Series - MoE with native tool calling
+        "llama4:scout": "MoE 109B - 10M context, native tools",
+        "llama4:maverick": "MoE 401B - 128 experts, 1M context, native tools",
+
         # OpenAI Open Source
         "gpt-oss:20b": "OpenAI efficient model - Excellent tools",
         "gpt-oss:120b": "OpenAI flagship open model - Native tools",
+
+        # Qwen3 Series
+        "qwen3:32b": "Alibaba flagship - Native Hermes tools",
+        "qwen3:8b": "Efficient Qwen3 - Native tools",
+        "qwen3:4b": "Compact Qwen3 - Native tools",
+        "qwen3:14b": "Mid-size Qwen3 - Native tools",
+        "qwen3-coder:30b": "MoE 30B - 256K context, tool calling (Unsloth fixed)",
 
         # Mistral Family
         "mistral:7b": "Fast and efficient with tools",
@@ -290,6 +349,12 @@ def get_model_description(model_name: str, tier: str) -> str:
         "command-r": "Cohere's command model - Strong tools",
         "phi-4": "Microsoft's efficient model",
         "phi3": "Compact Microsoft model",
+
+        # Experimental (known issues)
+        "deepseek-r1": "Reasoning model - No tool support",
+        "deepseek-v3": "MoE 671B - Unstable tool calling",
+        "gemma2:9b": "Google - No native tool support",
+        "gemma2:27b": "Google - No native tool support",
     }
 
     # Get base description

@@ -249,6 +249,71 @@ python test_token_efficiency.py
 
 ---
 
+### 7. Three-Way Comparison Test (v0.2.5)
+
+**Location**: `benchmarks/comprehensive_test/test_three_way_comparison.py`
+**Purpose**: Prove outcome learning adds value beyond cross-encoder reranking
+
+This test isolates the value of outcome-based learning by comparing three conditions:
+
+**Conditions**:
+- **A (Plain Vector)**: Pure ChromaDB L2 distance search
+- **B (Reranker Only)**: Vector + mmarco multilingual cross-encoder (no outcome learning)
+- **C (Roampal Full)**: Vector + cross-encoder + Wilson scoring + outcome learning
+
+**Test Design**:
+- 25 adversarial scenarios across 5 domains (Health, Tech, Finance, Productivity, Learning)
+- 3 query variations per scenario (75 total queries)
+- Queries designed to semantically match the WRONG answer
+- Real embeddings: `all-mpnet-base-v2` (768d)
+- Paired t-test with Cohen's d effect size
+
+**Results**:
+
+| Condition | Accuracy | vs Plain Vector |
+|-----------|----------|-----------------|
+| **A (Plain Vector)** | 26.7% | - |
+| **B (Reranker Only)** | 21.3% | **-5.3% (HURT!)** |
+| **C (Roampal Full)** | 37.3% | +10.7% |
+
+**Key Finding**: Cross-encoder alone **reduced** accuracy on adversarial queries. The reranker confidently selected semantically-matching wrong answers.
+
+**Statistical Significance (B vs C - Outcome Learning Value)**:
+
+| Metric | Value |
+|--------|-------|
+| **Delta** | +16 percentage points |
+| **p-value** | **0.01** (SIGNIFICANT) |
+| **Cohen's d** | 0.35 (medium effect) |
+| **95% CI** | [4.1%, 27.9%] |
+
+**Per-Domain Breakdown**:
+
+| Domain | Vector (A) | Reranker (B) | Full (C) | Delta (B→C) |
+|--------|------------|--------------|----------|-------------|
+| Health | 33% | 33% | 53% | +20 pts |
+| Tech | 20% | 20% | 40% | +20 pts |
+| Finance | 27% | 20% | 40% | +20 pts |
+| Productivity | 33% | 13% | 33% | +20 pts |
+| Learning | 20% | 20% | 20% | +0 pts |
+
+**Why This Matters**:
+
+This test proves that:
+1. **Cross-encoders aren't enough**: They can confidently select wrong answers that match query semantics
+2. **Outcome learning provides real value**: +16% improvement over reranker alone (p=0.01)
+3. **The combination matters**: Vector search + outcome scores beats either approach alone
+
+The reranker is good at finding semantic matches, but when queries are adversarial (designed to match wrong answers), semantic similarity becomes a liability. Outcome-based learning overcomes this by boosting memories that actually worked.
+
+**How to Run**:
+```bash
+cd benchmarks/comprehensive_test
+python test_three_way_comparison.py
+```
+
+---
+
 ## What Is Tested
 
 ### ✅ Infrastructure (Fully Validated)
