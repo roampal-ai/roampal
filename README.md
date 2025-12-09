@@ -14,7 +14,7 @@ Stop re-explaining yourself every conversation. Roampal remembers your context, 
   <img src="docs/screenshot.png" alt="Roampal - Chat with Knowledge Graph" width="800">
 </p>
 
-> **Vector search: 3.3%. Roampal: 100%. Same queries. (p=0.001)** [(Full benchmarks)](docs/BENCHMARKS.md)
+> **Vector search: 0%. Roampal: 97%. Same adversarial queries. (p=0.001)** [(Full benchmarks)](docs/BENCHMARKS.md)
 
 <p align="center">
   <a href="https://github.com/roampal-ai/roampal">
@@ -69,8 +69,8 @@ But that advice FAILED last time. You needed the debugger.
 **Roampal vs Vector DB** (30 adversarial coding scenarios):
 | Condition | Accuracy |
 |-----------|----------|
-| Plain vector search | 3.3% (1/30) |
-| **Roampal** | **100%** (30/30) |
+| Plain vector search | 0% (0/30) |
+| **Roampal** | **97%** (29/30) |
 
 p=0.001, Cohen's d=7.49
 
@@ -106,7 +106,7 @@ Just 3 uses → 100% accuracy. p=0.005.
 | RAG Baseline | 10% | 0.550 | 0.668 |
 | Reranker Only | 20% | 0.600 | 0.705 |
 | **Outcomes Only** | **50%** | **0.750** | **0.815** |
-| Full Roampal | 48% | 0.740 | 0.808 |
+| Full Roampal | 44% | 0.720 | 0.793 |
 
 **Statistical Significance**:
 - Cold→Mature: p=0.005** (highly significant)

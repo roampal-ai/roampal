@@ -224,16 +224,16 @@ python test_comprehensive_benchmark.py
 | RAG Baseline | 10% | 0.550 | 0.668 |
 | Reranker Only | 20% | 0.600 | 0.705 |
 | Outcomes Only | 50% | 0.750 | 0.815 |
-| Full Roampal | 48% | 0.740 | 0.808 |
+| Full Roampal | 44% | 0.720 | 0.793 |
 
 **Learning Curve** (Full Roampal):
 | Maturity | Uses | Top-1 | MRR |
 |----------|------|-------|-----|
 | Cold Start | 0 | 0% | 0.500 |
-| Early | 3 | 60% | 0.800 |
+| Early | 3 | 50% | 0.750 |
 | Mature | 20 | 60% | 0.800 |
 
-**Key Finding**: Outcome learning (+50 pts) dominates reranker (+10 pts) by 5×
+**Key Finding**: Outcome learning (+40 pts) dominates reranker (+10 pts) by 4×
 
 **Statistical Significance**:
 - Cold→Mature: p=0.0051** (highly significant)

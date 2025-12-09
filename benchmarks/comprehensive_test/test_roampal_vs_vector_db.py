@@ -58,6 +58,10 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 from datetime import datetime
 
+# CRITICAL: Set benchmark mode BEFORE importing Roampal modules
+# This allows tests to use isolated data directories instead of AppData
+os.environ["ROAMPAL_BENCHMARK_MODE"] = "true"
+
 # Add paths
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "ui-implementation" / "src-tauri" / "backend"))
 sys.path.insert(0, str(Path(__file__).parent))
@@ -594,10 +598,10 @@ async def main():
         print("Install: pip install sentence-transformers")
         return
 
-    # Initialize embedding service
-    print("Loading embedding model...")
-    embedding_service = RealEmbeddingService()
-    print("Model loaded.\n")
+    # Initialize embedding service - MUST use 768d model to match Roampal's UnifiedMemorySystem
+    print("Loading embedding model (all-mpnet-base-v2, 768d)...")
+    embedding_service = RealEmbeddingService(model_name='all-mpnet-base-v2')
+    print(f"Model loaded.\n")
 
     # Create test directories
     test_dir = Path(__file__).parent / "roampal_vs_vectordb_data"

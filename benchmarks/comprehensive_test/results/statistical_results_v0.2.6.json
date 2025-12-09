@@ -1,0 +1,862 @@
+{
+  "timestamp": "2025-12-09T11:18:42.355088",
+  "n_scenarios": 30,
+  "control_results": [
+    {
+      "scenario_id": 1,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.7156149115302214,
+        0.8530415929664076
+      ]
+    },
+    {
+      "scenario_id": 2,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.348249206047971,
+        0.8370333754325322
+      ]
+    },
+    {
+      "scenario_id": 3,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.4276932845994172,
+        1.009137195595414
+      ]
+    },
+    {
+      "scenario_id": 4,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.5057413676015892,
+        0.7341266571647072
+      ]
+    },
+    {
+      "scenario_id": 5,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.32338434646599035,
+        1.3314717729668633
+      ]
+    },
+    {
+      "scenario_id": 6,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.44735172608115664,
+        0.8714764233581027
+      ]
+    },
+    {
+      "scenario_id": 7,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.23094980508082347,
+        1.4774949549540857
+      ]
+    },
+    {
+      "scenario_id": 8,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.5552223607723075,
+        1.063299495473306
+      ]
+    },
+    {
+      "scenario_id": 9,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.5219370188464553,
+        0.7283379378051426
+      ]
+    },
+    {
+      "scenario_id": 10,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.45123137969226723,
+        1.5668553998816512
+      ]
+    },
+    {
+      "scenario_id": 11,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.7522877956817464,
+        1.258776554427597
+      ]
+    },
+    {
+      "scenario_id": 12,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.2265111031277844,
+        0.976427661522184
+      ]
+    },
+    {
+      "scenario_id": 13,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.293726538107028,
+        0.5373134271256927
+      ]
+    },
+    {
+      "scenario_id": 14,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.5181898640146748,
+        0.682253940769914
+      ]
+    },
+    {
+      "scenario_id": 15,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.14941962421066587,
+        0.9881401507259544
+      ]
+    },
+    {
+      "scenario_id": 16,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.41280792882349543,
+        0.7872669252814545
+      ]
+    },
+    {
+      "scenario_id": 17,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.2299523267625158,
+        0.8509522785608371
+      ]
+    },
+    {
+      "scenario_id": 18,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.46348598472299946,
+        1.1339371739656148
+      ]
+    },
+    {
+      "scenario_id": 19,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.3001286764609909,
+        1.0652344395350717
+      ]
+    },
+    {
+      "scenario_id": 20,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.2928540330210577,
+        1.333064781567654
+      ]
+    },
+    {
+      "scenario_id": 21,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.23023552957044027,
+        0.885802120714517
+      ]
+    },
+    {
+      "scenario_id": 22,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.1460632091411484,
+        0.7204574149800616
+      ]
+    },
+    {
+      "scenario_id": 23,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.22933026062213654,
+        1.2818268511251936
+      ]
+    },
+    {
+      "scenario_id": 24,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.34497153013797954,
+        0.5623909235472261
+      ]
+    },
+    {
+      "scenario_id": 25,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.39616251148359005,
+        1.1757516439565223
+      ]
+    },
+    {
+      "scenario_id": 26,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.44786022332287795,
+        1.4284702730628693
+      ]
+    },
+    {
+      "scenario_id": 27,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.6359138378148257,
+        1.0295171924856716
+      ]
+    },
+    {
+      "scenario_id": 28,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.26402011761010225,
+        0.9188358241460548
+      ]
+    },
+    {
+      "scenario_id": 29,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.3524837533201748,
+        1.0167797276300932
+      ]
+    },
+    {
+      "scenario_id": 30,
+      "condition": "control",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "bad",
+        "good"
+      ],
+      "distances": [
+        0.3757091945412102,
+        0.6496011725303139
+      ]
+    }
+  ],
+  "treatment_results": [
+    {
+      "scenario_id": 1,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use pdb breakpoints with 'import pdb; pd",
+        "Add print() statements everywhere to see"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 2,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use logging module with DEBUG level and ",
+        "Write debug output to a text file using "
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 3,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use pytest with -x flag to stop on first",
+        "Run tests one at a time manually and che"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 4,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use memory profiler like tracemalloc to ",
+        "Check memory usage by printing sys.getsi"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 5,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use Python's cProfile module with snakev",
+        "Add time.time() calls before and after e"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 6,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Add composite index on (user_id, created",
+        "Cache all query results in Redis with 5-"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 7,
+      "condition": "treatment",
+      "good_ranked_first": false,
+      "success": 0.0,
+      "ranking": [
+        "Increase connection pool size to handle ",
+        "Use EXPLAIN ANALYZE to find missing inde"
+      ],
+      "scores": [
+        0.2,
+        0.8999999999999999
+      ]
+    },
+    {
+      "scenario_id": 8,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use database-level pagination with LIMIT",
+        "Fetch all results into memory and pagina"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 9,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use database transactions with proper is",
+        "Add application-level locks using Redis "
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 10,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Normalize database schema and use foreig",
+        "Store JSON blobs in a single column to a"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 11,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use cursor-based pagination with opaque ",
+        "Use page numbers like ?page=1&limit=10 f"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 12,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Return proper HTTP status codes: 201 Cre",
+        "Always return 200 OK with error details "
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 13,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use flat URL structure: /posts?user_id=1",
+        "Use deeply nested URLs like /users/123/p"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 14,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Version APIs in URL path (/v1/users) and",
+        "Use Accept headers for versioning: Accep"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 15,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use rate limiting with sliding window al",
+        "Block IPs that make too many requests us"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 16,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use specific exception types and handle ",
+        "Catch all exceptions with bare except: t"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 17,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use Result/Either types for explicit err",
+        "Return None on error and let the caller "
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 18,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Log errors with full stack traces, conte",
+        "Print error messages to console using pr"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 19,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use circuit breaker pattern for external",
+        "Add retry logic with exponential backoff"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 20,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Validate input at system boundaries and ",
+        "Let errors propagate naturally and handl"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 21,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use async/await with proper Promise hand",
+        "Use setTimeout with 0ms delay to make sy"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 22,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use Promise.all() for concurrent indepen",
+        "Chain promises sequentially with .then()"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 23,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use worker threads or process pools for ",
+        "Use setImmediate() to break up CPU work "
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 24,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use proper mutex/locks from threading li",
+        "Use global variables with careful orderi"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 25,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use asyncio.gather() with return_excepti",
+        "Create tasks with asyncio.create_task() "
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 26,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use feature branches with pull requests ",
+        "Commit directly to main branch for faste"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 27,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Write atomic commits with clear messages",
+        "Make large commits with everything at en"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 28,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use git rebase for clean feature branch ",
+        "Use git merge --squash to combine all fe"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 29,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use git stash or create WIP commits befo",
+        "Use git checkout -f to force switch bran"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    },
+    {
+      "scenario_id": 30,
+      "condition": "treatment",
+      "good_ranked_first": true,
+      "success": 1.0,
+      "ranking": [
+        "Use git bisect to find the commit that i",
+        "Check out each commit manually one by on"
+      ],
+      "scores": [
+        0.8999999999999999,
+        0.2
+      ]
+    }
+  ],
+  "statistics": {
+    "control_success_rate": 0.0,
+    "treatment_success_rate": 0.9666666666666667,
+    "improvement": 0.9666666666666667,
+    "t_statistic": 29.0,
+    "p_value": 0.001,
+    "cohens_d": 7.4877678026676735,
+    "ci_95_low": 0.8985,
+    "ci_95_high": 1.0348333333333333
+  },
+  "conclusion": {
+    "significant": true,
+    "roampal_wins": true
+  }
+}

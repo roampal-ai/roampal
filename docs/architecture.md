@@ -8,7 +8,7 @@ Roampal is an intelligent chatbot with persistent memory and learning capabiliti
 
 ### Headline Result (v0.2.5)
 
-> **Outcome learning: +50 pts improvement. Reranker: +10 pts. Learning dominates 5×. (p=0.005)**
+> **Outcome learning: +40 pts improvement. Reranker: +10 pts. Learning dominates 4×. (p=0.005)**
 
 See `benchmarks/comprehensive_test/` for full test suite and methodology.
 
@@ -21,11 +21,11 @@ See `benchmarks/comprehensive_test/` for full test suite and methodology.
 | RAG Baseline | **10%** | 0.550 | 0.668 |
 | Reranker Only | **20%** | 0.600 | 0.705 |
 | Outcomes Only | **50%** | 0.750 | 0.815 |
-| Full Roampal | **48%** | 0.740 | 0.808 |
+| Full Roampal | **44%** | 0.720 | 0.793 |
 
 **Improvement Breakdown:**
 - Reranker contribution: +10 pts
-- Outcomes contribution: +50 pts (5× more impactful)
+- Outcomes contribution: +40 pts (4× more impactful)
 
 **Statistical Significance:**
 - Learning Curve (Cold→Mature): p=0.0051**
@@ -53,7 +53,7 @@ See `benchmarks/comprehensive_test/` for full test suite and methodology.
 | **Infrastructure** | 14 test suites, 100% pass rate | ✅ Verified |
 
 **Why This Matters:**
-The system learns that "what worked before" matters more than "what sounds related." Outcome learning (+50 pts) dominates cross-encoder reranking (+10 pts) by 5×.
+The system learns that "what worked before" matters more than "what sounds related." Outcome learning (+40 pts) dominates cross-encoder reranking (+10 pts) by 4×.
 
 > **All benchmarks reproducible** - See `benchmarks/comprehensive_test/` folder for complete test suite and methodology.
 

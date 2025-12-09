@@ -1,0 +1,506 @@
+{
+  "timestamp": "2025-12-03T17:23:49.675980",
+  "n_scenarios": 10,
+  "n_maturity_levels": 5,
+  "learning_curve": [
+    {
+      "level": "cold_start",
+      "uses": 0,
+      "accuracy": 10.0,
+      "correct": 1,
+      "total": 10
+    },
+    {
+      "level": "early",
+      "uses": 3,
+      "accuracy": 100.0,
+      "correct": 10,
+      "total": 10
+    },
+    {
+      "level": "established",
+      "uses": 5,
+      "accuracy": 100.0,
+      "correct": 10,
+      "total": 10
+    },
+    {
+      "level": "proven",
+      "uses": 10,
+      "accuracy": 100.0,
+      "correct": 10,
+      "total": 10
+    },
+    {
+      "level": "mature",
+      "uses": 20,
+      "accuracy": 100.0,
+      "correct": 10,
+      "total": 10
+    }
+  ],
+  "improvement": {
+    "cold_start": 10.0,
+    "mature": 100.0,
+    "delta": 90.0
+  },
+  "per_domain_mature": {
+    "finance": 100.0,
+    "health": 100.0,
+    "tech": 100.0,
+    "nutrition": 100.0,
+    "crypto": 100.0
+  },
+  "all_results": [
+    {
+      "scenario_id": 1,
+      "domain": "finance",
+      "maturity": "cold_start",
+      "uses": 0,
+      "good_rank": 2,
+      "bad_rank": 1,
+      "top1_correct": false
+    },
+    {
+      "scenario_id": 1,
+      "domain": "finance",
+      "maturity": "early",
+      "uses": 3,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 1,
+      "domain": "finance",
+      "maturity": "established",
+      "uses": 5,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 1,
+      "domain": "finance",
+      "maturity": "proven",
+      "uses": 10,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 1,
+      "domain": "finance",
+      "maturity": "mature",
+      "uses": 20,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 2,
+      "domain": "finance",
+      "maturity": "cold_start",
+      "uses": 0,
+      "good_rank": 2,
+      "bad_rank": 1,
+      "top1_correct": false
+    },
+    {
+      "scenario_id": 2,
+      "domain": "finance",
+      "maturity": "early",
+      "uses": 3,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 2,
+      "domain": "finance",
+      "maturity": "established",
+      "uses": 5,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 2,
+      "domain": "finance",
+      "maturity": "proven",
+      "uses": 10,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 2,
+      "domain": "finance",
+      "maturity": "mature",
+      "uses": 20,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 3,
+      "domain": "health",
+      "maturity": "cold_start",
+      "uses": 0,
+      "good_rank": 2,
+      "bad_rank": 1,
+      "top1_correct": false
+    },
+    {
+      "scenario_id": 3,
+      "domain": "health",
+      "maturity": "early",
+      "uses": 3,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 3,
+      "domain": "health",
+      "maturity": "established",
+      "uses": 5,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 3,
+      "domain": "health",
+      "maturity": "proven",
+      "uses": 10,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 3,
+      "domain": "health",
+      "maturity": "mature",
+      "uses": 20,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 4,
+      "domain": "health",
+      "maturity": "cold_start",
+      "uses": 0,
+      "good_rank": 2,
+      "bad_rank": 1,
+      "top1_correct": false
+    },
+    {
+      "scenario_id": 4,
+      "domain": "health",
+      "maturity": "early",
+      "uses": 3,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 4,
+      "domain": "health",
+      "maturity": "established",
+      "uses": 5,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 4,
+      "domain": "health",
+      "maturity": "proven",
+      "uses": 10,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 4,
+      "domain": "health",
+      "maturity": "mature",
+      "uses": 20,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 5,
+      "domain": "tech",
+      "maturity": "cold_start",
+      "uses": 0,
+      "good_rank": 2,
+      "bad_rank": 1,
+      "top1_correct": false
+    },
+    {
+      "scenario_id": 5,
+      "domain": "tech",
+      "maturity": "early",
+      "uses": 3,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 5,
+      "domain": "tech",
+      "maturity": "established",
+      "uses": 5,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 5,
+      "domain": "tech",
+      "maturity": "proven",
+      "uses": 10,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 5,
+      "domain": "tech",
+      "maturity": "mature",
+      "uses": 20,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 6,
+      "domain": "tech",
+      "maturity": "cold_start",
+      "uses": 0,
+      "good_rank": 2,
+      "bad_rank": 1,
+      "top1_correct": false
+    },
+    {
+      "scenario_id": 6,
+      "domain": "tech",
+      "maturity": "early",
+      "uses": 3,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 6,
+      "domain": "tech",
+      "maturity": "established",
+      "uses": 5,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 6,
+      "domain": "tech",
+      "maturity": "proven",
+      "uses": 10,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 6,
+      "domain": "tech",
+      "maturity": "mature",
+      "uses": 20,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 7,
+      "domain": "nutrition",
+      "maturity": "cold_start",
+      "uses": 0,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 7,
+      "domain": "nutrition",
+      "maturity": "early",
+      "uses": 3,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 7,
+      "domain": "nutrition",
+      "maturity": "established",
+      "uses": 5,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 7,
+      "domain": "nutrition",
+      "maturity": "proven",
+      "uses": 10,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 7,
+      "domain": "nutrition",
+      "maturity": "mature",
+      "uses": 20,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 8,
+      "domain": "nutrition",
+      "maturity": "cold_start",
+      "uses": 0,
+      "good_rank": 2,
+      "bad_rank": 1,
+      "top1_correct": false
+    },
+    {
+      "scenario_id": 8,
+      "domain": "nutrition",
+      "maturity": "early",
+      "uses": 3,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 8,
+      "domain": "nutrition",
+      "maturity": "established",
+      "uses": 5,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 8,
+      "domain": "nutrition",
+      "maturity": "proven",
+      "uses": 10,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 8,
+      "domain": "nutrition",
+      "maturity": "mature",
+      "uses": 20,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 9,
+      "domain": "crypto",
+      "maturity": "cold_start",
+      "uses": 0,
+      "good_rank": 2,
+      "bad_rank": 1,
+      "top1_correct": false
+    },
+    {
+      "scenario_id": 9,
+      "domain": "crypto",
+      "maturity": "early",
+      "uses": 3,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 9,
+      "domain": "crypto",
+      "maturity": "established",
+      "uses": 5,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 9,
+      "domain": "crypto",
+      "maturity": "proven",
+      "uses": 10,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 9,
+      "domain": "crypto",
+      "maturity": "mature",
+      "uses": 20,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 10,
+      "domain": "crypto",
+      "maturity": "cold_start",
+      "uses": 0,
+      "good_rank": 2,
+      "bad_rank": 1,
+      "top1_correct": false
+    },
+    {
+      "scenario_id": 10,
+      "domain": "crypto",
+      "maturity": "early",
+      "uses": 3,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 10,
+      "domain": "crypto",
+      "maturity": "established",
+      "uses": 5,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 10,
+      "domain": "crypto",
+      "maturity": "proven",
+      "uses": 10,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    },
+    {
+      "scenario_id": 10,
+      "domain": "crypto",
+      "maturity": "mature",
+      "uses": 20,
+      "good_rank": 1,
+      "bad_rank": 2,
+      "top1_correct": true
+    }
+  ]
+}

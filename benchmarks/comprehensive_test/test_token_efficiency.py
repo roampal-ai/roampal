@@ -26,11 +26,11 @@ ADVERSARIAL DESIGN:
 -------------------
 - 100 scenarios where queries semantically match WRONG answer better
 - Tests whether outcome learning can override misleading semantic similarity
-- Same scenarios as test_roampal_vs_vector_db.py (100% vs 3.3% accuracy)
+- Same scenarios as test_roampal_vs_vector_db.py (67% vs 0% accuracy)
 
 METHODOLOGY:
 ------------
-- Real embeddings: sentence-transformers/all-MiniLM-L6-v2
+- Real embeddings: sentence-transformers/all-mpnet-base-v2 (768d)
 - Token approximation: 1 token ≈ 4 characters (OpenAI standard)
 - Standard IR metrics: Hit@1, Hit@3, MRR, nDCG@3 (BEIR/MTEB compatible)
 - Fresh data directory per scenario (no cross-contamination)
@@ -60,6 +60,10 @@ import shutil
 from pathlib import Path
 from typing import List, Dict, Tuple
 from datetime import datetime
+
+# CRITICAL: Set benchmark mode BEFORE importing Roampal modules
+# This allows tests to use isolated data directories instead of AppData
+os.environ["ROAMPAL_BENCHMARK_MODE"] = "true"
 
 # Add paths
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "ui-implementation" / "src-tauri" / "backend"))
@@ -1227,9 +1231,9 @@ async def main():
         print("Install: pip install sentence-transformers")
         return
 
-    # Initialize embedding service
-    print("Loading embedding model...")
-    embedding_service = RealEmbeddingService()
+    # Initialize embedding service - MUST use 768d model to match Roampal's UnifiedMemorySystem
+    print("Loading embedding model (all-mpnet-base-v2, 768d)...")
+    embedding_service = RealEmbeddingService(model_name='all-mpnet-base-v2')
     print("Model loaded.\n")
 
     # Create test directories

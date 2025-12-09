@@ -102,13 +102,35 @@ benchmarks/.benchmarks/
 *cleanup.bat
 devnull
 
-# Benchmark runtime artifacts (generated when tests run - NOT results)
+# Benchmark runtime artifacts (generated when tests run)
 benchmarks/**/chromadb/
 benchmarks/**/*.sqlite3
 benchmarks/**/*.bin
+benchmarks/**/control_*/
+benchmarks/**/treatment_*/
+benchmarks/**/rag3_*/
+benchmarks/**/scenario_*/
+benchmarks/**/s*_*/
+benchmarks/**/__pycache__/
+benchmarks/.pytest_cache/
+
+# Benchmark data directories (test artifacts, regenerated each run)
+benchmarks/**/ab_test_data/
 benchmarks/**/comprehensive_benchmark_data/
+benchmarks/**/debug_test_data/
+benchmarks/**/dynamic_weight_test_data/
 benchmarks/**/learning_curve_data/
+benchmarks/**/roampal_vs_vectordb_data/
+benchmarks/**/test_data/
+benchmarks/**/test_data_*/
 benchmarks/**/token_efficiency_data/
+benchmarks/**/torture_test_data/
+
+# Benchmark working files (overwritten each run)
+benchmarks/**/statistical_results.json
+benchmarks/**/token_efficiency_results.json
+
+# NOTE: Versioned results live in benchmarks/comprehensive_test/results/ (committed)
 
 # Pickle files
 *.pickle

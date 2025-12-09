@@ -3,6 +3,96 @@
 > **Date:** December 2024
 > **Status:** Planning
 > **Related:** [ARCHITECTURAL_CRITIQUE.md](./ARCHITECTURAL_CRITIQUE.md)
+> **Fact-Checked:** December 9, 2024 (all line numbers and counts verified against codebase)
+
+---
+
+## Codebase Context
+
+### Two Versions Exist
+
+| Location | Lines | Wilson Score | Status |
+|----------|-------|--------------|--------|
+| `c:/ROAMPAL/modules/memory/unified_memory_system.py` | 2,584 | ❌ Missing | Stripped/older - **DO NOT USE** |
+| `c:/ROAMPAL/ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py` | 4,746 | ✅ Present | **CANONICAL SOURCE** |
+
+**Why two versions?** The `ui-implementation` path is structured for Tauri bundling. The root-level version appears to be an older/stripped copy.
+
+**Action:** All refactoring work targets the `ui-implementation/src-tauri/backend/` codebase.
+
+---
+
+## Build Strategy
+
+### Isolated Build Approach
+
+Build the new architecture in a separate folder to avoid risk to production:
+
+```
+C:\ROAMPAL-REFACTOR\
+├── modules/
+│   └── memory/
+│       ├── unified_memory_system.py   # ~800 line facade
+│       ├── config.py                  # MemoryConfig dataclass
+│       ├── types.py                   # OutcomeHistory, PromotionRecord, etc.
+│       ├── scoring_service.py         # Wilson score, final score calc
+│       ├── promotion_service.py       # Promotion/demotion logic
+│       ├── routing_service.py         # KG-based collection routing
+│       ├── kg_service.py              # Knowledge graph ops (with Lock fix)
+│       ├── search_service.py          # Hybrid search, reranking
+│       ├── memory_bank_service.py     # Memory bank CRUD
+│       ├── context_service.py         # Context detection
+│       └── outcome_service.py         # Outcome recording
+├── tests/
+│   ├── characterization/              # Captured current behavior
+│   │   ├── test_search_behavior.py
+│   │   ├── test_outcome_behavior.py
+│   │   └── test_mcp_tools.py
+│   └── unit/                          # New service unit tests
+└── benchmarks/
+    └── compare_old_vs_new.py          # Regression check
+```
+
+**Benefits:**
+- No risk to production until swap
+- Side-by-side comparison possible
+- Easy rollback (just don't swap)
+- Clean git history
+
+**Swap Criteria:**
+1. Characterization tests pass against BOTH implementations
+2. Benchmarks match within ±1%
+3. All 7 MCP tools return identical shapes
+4. Stress test (1000 ops) passes without errors
+
+---
+
+## Dependency Strategy
+
+### Import from Original (Don't Copy)
+
+The refactor targets `UnifiedMemorySystem` decomposition only. Stable dependencies stay in place:
+
+```python
+# In C:\ROAMPAL-REFACTOR\modules\memory\scoring_service.py
+import sys
+sys.path.insert(0, "C:/ROAMPAL/ui-implementation/src-tauri/backend")
+
+from modules.embedding.embedding_service import EmbeddingService  # Import from original
+from modules.memory.chromadb_adapter import ChromaDBAdapter        # Import from original
+```
+
+**Rationale:** Keep scope tight. We're restructuring the God class, not rebuilding ChromaDB or embedding logic.
+
+### Use Existing Python Environment
+
+```bash
+# Run tests using the bundled Python with all deps installed
+cd C:\ROAMPAL-REFACTOR
+C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\python.exe -m pytest tests/
+```
+
+**Rationale:** Avoid version mismatches. The existing environment has all dependencies (chromadb, sentence-transformers, scipy, etc.) already working.
 
 ---
 
@@ -35,6 +125,9 @@ Extract all magic numbers from the codebase:
 | LEARNED_WEIGHT_PROVEN | Line 1581 | 0.8 | Learned weight for proven |
 | KG_DEBOUNCE_SECONDS | Line 398 | 5 | KG save debounce |
 | MAX_MEMORY_BANK_ITEMS | Line 4221 | 1000 | Capacity limit |
+| SEARCH_MULTIPLIER | Lines 1359, 1398, 1413, 1421 | 3 | Search depth multiplier (limit × 3) |
+
+> **Note:** `SEARCH_MULTIPLIER` is currently hardcoded in 4 locations. Architecture.md incorrectly references lines 1090, 1129, 1144, 1152 (stale - drifted ~270 lines). Actual locations verified Dec 9, 2024.
 
 ```python
 @dataclass
@@ -48,6 +141,7 @@ class MemoryConfig:
     default_importance: float = 0.7
     kg_debounce_seconds: int = 5
     max_memory_bank_items: int = 1000
+    search_multiplier: int = 3  # Currently hardcoded as `limit * 3` in 4 locations
 ```
 
 ### 1.2 Create typed dataclasses for JSON strings
@@ -848,5 +942,90 @@ The refactoring is complete when:
 ---
 
 *Created: December 2024*
-*Updated: December 2024 (Added risk-ordered action plan)*
+*Updated: December 9, 2024 (Added appendices A-G)*
 *Status: Ready for implementation*
+
+---
+
+## Appendix A: Module-Level Items
+
+| Item | Line | Destination |
+|------|------|-------------|
+| `CollectionName` | 45 | `types.py` |
+| `wilson_score_lower()` | 47-90 | `ScoringService` |
+| `ContextType = str` | 94 | `types.py` |
+| `ActionOutcome` dataclass | 97-153 | `types.py` |
+| `with_retry()` decorator | 155-175 | `utils.py` or facade |
+| `AutonomousRouter = None` | 41 | **DELETE** (dead) |
+
+---
+
+## Appendix B: Instantiation Patterns
+
+| Mode | File | Line | Pattern |
+|------|------|------|---------|
+| FastAPI | `main.py` | 259 | `app.state.memory` |
+| MCP | `main.py` | 784 | Local var in `run_mcp_server()` |
+
+---
+
+## Appendix C: Uncovered Methods
+
+| Method | Line | Service |
+|--------|------|---------|
+| `store()` | 801 | Facade |
+| `get_kg_entities()` | 4524 | `KGService` |
+| `get_kg_relationships()` | 4671 | `KGService` |
+| `record_action_outcome()` | ~2700 | `OutcomeService` |
+| `get_action_effectiveness()` | ~2800 | `OutcomeService` |
+| `export_backup()` | ~4100 | Facade |
+| `import_backup()` | ~4150 | Facade |
+| `_cleanup_kg_dead_references()` | ~3200 | `KGService` |
+
+---
+
+## Appendix D: Error Handling (14 bare except:)
+
+Lines: 334, 344, 722, 1384, 1493, 1537, 3061, 3532, 3701, 3748, 3997, 4057, 4192, 4743
+
+**Fix:** Replace with specific exceptions + logging.
+
+---
+
+## Appendix E: Additional Risks
+
+| Risk | Mitigation |
+|------|------------|
+| Circular imports | Use `TYPE_CHECKING` |
+| `sys.path.insert()` fragility | Test from multiple dirs |
+| ChromaDB lock contention | Share collection dict |
+
+---
+
+## Appendix F: Attribute Ownership
+
+| Attribute | Owner |
+|-----------|-------|
+| `self.data_dir` | Facade |
+| `self.collections` | Facade (shared) |
+| `self.reranker` | `SearchService` |
+| `self.knowledge_graph` | `KGService` |
+| `self._promotion_lock` | `PromotionService` |
+| `self._kg_save_*` | `KGService` |
+| `self._cached_doc_ids` | `OutcomeService` |
+| `self.outcome_*` | `OutcomeService` |
+
+---
+
+## Appendix G: Characterization Queries
+
+```python
+QUERIES = [
+    "how do I search memory",
+    "python async patterns",
+    "",  # empty
+    "user preference for dark mode",
+    "API rate limiting",
+    "remember my name is John",
+]
+```

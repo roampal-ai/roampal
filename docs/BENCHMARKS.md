@@ -1,6 +1,6 @@
 # Roampal Benchmarks
 
-**Last Updated**: 2025-12-01
+**Last Updated**: 2025-12-09
 **Test Suite Location**: `benchmarks/comprehensive_test/`
 
 ---
@@ -10,10 +10,10 @@
 Roampal's memory system has been validated through **comprehensive testing** proving that outcome-based learning **significantly outperforms pure vector search**.
 
 **Headline Result**:
-> **Plain vector search: 3.3% accuracy. Roampal: 100% accuracy. Same queries. (p=0.001)**
+> **Plain vector search: 0% accuracy. Roampal: 97% accuracy. Same adversarial queries. (p=0.001)**
 
 **Key Results**:
-- ✅ **Roampal vs Vector DB**: 100% vs 3.3% on adversarial queries (p=0.001, d=7.49)
+- ✅ **Roampal vs Vector DB**: 97% vs 0% on adversarial queries (p=0.001, d=7.49)
 - ✅ **40/40 infrastructure tests passed** (30 comprehensive + 10 torture)
 - ✅ **Learning curve proven**: 58% → 93% accuracy (+35pp improvement, p=0.005)
 - ✅ **Dynamic weight shifting**: 5/5 scenarios - proven memories outrank semantic matches
@@ -87,7 +87,7 @@ cd benchmarks/comprehensive_test
 python test_torture_suite.py
 ```
 
-**Documentation**: See `benchmarks/comprehensive_test/TORTURE_SUITE_RESULTS.md`
+**Documentation**: See `benchmarks/comprehensive_test/README.md`
 
 ---
 
@@ -138,7 +138,7 @@ This is the definitive test. It answers: **"Does learning from outcomes actually
 
 | Metric | Plain Vector DB | Roampal |
 |--------|----------------|---------|
-| **Success Rate** | 3.3% (1/30) | **100% (30/30)** |
+| **Success Rate** | 0% (0/30) | **96.7% (29/30)** |
 | **p-value** | - | **0.001** |
 | **Cohen's d** | - | **7.49** (massive) |
 | **95% CI** | - | [89.8%, 103.5%] |
@@ -148,8 +148,8 @@ This is the definitive test. It answers: **"Does learning from outcomes actually
 | Category | Vector DB | Roampal | Delta |
 |----------|-----------|---------|-------|
 | Debugging | 0% | 100% | +100% |
-| Database | 0% | 100% | +100% |
-| API | 20% | 100% | +80% |
+| Database | 0% | 80% | +80% |
+| API | 0% | 100% | +100% |
 | Errors | 0% | 100% | +100% |
 | Async | 0% | 100% | +100% |
 | Git | 0% | 100% | +100% |
@@ -161,14 +161,14 @@ The queries were specifically crafted to trick semantic search. For example:
 - Bad advice: "Add **print()** statements to see **variable values**" (semantic match!)
 - Good advice: "Use pdb with breakpoints" (no keyword overlap)
 
-Plain vector search returned the bad advice 29/30 times. Roampal returned good advice 30/30 times because:
+Plain vector search returned the bad advice 30/30 times. Roampal returned good advice 29/30 times because:
 1. Good advice had score=0.9 (from positive outcomes)
 2. Bad advice had score=0.2 (from negative outcomes)
 3. Dynamic weighting (40% embedding, 60% score) overrode semantic similarity
 
 **Statistical Interpretation**:
 - **p=0.001**: Less than 0.1% chance this is random luck
-- **d=7.49**: Effect size is off the charts (0.8 is "large")
+- **d=7.49**: Effect size is massive (0.8 is threshold for "large")
 - **95% CI doesn't include 0**: The improvement is reliable, not a fluke
 
 **How to Run**:
@@ -249,67 +249,61 @@ python test_token_efficiency.py
 
 ---
 
-### 7. Three-Way Comparison Test (v0.2.5)
+### 7. Comprehensive 4-Way Benchmark (v0.2.5)
 
-**Location**: `benchmarks/comprehensive_test/test_three_way_comparison.py`
-**Purpose**: Prove outcome learning adds value beyond cross-encoder reranking
+**Location**: `benchmarks/comprehensive_test/test_comprehensive_benchmark.py`
+**Runtime**: ~5 minutes
+**Status**: PASS (p=0.005, highly significant)
 
-This test isolates the value of outcome-based learning by comparing three conditions:
+**Purpose**: Definitive comparison of RAG vs Reranker vs Outcomes vs Full Roampal
 
-**Conditions**:
-- **A (Plain Vector)**: Pure ChromaDB L2 distance search
-- **B (Reranker Only)**: Vector + mmarco multilingual cross-encoder (no outcome learning)
-- **C (Roampal Full)**: Vector + cross-encoder + Wilson scoring + outcome learning
+**Design**: 4 conditions × 5 maturity levels × 10 adversarial scenarios = 200 tests
 
-**Test Design**:
-- 25 adversarial scenarios across 5 domains (Health, Tech, Finance, Productivity, Learning)
-- 3 query variations per scenario (75 total queries)
-- Queries designed to semantically match the WRONG answer
-- Real embeddings: `all-mpnet-base-v2` (768d)
-- Paired t-test with Cohen's d effect size
+**Four Conditions**:
+- **RAG Baseline**: Pure ChromaDB L2 distance
+- **Reranker Only**: Vector + ms-marco cross-encoder (no outcomes)
+- **Outcomes Only**: Vector + Wilson scoring (no reranker)
+- **Full Roampal**: Vector + reranker + Wilson scoring
+
+**Metrics**: Top-1 Accuracy, MRR, nDCG@5, Token Efficiency
 
 **Results**:
 
-| Condition | Accuracy | vs Plain Vector |
-|-----------|----------|-----------------|
-| **A (Plain Vector)** | 26.7% | - |
-| **B (Reranker Only)** | 21.3% | **-5.3% (HURT!)** |
-| **C (Roampal Full)** | 37.3% | +10.7% |
+| Condition | Top-1 | MRR | nDCG@5 |
+|-----------|-------|-----|--------|
+| RAG Baseline | 10% | 0.550 | 0.668 |
+| Reranker Only | 20% | 0.600 | 0.705 |
+| Outcomes Only | 50% | 0.750 | 0.815 |
+| Full Roampal | 44% | 0.720 | 0.793 |
 
-**Key Finding**: Cross-encoder alone **reduced** accuracy on adversarial queries. The reranker confidently selected semantically-matching wrong answers.
+**Learning Curve** (Full Roampal):
 
-**Statistical Significance (B vs C - Outcome Learning Value)**:
+| Maturity | Uses | Top-1 | MRR |
+|----------|------|-------|-----|
+| Cold Start | 0 | 0% | 0.500 |
+| Early | 3 | 50% | 0.750 |
+| Mature | 20 | 60% | 0.800 |
 
-| Metric | Value |
-|--------|-------|
-| **Delta** | +16 percentage points |
-| **p-value** | **0.01** (SIGNIFICANT) |
-| **Cohen's d** | 0.35 (medium effect) |
-| **95% CI** | [4.1%, 27.9%] |
+**Key Finding**: Outcome learning (+40 pts) dominates reranker (+10 pts) by 4×
 
-**Per-Domain Breakdown**:
+**Statistical Significance**:
+- **Cold→Mature**: p=0.0051** (highly significant)
+- **Full vs RAG (MRR)**: p=0.0150*
+- **Full vs Reranker (MRR)**: p=0.0368*
 
-| Domain | Vector (A) | Reranker (B) | Full (C) | Delta (B→C) |
-|--------|------------|--------------|----------|-------------|
-| Health | 33% | 33% | 53% | +20 pts |
-| Tech | 20% | 20% | 40% | +20 pts |
-| Finance | 27% | 20% | 40% | +20 pts |
-| Productivity | 33% | 13% | 33% | +20 pts |
-| Learning | 20% | 20% | 20% | +0 pts |
+**Improvement Breakdown**:
+- Reranker contribution: +10 pts
+- Outcomes contribution: +40 pts (4× more impactful)
 
 **Why This Matters**:
-
-This test proves that:
-1. **Cross-encoders aren't enough**: They can confidently select wrong answers that match query semantics
-2. **Outcome learning provides real value**: +16% improvement over reranker alone (p=0.01)
-3. **The combination matters**: Vector search + outcome scores beats either approach alone
-
-The reranker is good at finding semantic matches, but when queries are adversarial (designed to match wrong answers), semantic similarity becomes a liability. Outcome-based learning overcomes this by boosting memories that actually worked.
+1. Outcome-based learning is the dominant factor, not semantic reranking
+2. Just 3 uses is enough to reach near-maximum accuracy
+3. The system learns what actually worked, not what sounds related
 
 **How to Run**:
 ```bash
 cd benchmarks/comprehensive_test
-python test_three_way_comparison.py
+python test_comprehensive_benchmark.py
 ```
 
 ---
@@ -358,7 +352,8 @@ python test_three_way_comparison.py
 - After 3 bad uses, auto-injects warnings to prevent hallucination
 
 ### ❌ Not Tested (Requires Live System)
-n**Time-Based Features (Partially Tested)**:
+
+**Time-Based Features (Partially Tested)**:
 - ✅ 24h decay (working collection) - tested in comprehensive suite
 - ✅ 30d decay (history collection) - tested in comprehensive suite
 - ❌ Auto-promotion timing (every 20 messages, every 30 min) - works in production, not synthetically tested
@@ -488,8 +483,6 @@ Beyond synthetic tests, Roampal has demonstrated real learning in production:
 
 **Documentation**:
 - `benchmarks/comprehensive_test/README.md` - Test suite overview
-- `benchmarks/comprehensive_test/TORTURE_SUITE_RESULTS.md` - Detailed torture test breakdown
-- `benchmarks/comprehensive_test/COMPLETE_TEST_COVERAGE_REVIEW.md` - Systematic architecture review
 - `benchmarks/comprehensive_test/learning_curve_test/STATISTICAL_SIGNIFICANCE_EXPLAINED.md` - Statistical methodology
 
 **Mock Infrastructure**:
@@ -502,7 +495,7 @@ Beyond synthetic tests, Roampal has demonstrated real learning in production:
 **Roampal significantly outperforms plain vector search.**
 
 The headline numbers:
-- **100% vs 3.3%** accuracy on adversarial queries
+- **97% vs 0%** accuracy on adversarial queries
 - **p=0.001** statistical significance
 - **d=7.49** effect size (massive)
 
@@ -517,45 +510,7 @@ What this means in practice:
 - Sub-100ms search latency
 
 **The One-Liner:**
-> "Vector search got 3% right. Outcome-based learning got 100% right. On the same queries."
+> "Vector search got 0% right. Outcome-based learning got 97% right. On the same adversarial queries."
 
-This is publishable-quality evidence that outcome-based memory learning provides real value beyond what vector databases can achieve alone.
-
-### 4. Latency Benchmark
-
-**Location**: `benchmarks/comprehensive_test/test_latency_benchmark.py`
-**Purpose**: Validate search performance under realistic load
-
-**Test Configuration**:
-- Collection sizes: 10, 50, 100, 500 memories
-- 100 search queries per size
-- Real embeddings and semantic search
-
-**Results (100 memories)**:
-
-| Metric | Latency |
-|--------|---------|
-| **p50** | 64.60ms |
-| **p95** | 77.08ms |
-| **p99** | 87.71ms |
-| **avg** | 65.47ms |
-
-**Scalability**:
-
-| Memories | p50 | p95 | p99 |
-|----------|-----|-----|-----|
-| 10 | 3.29ms | 36.87ms | 40.48ms |
-| 50 | 61.38ms | 69.67ms | 73.93ms |
-| 100 | 64.60ms | 77.08ms | 87.71ms |
-| 500 | 82.15ms | 122.12ms | 134.69ms |
-
-**What This Proves**: Search performance is production-ready with sub-100ms latency at typical memory volumes (100 memories). Performance degrades gracefully as collection grows.
-
-**How to Run**:
-```bash
-cd benchmarks/comprehensive_test
-python test_latency_benchmark.py
-```
-
----
+This is statistically significant evidence that outcome-based memory learning provides real value beyond what vector databases can achieve alone.
 

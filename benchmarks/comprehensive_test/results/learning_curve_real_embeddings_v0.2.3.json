@@ -1,0 +1,23 @@
+{
+  "design": {
+    "n": 12,
+    "alpha": 0.05
+  },
+  "control": {
+    "mean": 0.0,
+    "sd": 0.0
+  },
+  "treatment": {
+    "mean": 0.9333333333333333,
+    "sd": 0.09847319278346617
+  },
+  "statistics": {
+    "cohens_d": 13.403979508588737,
+    "t_statistic": 32.832910318764014,
+    "p_value": 0.005
+  },
+  "verdict": {
+    "significant": true,
+    "large_effect": true
+  }
+}

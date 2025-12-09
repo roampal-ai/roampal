@@ -560,21 +560,21 @@ Four conditions compared on identical adversarial queries (bad advice semantical
 | RAG Baseline | **10%** | 0.550 | 0.668 | 40 |
 | Reranker Only | **20%** | 0.600 | 0.705 | 90 |
 | Outcomes Only | **50%** | 0.750 | 0.815 | 40 |
-| Full Roampal | **48%** | 0.740 | 0.808 | 45 |
+| Full Roampal | **44%** | 0.720 | 0.793 | 45 |
 
 ### Improvement Breakdown (Mature Level)
 
 ```
 RAG Baseline:        10%
 + Reranker:          20% (+10 pts)
-+ Outcomes only:     60% (+50 pts)
-+ Both (Roampal):    60% (+50 pts)
++ Outcomes only:     50% (+40 pts)
++ Both (Roampal):    44% (+34 pts)
 
 Reranker contribution:  +10 pts
-Outcomes contribution:  +50 pts
+Outcomes contribution:  +40 pts
 ```
 
-**Key Finding**: Outcome learning (+50 pts) dominates reranker contribution (+10 pts) by 5×.
+**Key Finding**: Outcome learning (+40 pts) dominates reranker contribution (+10 pts) by 4×.
 
 ### Statistical Significance
 

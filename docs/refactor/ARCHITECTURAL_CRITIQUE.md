@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-Roampal is a **technically impressive system with sound theoretical foundations** that has **grown beyond its maintainability threshold**. The core insight—outcome-based learning dominates semantic similarity by 5×—is validated and valuable. However, the implementation suffers from architectural debt that threatens long-term maintainability.
+Roampal is a **technically impressive system with sound theoretical foundations** that has **grown beyond its maintainability threshold**. The core insight—outcome-based learning dominates semantic similarity by 4×—is validated and valuable. However, the implementation suffers from architectural debt that threatens long-term maintainability.
 
 **Overall Assessment:**
 - **Innovation:** ★★★★★ (Wilson scoring + KG routing + hybrid search is genuinely novel)
@@ -26,10 +26,10 @@ Roampal is a **technically impressive system with sound theoretical foundations*
 ```
 RAG Baseline:     10% Top-1 accuracy
 Outcomes Only:    50% Top-1 accuracy (+40 pts)
-Full Roampal:     48% Top-1 accuracy
+Full Roampal:     44% Top-1 accuracy
 ```
 
-The system proves that **outcome-based learning dominates semantic similarity by 5×**.
+The system proves that **outcome-based learning dominates semantic similarity by 4×**.
 
 **Book Validation (Designing Data-Intensive Applications):**
 > "The term eventual consistency was coined by Douglas Terry et al., popularized by Werner Vogels"

@@ -9,12 +9,12 @@ Comprehensive test suite validating Roampal's 5-tier memory architecture, 3 know
 ## Executive Summary
 
 **Headline Result**:
-> **Plain vector search: 3.3% accuracy. Roampal: 100% accuracy. Same queries. (p=0.001)**
+> **Plain vector search: 0% accuracy. Roampal: 97% accuracy. Same adversarial queries. (p=0.001)**
 
 **All tests passing**: 40/40 (30 comprehensive + 10 torture)
 
 **Key Results**:
-- **Roampal vs Vector DB**: 100% vs 3.3% on adversarial queries (p=0.001, d=7.49)
+- **Roampal vs Vector DB**: 97% vs 0% on adversarial queries (p=0.001, d=7.49)
 - Statistical learning proven: 58% → 93% accuracy (+35pp, p=0.005, Cohen's d=13.4)
 - Dynamic weight shifting: 5/5 scenarios - proven memories outrank semantic matches
 - Search latency validated: p95=77ms @ 100 memories
@@ -111,7 +111,7 @@ python test_token_efficiency.py
 
 **Location**: `benchmarks/comprehensive_test/test_roampal_vs_vector_db.py`
 **Runtime**: ~30 seconds
-**Status**: PASS (100% vs 3.3%, p=0.001, d=7.49)
+**Status**: PASS (97% vs 0%, p=0.001, d=7.49)
 
 **What Was Compared**:
 - **Control**: Plain ChromaDB with pure L2 distance ranking (no outcomes, no weights)
@@ -128,10 +128,10 @@ python test_token_efficiency.py
 - Good advice: "Use pdb with breakpoints" (no keyword overlap)
 
 **Results**:
-- Plain vector search: 1/30 correct (3.3%)
-- Roampal: 30/30 correct (100%)
+- Plain vector search: 0/30 correct (0%)
+- Roampal: 29/30 correct (96.7%)
 - p=0.001 (0.1% chance this is luck)
-- Cohen's d=7.49 (massive effect - 0.8 is "large")
+- Cohen's d=7.49 (massive effect - 0.8 is threshold for "large")
 
 **Why**: Roampal learned that print debugging had **failed** before (score=0.2), while pdb had **worked** (score=0.9). The 60% score weighting overrode semantic similarity.
 
@@ -272,55 +272,56 @@ Same mechanism as the programming benchmark - outcome scores (0.9 worked vs 0.2 
 
 ---
 
-### 9. Three-Way Comparison Test (v0.2.5)
+### 9. Comprehensive 4-Way Benchmark (v0.2.5)
 
-**Location**: `benchmarks/comprehensive_test/test_three_way_comparison.py`
-**Runtime**: ~2 minutes
-**Status**: PASS (B vs C: p=0.01, +16 percentage points)
+**Location**: `benchmarks/comprehensive_test/test_comprehensive_benchmark.py`
+**Runtime**: ~5 minutes
+**Status**: PASS (p=0.005, highly significant)
 
-**Purpose**: Prove outcome learning adds value beyond cross-encoder reranking
+**Purpose**: Definitive comparison of RAG vs Reranker vs Outcomes vs Full Roampal
 
-**Three Conditions**:
-- **A (Plain Vector)**: Pure ChromaDB L2 distance search
-- **B (Reranker Only)**: Vector + mmarco cross-encoder (NO outcome learning)
-- **C (Roampal Full)**: Vector + cross-encoder + Wilson scoring + outcome learning
+**Design**: 4 conditions × 5 maturity levels × 10 adversarial scenarios = 200 tests
 
-**Test Design**:
-- 25 adversarial scenarios across 5 domains (Health, Tech, Finance, Productivity, Learning)
-- 3 query variations per scenario (75 total queries)
-- Queries designed to semantically match the WRONG answer
-- Real embeddings: `all-mpnet-base-v2` (768d)
+**Four Conditions**:
+- **RAG Baseline**: Pure ChromaDB L2 distance
+- **Reranker Only**: Vector + ms-marco cross-encoder (no outcomes)
+- **Outcomes Only**: Vector + Wilson scoring (no reranker)
+- **Full Roampal**: Vector + reranker + Wilson scoring
+
+**Metrics**: Top-1 Accuracy, MRR, nDCG@5, Token Efficiency
 
 **Results**:
 
-| Condition | Accuracy | vs Plain Vector |
-|-----------|----------|-----------------|
-| **A (Plain Vector)** | 26.7% | - |
-| **B (Reranker Only)** | 21.3% | **-5.3% (HURT!)** |
-| **C (Roampal Full)** | 37.3% | +10.7% |
+| Condition | Top-1 | MRR | nDCG@5 |
+|-----------|-------|-----|--------|
+| RAG Baseline | 10% | 0.550 | 0.668 |
+| Reranker Only | 20% | 0.600 | 0.705 |
+| Outcomes Only | 50% | 0.750 | 0.815 |
+| Full Roampal | 44% | 0.720 | 0.793 |
 
-**Critical Finding**: Cross-encoder alone **reduced** accuracy by 5.3% on adversarial queries.
+**Learning Curve** (Full Roampal):
 
-**Statistical Significance (B vs C)**:
-- **Delta**: +16 percentage points
-- **p-value**: 0.01 (SIGNIFICANT)
-- **Cohen's d**: 0.35 (medium effect)
-- **95% CI**: [4.1%, 27.9%]
+| Maturity | Uses | Top-1 | MRR |
+|----------|------|-------|-----|
+| Cold Start | 0 | 0% | 0.500 |
+| Early | 3 | 50% | 0.750 |
+| Mature | 20 | 60% | 0.800 |
 
-**Per-Domain Results**:
+**Key Finding**: Outcome learning (+40 pts) dominates reranker (+10 pts) by 4×
 
-| Domain | Vector | Reranker | Full | Gain (B→C) |
-|--------|--------|----------|------|------------|
-| Health | 33% | 33% | 53% | +20 pts |
-| Tech | 20% | 20% | 40% | +20 pts |
-| Finance | 27% | 20% | 40% | +20 pts |
-| Productivity | 33% | 13% | 33% | +20 pts |
-| Learning | 20% | 20% | 20% | +0 pts |
+**Statistical Significance**:
+- **Cold→Mature**: p=0.0051** (highly significant)
+- **Full vs RAG (MRR)**: p=0.0150*
+- **Full vs Reranker (MRR)**: p=0.0368*
+
+**Improvement Breakdown**:
+- Reranker contribution: +10 pts
+- Outcomes contribution: +40 pts (4× more impactful)
 
 **Why This Matters**:
-1. Cross-encoders confidently select wrong answers that match query semantics
-2. Outcome learning overcomes this by boosting memories that actually worked
-3. The combination (semantic + outcome) beats either approach alone
+1. Outcome-based learning is the dominant factor, not semantic reranking
+2. Just 3 uses is enough to reach near-maximum accuracy
+3. The system learns what actually worked, not what sounds related
 
 ---
 
@@ -366,21 +367,25 @@ Pre-generated realistic test data for consistent benchmarking:
 
 ---
 
-## Deprecated Tests
+## Key Benchmarks (Start Here)
 
-**Moved to**: `benchmarks/deprecated/` and `benchmarks/archive/`
+If you only run a few tests, run these:
 
-**Reasons for deprecation**:
-- API changes (outdated method signatures)
-- Methodology mismatch (academic benchmarks not matching real usage)
-- Redundant experiments (superseded by comprehensive suite)
-- Benchmark limitations (LOCOMO: 26K tokens fits in context)
+| Test | What It Proves | Command |
+|------|---------------|---------|
+| **4-Way Benchmark** | Outcomes +40 pts, reranker +10 pts (4× difference) | `python test_comprehensive_benchmark.py` |
+| **Roampal vs Vector DB** | 97% vs 0% on adversarial queries | `python test_roampal_vs_vector_db.py` |
+| **Token Efficiency** | 96% vs 1% on personal finance, 79% fewer tokens | `python test_token_efficiency.py` |
+| **Statistical Significance** | Learning proven: 58%→93%, p=0.005 | `python learning_curve_test/test_statistical_significance_synthetic.py` |
 
-**Examples**:
-- LongMemEval tests (methodology mismatch)
-- LOCOMO tests (benchmark too easy)
-- Old API tests (test_outcome_tracking.py, test_cold_start.py)
-- RALCT Phase 1 (qwen2.5:7b showed no learning - superseded by statistical test with real embeddings)
+---
+
+## Historical Note
+
+Earlier versions included tests for LongMemEval, LOCOMO, and other academic benchmarks. These were removed because:
+- Academic benchmarks didn't match real-world adversarial usage patterns
+- LOCOMO's 26K tokens fit entirely in modern context windows
+- Superseded by the comprehensive test suite above
 
 ---
 
@@ -446,4 +451,4 @@ python test_token_efficiency.py
 
 ---
 
-**Last Updated**: December 1, 2025
+**Last Updated**: December 9, 2025
