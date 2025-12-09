@@ -46,7 +46,7 @@ from pydantic import BaseModel, validator
 from filelock import FileLock
 
 
-from modules.memory.unified_memory_system import UnifiedMemorySystem
+from modules.memory.unified_memory_system import UnifiedMemorySystem, ActionOutcome
 
 from modules.llm.ollama_client import OllamaClient
 
@@ -71,6 +71,10 @@ router = APIRouter()
 # Cold-start tracking for internal LLM (v0.2.0)
 # Auto-injects user profile from Content KG on message 1 of every new conversation
 internal_session_message_counter: Dict[str, int] = defaultdict(int)
+
+# Action KG tracking for internal LLM (v0.2.6)
+# Caches tool actions until outcome is determined, then scores them
+_agent_action_cache: Dict[str, List[ActionOutcome]] = {}
 
 # Injection Protection: Response Validation (Layer 3)
 class ResponseValidator:
@@ -1043,6 +1047,22 @@ class AgentChatService:
                                 # Clear cache after scoring
                                 del _search_cache[conversation_id]
                                 logger.debug(f"[OUTCOME] Cleared search cache for conversation {conversation_id}")
+
+                            # v0.2.6: Score cached actions for Action KG
+                            if conversation_id in _agent_action_cache:
+                                cached_actions = _agent_action_cache[conversation_id]
+                                logger.info(f"[ACTION_KG] Scoring {len(cached_actions)} cached actions with outcome={outcome}")
+
+                                for action in cached_actions:
+                                    action.outcome = outcome
+                                    try:
+                                        await self.memory.record_action_outcome(action)
+                                    except Exception as e:
+                                        logger.warning(f"[ACTION_KG] Failed to record action {action.action_type}: {e}")
+
+                                # Clear action cache after scoring
+                                del _agent_action_cache[conversation_id]
+                                logger.debug(f"[ACTION_KG] Cleared action cache for conversation {conversation_id}")
                         else:
                             logger.debug(f"[OUTCOME] Skipping outcome '{outcome_result.get('outcome')}' (not worked/failed/partial)")
                     else:
@@ -2504,6 +2524,20 @@ Respond with ONLY the title, nothing else."""
         # Yield tool complete event
         if tool_event_for_ui:
             yield tool_event_for_ui
+
+        # v0.2.6: Track tool execution for Action KG (unified with MCP server)
+        # Cache action until outcome is determined, then score it
+        if tool_execution_record and tool_execution_record.get("status") != "unknown":
+            action = ActionOutcome(
+                action_type=tool_name,
+                context_type="general",  # Default - could be enhanced to pass from caller
+                outcome="unknown",  # Will be updated when user reaction is detected
+                action_params=tool_args,
+                collection=tool_args.get("collections", [None])[0] if tool_name == "search_memory" else None,
+                doc_id=_search_cache.get(conversation_id, [None])[0] if tool_name == "search_memory" else None
+            )
+            _agent_action_cache.setdefault(conversation_id, []).append(action)
+            logger.debug(f"[ACTION_KG] Cached action: {tool_name} for conversation {conversation_id}")
 
         # Handle continuation for search_memory and external MCP tools (regardless of result count, under depth limit)
         # v0.2.5: Also handle external tool results

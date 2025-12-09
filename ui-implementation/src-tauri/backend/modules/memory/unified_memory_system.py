@@ -1470,17 +1470,37 @@ Prefix (one sentence, max 20 words):"""
                     # entity_boost=1.5 → additional 50% entity boost
                     # Combined max: distance * 0.2 * (1/1.5) = distance * 0.133 (87% total boost)
                     r["distance"] = r.get("distance", 1.0) * metadata_boost / entity_boost
+
+                    # v0.2.6: Apply doc effectiveness boost from Action KG
+                    doc_id = r.get("id") or r.get("doc_id")
+                    if doc_id:
+                        eff = self.get_doc_effectiveness(doc_id)
+                        if eff and eff.get("total_uses", 0) >= 3:
+                            # Boost/penalize: 40% fail → 0.7x, 100% success → 1.3x
+                            eff_multiplier = 0.7 + eff["success_rate"] * 0.6
+                            r["distance"] = r["distance"] / eff_multiplier
+
                 # Boost recently uploaded books (within last 7 days)
-                elif coll_name == "books" and r.get("upload_timestamp"):
-                    from datetime import datetime, timedelta
-                    try:
-                        upload_time = datetime.fromisoformat(r["upload_timestamp"])
-                        age_days = (datetime.utcnow() - upload_time).days
-                        if age_days <= 7:
-                            # Strong boost for recent uploads (30% better score)
-                            r["distance"] = r.get("distance", 1.0) * 0.7
-                    except:
-                        pass
+                elif coll_name == "books":
+                    if r.get("upload_timestamp"):
+                        from datetime import datetime, timedelta
+                        try:
+                            upload_time = datetime.fromisoformat(r["upload_timestamp"])
+                            age_days = (datetime.utcnow() - upload_time).days
+                            if age_days <= 7:
+                                # Strong boost for recent uploads (30% better score)
+                                r["distance"] = r.get("distance", 1.0) * 0.7
+                        except:
+                            pass
+
+                    # v0.2.6: Apply doc effectiveness boost from Action KG
+                    doc_id = r.get("id") or r.get("doc_id")
+                    if doc_id:
+                        eff = self.get_doc_effectiveness(doc_id)
+                        if eff and eff.get("total_uses", 0) >= 3:
+                            # Boost/penalize: 40% fail → 0.7x, 100% success → 1.3x
+                            eff_multiplier = 0.7 + eff["success_rate"] * 0.6
+                            r["distance"] = r.get("distance", 1.0) / eff_multiplier
 
             all_results.extend(results)
 
@@ -2740,6 +2760,164 @@ Prefix (one sentence, max 20 words):"""
 
         return stats["total_uses"] >= min_uses and stats["success_rate"] < max_success_rate
 
+    def get_doc_effectiveness(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Aggregate success rate for a specific doc from Action KG examples (v0.2.6).
+
+        Scans all context_action_effectiveness entries for this doc_id
+        to determine how effective this document has been across all uses.
+
+        Args:
+            doc_id: The document ID to check
+
+        Returns:
+            Dict with success_rate, total_uses, etc., or None if no data
+        """
+        successes = 0
+        failures = 0
+        partials = 0
+
+        for key, stats in self.knowledge_graph["context_action_effectiveness"].items():
+            for example in stats.get("examples", []):
+                if example.get("doc_id") == doc_id:
+                    if example["outcome"] == "worked":
+                        successes += 1
+                    elif example["outcome"] == "failed":
+                        failures += 1
+                    else:
+                        partials += 1
+
+        total = successes + failures + partials
+        if total == 0:
+            return None
+
+        return {
+            "successes": successes,
+            "failures": failures,
+            "partials": partials,
+            "total_uses": total,
+            "success_rate": (successes + partials * 0.5) / total
+        }
+
+    def get_tier_recommendations(self, concepts: List[str]) -> Dict[str, Any]:
+        """
+        Query Routing KG for best collections given concepts (v0.2.6 Directive Insights).
+
+        Uses the same logic as _route_query but returns recommendations
+        for get_context_insights output.
+
+        Args:
+            concepts: List of extracted concepts from user query
+
+        Returns:
+            Dict with top_collections, match_count, confidence_level
+        """
+        if not concepts:
+            return {
+                "top_collections": ["working", "patterns", "history", "books", "memory_bank"],
+                "match_count": 0,
+                "confidence_level": "exploration"
+            }
+
+        # Calculate tier scores
+        collection_scores = self._calculate_tier_scores(concepts)
+        total_score = sum(collection_scores.values())
+
+        # Sort by score
+        sorted_collections = sorted(
+            collection_scores.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+
+        # Count matched patterns
+        match_count = 0
+        for concept in concepts:
+            if concept in self.knowledge_graph.get("routing_patterns", {}):
+                match_count += 1
+
+        # Determine confidence level and top collections
+        if total_score < 0.5:
+            confidence_level = "exploration"
+            top_collections = ["working", "patterns", "history", "books", "memory_bank"]
+        elif total_score < 2.0:
+            confidence_level = "medium"
+            top_collections = [coll for coll, score in sorted_collections[:3] if score > 0.1]
+            if not top_collections:
+                top_collections = [sorted_collections[0][0]]
+        else:
+            confidence_level = "high"
+            top_collections = [coll for coll, score in sorted_collections[:2] if score > 0.5]
+            if not top_collections:
+                top_collections = [sorted_collections[0][0]]
+
+        return {
+            "top_collections": top_collections,
+            "match_count": match_count,
+            "confidence_level": confidence_level,
+            "total_score": total_score,
+            "scores": dict(sorted_collections[:3])  # Top 3 for visibility
+        }
+
+    async def get_facts_for_entities(self, entities: List[str], limit: int = 2) -> List[Dict[str, Any]]:
+        """
+        Query Content KG to retrieve matching memory_bank facts (v0.2.6 Directive Insights).
+
+        Finds memory_bank documents that mention the given entities.
+
+        Args:
+            entities: List of entity names to search for
+            limit: Max facts to return
+
+        Returns:
+            List of matching facts with doc_id, content, entity
+        """
+        facts = []
+
+        for entity in entities:
+            if len(facts) >= limit:
+                break
+
+            # Search memory_bank for this entity
+            try:
+                results = await self.search(
+                    query=entity,
+                    collections=["memory_bank"],
+                    limit=2
+                )
+
+                for result in results:
+                    if len(facts) >= limit:
+                        break
+
+                    doc_id = result.get("id") or result.get("doc_id")
+                    content = result.get("text") or result.get("content", "")
+
+                    # Avoid duplicates
+                    if any(f["doc_id"] == doc_id for f in facts):
+                        continue
+
+                    # Get doc effectiveness if available
+                    effectiveness = self.get_doc_effectiveness(doc_id) if doc_id else None
+
+                    # v0.2.6: Filter out facts that consistently fail
+                    if effectiveness and effectiveness.get("total_uses", 0) >= 3:
+                        if effectiveness.get("success_rate", 0.5) < 0.4:
+                            continue  # Skip - this fact fails more than it helps
+
+                    facts.append({
+                        "doc_id": doc_id,
+                        "content": content[:150],  # Truncate for display
+                        "entity": entity,
+                        "effectiveness": effectiveness
+                    })
+
+            except Exception as e:
+                logger.warning(f"[FACTS] Failed to get facts for entity '{entity}': {e}")
+                continue
+
+        return facts
+
     async def _promote_item(
         self,
         doc_id: str,
@@ -2997,12 +3175,14 @@ Prefix (one sentence, max 20 words):"""
             "relevant_patterns": [],
             "past_outcomes": [],
             "topic_continuity": [],
-            "proactive_insights": []
+            "proactive_insights": [],
+            "matched_concepts": []  # v0.2.6: Return extracted concepts for directive insights
         }
 
         try:
             # Extract concepts from current message
             current_concepts = self._extract_concepts(current_message)
+            context["matched_concepts"] = current_concepts  # v0.2.6: Store for get_context_insights
 
             # 1. PATTERN RECOGNITION: Find similar past conversations
             if current_concepts:
@@ -3956,6 +4136,47 @@ Prefix (one sentence, max 20 words):"""
             return cleaned
         except Exception as e:
             logger.error(f"Error cleaning KG dead references: {e}")
+            return 0
+
+    async def cleanup_action_kg_for_doc_ids(self, doc_ids: List[str]) -> int:
+        """
+        Remove Action KG examples referencing specific doc_ids (v0.2.6).
+
+        Called when books are deleted to prevent stale doc_id references
+        in context_action_effectiveness examples.
+
+        Args:
+            doc_ids: List of document IDs to remove from Action KG examples
+
+        Returns:
+            Number of examples removed
+        """
+        if not doc_ids:
+            return 0
+
+        try:
+            doc_id_set = set(doc_ids)
+            cleaned = 0
+
+            for key, stats in self.knowledge_graph.get("context_action_effectiveness", {}).items():
+                examples = stats.get("examples", [])
+                original_count = len(examples)
+
+                # Filter out examples with matching doc_ids
+                stats["examples"] = [
+                    ex for ex in examples
+                    if ex.get("doc_id") not in doc_id_set
+                ]
+
+                cleaned += original_count - len(stats["examples"])
+
+            if cleaned > 0:
+                logger.info(f"Action KG cleanup: removed {cleaned} examples for deleted doc_ids")
+                await self._save_kg()
+
+            return cleaned
+        except Exception as e:
+            logger.error(f"Error cleaning Action KG for doc_ids: {e}")
             return 0
 
     def _doc_exists(self, doc_id: str) -> bool:

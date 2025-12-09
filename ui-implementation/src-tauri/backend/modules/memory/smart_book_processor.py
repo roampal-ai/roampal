@@ -383,8 +383,13 @@ class SmartBookProcessor:
                 batch_end = min(batch_start + batch_size, len(chunks_with_metadata))
                 batch_chunk_data = chunks_with_metadata[batch_start:batch_end]
 
-                # Extract text for embedding
-                batch_texts = [chunk_data['text'] for chunk_data in batch_chunk_data]
+                # Extract text for embedding with contextual prefix (v0.2.6)
+                # Prepending "Book: {title}, Section: {section}" improves retrieval ~49% (Anthropic research)
+                batch_texts = [
+                    f"Book: {title}, Section: {chunk_data.get('source_context', title)}. {chunk_data['text']}"
+                    for chunk_data in batch_chunk_data
+                ]
+                logger.debug(f"[BOOK_PROCESSOR] Embedding {len(batch_texts)} chunks with contextual prefix")
 
                 # Generate embeddings in parallel for the batch
                 embedding_tasks = [

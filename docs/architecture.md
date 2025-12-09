@@ -118,6 +118,7 @@ The system learns that "what worked before" matters more than "what sounds relat
 - **Retention**: Permanent (never decays)
 - **Source**: User-uploaded documents (.txt, .md files)
 - **Use Case**: Technical documentation, guides, references
+- **Contextual Embedding** (v0.2.6): Chunks are prefixed with `"Book: {title}, Section: {section}."` before embedding for ~49% improved retrieval on ambiguous queries
 
 #### Working Memory
 - **Purpose**: Current conversation context
@@ -280,6 +281,8 @@ Every book chunk contains:
 - `token_count` (int) - Number of tokens in chunk
 - `upload_timestamp` (ISO datetime) - When book was uploaded
 - `content`/`text` (string) - Actual chunk text
+
+**Contextual Embedding (v0.2.6):** Text is embedded with prefix `"Book: {title}, Section: {source_context}. {text}"` for improved semantic matching. This helps ambiguous queries (e.g., "DRY principle") match correct book sections even when the query terms aren't literally in the chunk text.
 
 **Example Queries:**
 ```python
@@ -897,7 +900,7 @@ The system uses LLM intelligence for outcome detection only. All scoring, promot
 **Implementation Details:**
 - `search_memory` tool:
   - Returns **full content** for all results (no truncation)
-  - Caches doc_ids from working/history/patterns collections for outcome scoring
+  - Caches ALL doc_ids for Action KG tracking (v0.2.6 - unified with internal system, includes books/memory_bank)
   - **Caches search query** for KG routing updates (stores in `last_search_query_cache[session_id]`)
 - `record_response` tool:
   - **Parameters:** `key_takeaway` (semantic summary, required) + `outcome` (explicit scoring, optional, defaults to "unknown")
@@ -925,9 +928,9 @@ The system uses LLM intelligence for outcome detection only. All scoring, promot
 - ❌ `books` - Reference material (distance-ranked, never scored)
 - ❌ `memory_bank` - User facts/Useful information (uses importance×confidence for ranking, NOT outcome-scored)
 
-**Action-Effectiveness KG Tracking (v0.2.1):**
+**Action-Effectiveness KG Tracking (v0.2.1, updated v0.2.6):**
 - ✅ **MCP System**: All 4 tools tracked (`search_memory`, `create_memory`, `update_memory`, `archive_memory`)
-- ✅ **Internal System**: All tools tracked automatically
+- ✅ **Internal System**: All tools tracked (v0.2.6 - added action caching and scoring in agent_chat.py)
 - Both systems build identical `knowledge_graph["context_action_effectiveness"]` structure
 - Key format: `"{context}|{action}|{collection}"` (e.g., `"coding_help|search_memory|patterns"`)
 - Tracks: successes, failures, partials, success_rate, total_uses, examples
@@ -1149,6 +1152,10 @@ The system runs automated maintenance tasks to keep memory healthy:
   - `archive_memory_bank()` → `content_graph.remove_entity_mention(doc_id)` [unified_memory_system.py:2703](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L2703)
   - `user_delete_memory()` → `content_graph.remove_entity_mention(doc_id)` [unified_memory_system.py:2833](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L2833)
   - `delete_by_conversation()` → batch cleanup for all deleted memory_bank items [unified_memory_system.py:877-889](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L877-L889)
+  - **Note**: Books are NOT indexed in Content KG (only memory_bank), so book deletion doesn't need Content KG cleanup
+- **Action KG cleanup** (v0.2.6) - Called on book deletions:
+  - `delete_book()` → `cleanup_action_kg_for_doc_ids(chunk_ids)` [book_upload_api.py:705-714](../ui-implementation/src-tauri/backend/backend/api/book_upload_api.py#L705)
+  - Removes stale `doc_id` references from `context_action_effectiveness` examples
 - **Routing KG cleanup** - Called on bulk deletions:
   - `delete_by_conversation()` → `_cleanup_kg_dead_references()` [unified_memory_system.py:892](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L892)
 - **Fallback protection** - Cold-start has fallback to vector search when Content KG has stale data [unified_memory_system.py:964-976](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L964-L976)
@@ -1274,6 +1281,7 @@ if len(results) < 3 and not_searching_all_tiers:
    - Maps (context, action, collection) → success rate
    - Learns contextually appropriate behaviors
    - Enables self-correction and alignment
+   - v0.2.6: Stores doc_ids in examples for document-level effectiveness tracking
 
 **The Memory Paradox:**
 
@@ -1510,6 +1518,74 @@ memory_bank searches receive entity quality boosting based on Content KG:
     ```
   - **Benefits**: System learns which tools work in which contexts, enables self-correction and alignment
 
+#### Document-Level Insights (v0.2.6)
+
+memory_bank and books are static collections without outcome scores. v0.2.6 extracts doc effectiveness from Action KG examples:
+
+**Implementation:** `unified_memory_system.py:get_doc_effectiveness()`
+
+```python
+def get_doc_effectiveness(self, doc_id: str) -> Optional[Dict]:
+    """Aggregate success rate for a doc from Action KG examples."""
+    # Scans context_action_effectiveness["examples"] for this doc_id
+    # Returns: {"success_rate": 0.83, "total_uses": 5, "successes": 4, "failures": 1}
+```
+
+**Usage in Search:** Optional boost for memory_bank/books based on doc effectiveness:
+```python
+if collection in ["memory_bank", "books"]:
+    doc_stats = self.get_doc_effectiveness(doc_id)
+    if doc_stats and doc_stats["total_uses"] >= 3:
+        effectiveness_boost = doc_stats["success_rate"] * 0.15  # max 15% boost
+```
+
+**Key Insight:** No 4th KG needed - Action KG already stores doc_ids in examples.
+
+#### Directive Insights (v0.2.6)
+
+`get_context_insights` output is now **actionable**, not just retrospective:
+
+**Before (v0.2.5):**
+```
+📊 Action Outcome Stats:
+  • search_memory() on books: 90% success (79 uses)
+```
+
+**After (v0.2.6):**
+```
+═══ KNOWN CONTEXT ═══
+[User Profile]
+- Logan, crypto researcher, prefers Docker Compose
+
+[Recommended]
+- search_memory(collections=["patterns"]) - 3 patterns found
+
+═══ TO COMPLETE THIS INTERACTION ═══
+After responding → record_response(key_takeaway="...", outcome="worked|failed|partial")
+```
+
+**Implementation:** `main.py:1426` adds "TO COMPLETE" section to output.
+
+**New Helper Methods:**
+- `get_tier_recommendations(concepts)` - Query Routing KG for best collections
+- `get_facts_for_entities(entities)` - Content KG → pull relevant memory_bank facts
+
+#### Model-Agnostic Prompt Design (v0.2.6)
+
+MCP tool descriptions use **workflow-based** framing instead of motivation:
+
+| Old (v0.2.5) | New (v0.2.6) |
+|--------------|--------------|
+| "This is how you become a better assistant" | "WORKFLOW: 1. get_context_insights ← YOU ARE HERE" |
+| "You are stateless. This makes you stateful." | "Complete the interaction. Call after responding." |
+
+**Why Workflow > Motivation:**
+- LLMs don't have goals - instruction-following works across all models
+- "Open loop" framing (incomplete task) prompts models to close it
+- Numbered steps work reliably on 7B through 70B+ models
+
+**Implementation:** `main.py:905-956` - Updated tool descriptions.
+
 #### Score-Based Promotion
 - Items with high success rates get promoted
 - Failed approaches get demoted or removed
@@ -1531,9 +1607,14 @@ The **single source of truth** for all memory operations.
 ```python
 async def store(text, collection="working", metadata=None)
 async def search(query, limit=10, collections=None)
-async def analyze_conversation_context(current_message, recent_conversation, conversation_id)  # NEW
+async def analyze_conversation_context(current_message, recent_conversation, conversation_id)
 async def record_outcome(doc_id, outcome, context=None)
 async def promote_working_memory()
+
+# v0.2.6 - Document & Entity Insight Methods
+def get_doc_effectiveness(doc_id: str) -> Optional[Dict]  # Aggregate doc success from Action KG examples
+def get_tier_recommendations(concepts: List[str]) -> Dict  # Query Routing KG for best collections
+async def get_facts_for_entities(entities: List[str], limit: int = 2) -> List[Dict]  # Content KG → memory_bank facts
 ```
 
 **New Method Details:**

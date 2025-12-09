@@ -702,6 +702,17 @@ async def delete_book(book_id: str, request: Request):
                         logger.warning(f"Failed to delete ChromaDB embeddings for book '{title}': {chroma_err}")
                         # Don't fail the whole deletion if ChromaDB cleanup fails
 
+                # Clean Action KG examples referencing deleted book chunks (v0.2.6)
+                # Use chunk_ids from database (always available at this point)
+                if hasattr(request.app.state, 'memory') and chunk_ids:
+                    try:
+                        memory = request.app.state.memory
+                        cleaned = await memory.cleanup_action_kg_for_doc_ids(chunk_ids)
+                        if cleaned > 0:
+                            logger.info(f"Cleaned {cleaned} Action KG examples for deleted book '{title}'")
+                    except Exception as kg_err:
+                        logger.warning(f"Failed to clean Action KG for book '{title}': {kg_err}")
+
         # Delete files from filesystem
         books_dir = settings.paths.get_book_folder_path()
 

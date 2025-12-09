@@ -314,6 +314,9 @@ async def scan_for_mcp_tools():
                 # Clean up tool names (remove dots, capitalize)
                 if tool_name.startswith('.'):
                     tool_name = tool_name[1:].capitalize()
+                # Special handling: .claude folder is Claude Code, not Claude Desktop
+                if tool_name == "Claude" and ".claude" in str(config_path):
+                    tool_name = "Claude Code"
 
             # Check if roampal is configured
             connected = "roampal" in config.get("mcpServers", {})

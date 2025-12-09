@@ -813,12 +813,19 @@ async def run_mcp_server():
         return [
             types.Tool(
                 name="search_memory",
-                description="""Search your 5-tier persistent memory (books, working, history, patterns, memory_bank).
+                description="""Search your persistent memory. Use when you need details beyond what get_context_insights returned.
 
-AUTO-ROUTING: Omit 'collections' → system uses learned KG routing patterns
-MANUAL: ["memory_bank"]=user info, ["books"]=docs, ["working"]=today, ["history"]=past, ["patterns"]=solutions
+WHEN TO SEARCH:
+• User says "remember", "I told you", "we discussed" → search immediately
+• get_context_insights recommended a collection → search that collection
+• You need more detail than the context provided
 
-Use user's EXACT query text. Memory persists across all sessions.""",
+WHEN NOT TO SEARCH:
+• General knowledge questions (use your training)
+• get_context_insights already gave you the answer
+
+Collections: memory_bank (user facts), books (docs), patterns (proven solutions), history (past), working (recent)
+Omit 'collections' parameter for auto-routing (recommended).""",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -895,13 +902,17 @@ Use this for stable user info, not session learnings (those go in record_respons
             ),
             types.Tool(
                 name="get_context_insights",
-                description="""⚡ USE BEFORE searching - Get organic insights from Content KG + Action-Effectiveness KG.
+                description="""Search your memory before responding. Returns what you know about this user/topic.
 
-Returns: Past solutions, failure warnings, tool effectiveness stats, recommended collections
+WORKFLOW (follow these steps):
+1. get_context_insights(query) ← YOU ARE HERE
+2. Read the context returned
+3. search_memory() if you need more details
+4. Respond to user
+5. record_response() to complete
 
-This is your "intuition" - pattern matching in knowledge graphs (5-10ms, no embeddings).
-
-Workflow: get_context_insights(q) → read insights → search_memory(recommended_collections) → respond""",
+Returns: Known facts, past solutions, recommended collections, tool stats.
+Fast lookup (5-10ms) - no embedding search, just pattern matching.""",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -915,19 +926,34 @@ Workflow: get_context_insights(q) → read insights → search_memory(recommende
             ),
             types.Tool(
                 name="record_response",
-                description="""🔴 REQUIRED: Call after EVERY response - Stores semantic learning + scores based on user satisfaction.
+                description="""Complete the interaction. Call this after responding to the user.
+
+WORKFLOW:
+1. get_context_insights() ✓
+2. search_memory() if needed ✓
+3. Respond to user ✓
+4. record_response() ← YOU ARE HERE (completes the interaction)
 
 Parameters:
-• key_takeaway (required): 1-2 sentence summary of this exchange (what was learned/discussed)
-• outcome (optional, default="unknown"): "worked"|"failed"|"partial"|"unknown"
-  - Judge from user's reaction: enthusiastic = worked, criticism = failed, mixed = partial, unclear = unknown
+• key_takeaway: 1-2 sentence summary of what happened
+• outcome: "worked" | "failed" | "partial" | "unknown"
 
-Scoring:
-• Scores your CURRENT learning immediately (worked=0.7, failed=0.2, partial=0.55, unknown=0.5)
-• Also scores any memories from your last search_memory call with same outcome
-• High scores (≥0.7) promote to history, proven patterns (≥0.9) to patterns, low (<0.2) deleted
+OUTCOME DETECTION (read user's reaction):
+✓ worked = user satisfied, says thanks, moves on
+✗ failed = user corrects you, says "no", "that's wrong", provides the right answer
+~ partial = user says "kind of" or takes some but not all of your answer
+? unknown = no clear signal from user
 
-This is how the memory learns what works. Be honest with outcomes.""",
+⚠️ CRITICAL - "failed" OUTCOMES ARE ESSENTIAL:
+• If user says you were wrong → outcome="failed"
+• If memory you retrieved was outdated → outcome="failed"
+• If user had to correct you → outcome="failed"
+• If you gave advice that didn't help → outcome="failed"
+
+Failed outcomes are how bad memories get deleted. Without them, wrong info persists forever.
+Don't default to "worked" just to be optimistic. Wrong memories MUST be demoted.
+
+This closes the loop. Without it, the system can't learn what worked OR what didn't.""",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -938,15 +964,7 @@ This is how the memory learns what works. Be honest with outcomes.""",
                         "outcome": {
                             "type": "string",
                             "enum": ["worked", "failed", "partial", "unknown"],
-                            "description": """How helpful was your response: 'worked' (satisfied), 'failed' (didn't help), 'partial' (mixed), 'unknown' (no feedback)
-
-IMPORTANT - Use 'failed' when:
-• User says the answer was wrong or unhelpful
-• Retrieved memory led you to give incorrect advice
-• User had to correct you or provide the right answer
-• The memory you used was outdated or misleading
-
-Don't default to 'worked' - be honest so bad memories get demoted.""",
+                            "description": "How helpful was your response based on user's reaction",
                             "default": "unknown"
                         }
                     },
@@ -1070,8 +1088,9 @@ Don't default to 'worked' - be honest so bad memories get demoted.""",
                         # Track ALL collections for KG routing updates (architecture.md line 1088-1104)
                         result_collections.add(collection)
 
-                        # Only cache doc_ids from scorable collections (not books or memory_bank)
-                        if collection in ['working', 'history', 'patterns'] and doc_id:
+                        # Cache ALL doc_ids for Action KG tracking (v0.2.6 - unified with internal system)
+                        # Books and memory_bank now tracked for doc-level effectiveness insights
+                        if doc_id:
                             cached_doc_ids.append(doc_id)
 
                 _mcp_search_cache[session_id] = {
@@ -1147,7 +1166,8 @@ Don't default to 'worked' - be honest so bad memories get demoted.""",
                         context_type=context_type,
                         outcome="unknown",  # Will be set when record_response is called
                         action_params={"query": query, "limit": limit},
-                        collection=coll if coll != "all" else None
+                        collection=coll if coll != "all" else None,
+                        doc_id=cached_doc_ids[0] if cached_doc_ids else None  # v0.2.6: Track first result for doc-level insights
                     )
                     _cache_action_with_boundary_check(session_id, action, context_type)
 
@@ -1316,6 +1336,20 @@ Don't default to 'worked' - be honest so bad memories get demoted.""",
                                     'suffix': coll_suffix
                                 })
 
+                    # v0.2.6: Get directive insights using new helper methods
+                    matched_concepts = org_context.get('matched_concepts', []) if org_context else []
+
+                    # Get routing recommendations from Routing KG
+                    routing = memory.get_tier_recommendations(matched_concepts)
+
+                    # Get relevant memory_bank facts from Content KG
+                    relevant_facts = []
+                    if matched_concepts:
+                        try:
+                            relevant_facts = await memory.get_facts_for_entities(matched_concepts[:5], limit=2)
+                        except Exception as e:
+                            logger.warning(f"[MCP] Failed to get facts for entities: {e}")
+
                     # Format insights
                     has_actionable_insights = (
                         org_context and (
@@ -1325,20 +1359,42 @@ Don't default to 'worked' - be honest so bad memories get demoted.""",
                         )
                     )
 
-                    if not has_actionable_insights and not action_stats:
+                    if not has_actionable_insights and not action_stats and not relevant_facts:
                         text = f"No relevant patterns found in knowledge graph for '{query}'.\n\nThis appears to be a new type of query. The system will learn from your interactions and build patterns over time."
                     else:
-                        response = f"═══ CONTEXTUAL GUIDANCE (Context: {context_type}) ═══\n\n"
+                        response = f"═══ KNOWN CONTEXT (Topic: {context_type}) ═══\n\n"
+
+                        # v0.2.6: DIRECTIVE - Recommended actions first
+                        response += "📌 RECOMMENDED ACTIONS:\n"
+                        if routing and routing.get('top_collections'):
+                            collections = routing['top_collections'][:2]
+                            match_count = routing.get('match_count', 0)
+                            confidence = routing.get('confidence_level', 'exploration')
+                            if match_count > 0:
+                                response += f"  • search_memory(collections={collections}) - {match_count} patterns matched ({confidence} confidence)\n"
+                            else:
+                                response += f"  • search_memory() - auto-routing will select collections\n"
+                        response += "  • record_response(outcome=...) after reply - required for learning\n\n"
+
+                        # v0.2.6: Surface relevant memory_bank facts
+                        if relevant_facts:
+                            response += "💡 YOU ALREADY KNOW THIS (from memory_bank):\n"
+                            for fact in relevant_facts:
+                                content = fact.get('content', '')[:100]
+                                eff = fact.get('effectiveness')
+                                eff_str = f" ({int(eff['success_rate']*100)}% helpful)" if eff and eff.get('total_uses', 0) >= 3 else ""
+                                response += f"  • \"{content}...\"{eff_str}\n"
+                            response += "\n"
 
                         if org_context and org_context.get('relevant_patterns'):
-                            response += "📋 Past Experience:\n"
+                            response += "📋 PAST EXPERIENCE:\n"
                             for pattern in org_context['relevant_patterns'][:3]:
                                 response += f"  • {pattern['insight']}\n"
                                 response += f"    Collection: {pattern['collection']}, Score: {pattern['score']:.2f}, Uses: {pattern['uses']}\n"
                                 response += f"    → {pattern['text'][:150]}...\n\n"
 
                         if org_context and org_context.get('past_outcomes'):
-                            response += "⚠️ Past Failures to Avoid:\n"
+                            response += "⚠️ PAST FAILURES TO AVOID:\n"
                             for outcome in org_context['past_outcomes'][:2]:
                                 response += f"  • {outcome['insight']}\n\n"
 
@@ -1348,20 +1404,17 @@ Don't default to 'worked' - be honest so bad memories get demoted.""",
                             action_stats.sort(key=lambda x: x['uses'], reverse=True)
                             top_stats = action_stats[:5]  # Show top 5 most-used
 
-                            response += "📊 Action Outcome Stats (which actions led to correct answers):\n"
-                            response += "In similar contexts, these actions contributed to correct final answers:\n"
+                            response += "📊 TOOL STATS:\n"
                             for stat in top_stats:
                                 suffix = stat.get('suffix', '')
                                 success_rate = int(stat['success_rate']*100)
                                 uses = stat['uses']
-                                response += f"  • {stat['action']}(){suffix}: {success_rate}% of uses led to correct answers ({uses} uses)\n"
-                            response += "\n⚠️ IMPORTANT: Low % means 'didn't help answer THIS question correctly', NOT 'tool is broken'.\n"
-                            response += "If create_memory() returned a doc_id with no errors, it worked! Don't retry.\n"
+                                response += f"  • {stat['action']}(){suffix}: {success_rate}% success ({uses} uses)\n"
 
                             response += "\n"
 
                         if org_context and org_context.get('proactive_insights'):
-                            response += "💡 Search Recommendations:\n"
+                            response += "💡 SEARCH RECOMMENDATIONS:\n"
                             for insight in org_context['proactive_insights'][:3]:
                                 rec = insight.get('recommendation', '')
                                 if rec:
@@ -1371,7 +1424,9 @@ Don't default to 'worked' - be honest so bad memories get demoted.""",
                             for topic in org_context['topic_continuity'][:1]:
                                 response += f"\n🔗 {topic['insight']}\n"
 
-                        response += "\nUse this guidance to choose appropriate tools and provide informed responses."
+                        # v0.2.6: Explicit completion reminder (open loop)
+                        response += "\n═══ TO COMPLETE THIS INTERACTION ═══\n"
+                        response += "After responding → record_response(key_takeaway=\"...\", outcome=\"worked|failed|partial\")"
                         text = response
 
                 except Exception as e:
