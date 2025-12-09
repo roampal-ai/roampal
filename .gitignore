@@ -79,7 +79,7 @@ nul
 NUL
 
 # Releases (binary distributions - DO NOT COMMIT)
-releases/
+/releases/
 
 # Fix/debug scripts (temporary)
 fix_*.py
