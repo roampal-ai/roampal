@@ -1,9 +1,9 @@
-ROAMPAL v0.2.0 - Your Private Intelligence
+ROAMPAL v0.2.7 - Your Private Intelligence
 =====================================
 
 INSTALLATION
 ------------
-1. Right-click Roampal-v1.0.0-Windows.zip
+1. Right-click Roampal_v0.2.7_alpha.zip
 2. Select "Extract All..."
 3. Choose a location (e.g., C:\Roampal)
 4. Click "Extract"
@@ -57,6 +57,11 @@ Features
 - Automatic session management
 - Multilingual embeddings (50+ languages)
 
+Security Note
+-------------
+Only add MCP servers from sources you trust. MCP servers run with your
+user permissions and can execute code on your machine.
+
 Data Storage
 ------------
 Your data is stored locally at:
@@ -67,7 +72,7 @@ This ensures your data persists across updates and remains private.
 Support
 -------
 For issues or feedback, please visit:
-https://github.com/[your-repo]/roampal/issues
+https://github.com/roampal-ai/roampal/issues
 
 Notes
 -----

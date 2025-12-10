@@ -1,0 +1,18 @@
+    Results:
+    -> PASS: Proven should be in top 3
+    Results:
+    -> PASS: Proven should be in top 3
+    Results:
+    -> PASS: Proven should be in top 3
+    Results:
+    -> FAIL: Expected New should outrank failed
+    Results:
+    -> PASS: Proven should be in top 3
+SUMMARY
+Results: 4/5 scenarios passed (80%)
+  [PASS] Proven Solution vs New Semantically-Clos: proven=2, new=1
+  [PASS] Established Pattern vs Fresh Advice: proven=2, new=1
+  [PASS] Battle-Tested Database Advice: proven=1, new=2
+  [FAIL] Failed Advice Should Sink: proven=1, new=2
+  [PASS] Mixed Signals - Partial Success: proven=2, new=1
+CONCLUSION: Dynamic weight shifting WORKS

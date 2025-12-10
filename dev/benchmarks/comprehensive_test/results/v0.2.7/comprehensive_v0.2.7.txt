@@ -1,0 +1,148 @@
+BM25 not available (pip install rank-bm25 nltk)
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 2, updating n_results = 2
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 1, updating n_results = 1
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 4, updating n_results = 4
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 60 is greater than number of elements in index 6, updating n_results = 6
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Document working_78daddc6 not found
+Document working_78daddc6 not found
+Document working_78daddc6 not found
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Document working_41539b47 not found
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Document history_0588230b not found
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 4, updating n_results = 4
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 8, updating n_results = 8
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 4, updating n_results = 4
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 5, updating n_results = 5
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 4, updating n_results = 4
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 10, updating n_results = 10
+======================================================================
+ROAMPAL COMPREHENSIVE MEMORY SYSTEM TEST
+======================================================================
+
+Test data directory: ./test_data
+Keep data: False
+Verbose: False
+
+Initializing memory system...
+[OK] Memory system initialized
+
+
+[1/7 STORAGE OPERATIONS]
+  Store to books... [FAIL]: Invalid doc ID format: books_ca38b775
+  Store to working... [FAIL]: Invalid doc ID format: working_d959139b
+  Store to history... [FAIL]: Invalid doc ID format: history_a1d59c4e
+  Store to patterns... [FAIL]: Invalid doc ID format: patterns_0116eef7
+  Store to memory_bank... [FAIL]: Invalid doc ID format: memory_bank_eed7d125
+  Memory_bank deduplication... [FAIL]: Should not add lower quality duplicate (count: 1 -> 2 -> 3)
+  Working NO deduplication... [PASS]
+  Contextual prefix generation... [PASS]
+  Category: 2/8 passed
+
+[2/7 RETRIEVAL OPERATIONS]
+  Search single collection... [PASS]
+  Search empty collection... [PASS]
+  Search multiplier (3×)... [PASS]
+  Quality ranking boost... [PASS]
+  Category: 4/4 passed
+
+[3/7 OUTCOME-BASED SCORING]
+  Score +0.2 on worked... [PASS]
+  Score -0.3 on failed... [PASS]
+  Score clamping at 1.0... [PASS]
+  Collections with outcome scoring... [PASS]
+  Category: 4/4 passed
+
+[4/7 PROMOTION & DEMOTION]
+  Working -> History promotion... [PASS]
+  History -> Patterns promotion... [PASS]
+  Low score deletion... [PASS]
+  Category: 3/3 passed
+
+[5/7 KNOWLEDGE GRAPHS]
+  Routing KG structure... [PASS]
+  Routing KG learning... [PASS]
+  Content KG entity extraction... [FAIL]: Should have extracted entities
+  Entity quality tracking... [PASS]
+  Action-Effectiveness KG... [PASS]
+  Category: 4/5 passed
+
+[6/7 TIER-SPECIFIC FEATURES]
+  Books permanent storage... [PASS]
+  Working 24h decay... [PASS]
+  History 30d decay... [PASS]
+  Memory_bank permanent storage... [PASS]
+  Category: 4/4 passed
+
+[7/7 EDGE CASES & ROBUSTNESS]
+  Search empty collection... [PASS]
+  Score boundary values... [PASS]
+  Category: 2/2 passed
+
+Saving KG states...
+[OK] KG states saved to ./test_data
+
+KG Statistics:
+  Routing KG: 10 concepts
+  Content KG: 0 entities, 0 relationships
+
+Tier Counts:
+  books: 4 items
+  working: 10 items
+  history: 5 items
+  patterns: 4 items
+  memory_bank: 10 items
+
+======================================================================
+RESULTS: 23/30 tests passed (76.7%)
+Runtime: 2.0s
+======================================================================
+
+FAILURES:
+  - Store to books
+    Invalid doc ID format: books_ca38b775
+  - Store to working
+    Invalid doc ID format: working_d959139b
+  - Store to history
+    Invalid doc ID format: history_a1d59c4e
+  - Store to patterns
+    Invalid doc ID format: patterns_0116eef7
+  - Store to memory_bank
+    Invalid doc ID format: memory_bank_eed7d125
+  - Memory_bank deduplication
+    Should not add lower quality duplicate (count: 1 -> 2 -> 3)
+  - Content KG entity extraction
+    Should have extracted entities
+
+Warning: Could not clean up ./test_data

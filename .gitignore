@@ -149,7 +149,12 @@ docs/BUILD_GUIDE.md
 # Local dev files (not for repo)
 .mcp.json
 release/
-screenshots/
 test_data/
 test_docs/
 tests/
+
+# Benchmark test data (generated)
+dev/benchmarks/comprehensive_test/ab_test_data/
+dev/benchmarks/comprehensive_test/test_data/
+*.sqlite3
+*.bin

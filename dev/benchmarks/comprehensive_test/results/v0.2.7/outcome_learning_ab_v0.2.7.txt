@@ -1,0 +1,129 @@
+BM25 not available (pip install rank-bm25 nltk)
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to upsert vectors into ChromaDB: Embedding dimension 384 does not match collection dimensionality 768
+Traceback (most recent call last):
+  File "C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\chromadb_adapter.py", line 175, in upsert_vectors
+    self.collection.upsert(
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\models\Collection.py", line 459, in upsert
+    self._client._upsert(
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 444, in _upsert
+    self._validate_embedding_record(coll, r)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 782, in _validate_embedding_record
+    self._validate_dimension(collection, len(record["embedding"]), update=True)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 797, in _validate_dimension
+    raise InvalidDimensionException(
+chromadb.errors.InvalidDimensionException: Embedding dimension 384 does not match collection dimensionality 768
+Attempt 1 failed for store_with_retry: Embedding dimension 384 does not match collection dimensionality 768. Retrying in 0.5s...
+Failed to upsert vectors into ChromaDB: Embedding dimension 384 does not match collection dimensionality 768
+Traceback (most recent call last):
+  File "C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\chromadb_adapter.py", line 175, in upsert_vectors
+    self.collection.upsert(
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\models\Collection.py", line 459, in upsert
+    self._client._upsert(
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 444, in _upsert
+    self._validate_embedding_record(coll, r)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 782, in _validate_embedding_record
+    self._validate_dimension(collection, len(record["embedding"]), update=True)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 797, in _validate_dimension
+    raise InvalidDimensionException(
+chromadb.errors.InvalidDimensionException: Embedding dimension 384 does not match collection dimensionality 768
+Attempt 2 failed for store_with_retry: Embedding dimension 384 does not match collection dimensionality 768. Retrying in 1.0s...
+Failed to upsert vectors into ChromaDB: Embedding dimension 384 does not match collection dimensionality 768
+Traceback (most recent call last):
+  File "C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\chromadb_adapter.py", line 175, in upsert_vectors
+    self.collection.upsert(
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\models\Collection.py", line 459, in upsert
+    self._client._upsert(
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 444, in _upsert
+    self._validate_embedding_record(coll, r)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 782, in _validate_embedding_record
+    self._validate_dimension(collection, len(record["embedding"]), update=True)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 797, in _validate_dimension
+    raise InvalidDimensionException(
+chromadb.errors.InvalidDimensionException: Embedding dimension 384 does not match collection dimensionality 768
+All 3 attempts failed for store_with_retry: Embedding dimension 384 does not match collection dimensionality 768
+[Roampal] Production mode detected, using AppData: C:\Users\logte\AppData\Roaming\Roampal\data
+======================================================================
+A/B TEST: Outcome-Based Learning vs Plain Vector Search
+======================================================================
+
+This test proves that outcome scoring improves retrieval quality.
+Both conditions use identical embeddings and storage.
+The ONLY difference: whether search results are ranked by outcome scores.
+
+Loading embedding model (paraphrase-multilingual-mpnet-base-v2)...
+Loading embedding model: all-MiniLM-L6-v2...
+Model loaded. Embedding dimension: 384
+Model loaded.
+
+----------------------------------------------------------------------
+Running scenarios...
+----------------------------------------------------------------------
+
+[1/5] Debugging Advice Quality
+    Query: "How should I debug my Python code?"
+Traceback (most recent call last):
+  File "C:\ROAMPAL\benchmarks\comprehensive_test\test_outcome_learning_ab.py", line 469, in <module>
+    asyncio.run(main())
+  File "asyncio\runners.py", line 44, in run
+  File "asyncio\base_events.py", line 649, in run_until_complete
+  File "C:\ROAMPAL\benchmarks\comprehensive_test\test_outcome_learning_ab.py", line 386, in main
+    treatment = await run_scenario_with_outcomes(scenario, treatment_dir, embedding_service)
+  File "C:\ROAMPAL\benchmarks\comprehensive_test\test_outcome_learning_ab.py", line 220, in run_scenario_with_outcomes
+    doc_id = await system.store(
+  File "C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\unified_memory_system.py", line 953, in store
+    await store_with_retry()
+  File "C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\unified_memory_system.py", line 172, in wrapper
+    raise last_exception
+  File "C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\unified_memory_system.py", line 163, in wrapper
+    return await func(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\unified_memory_system.py", line 947, in store_with_retry
+    await self.collections[collection].upsert_vectors(
+  File "C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\chromadb_adapter.py", line 175, in upsert_vectors
+    self.collection.upsert(
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\models\Collection.py", line 459, in upsert
+    self._client._upsert(
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 444, in _upsert
+    self._validate_embedding_record(coll, r)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 782, in _validate_embedding_record
+    self._validate_dimension(collection, len(record["embedding"]), update=True)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py", line 127, in wrapper
+    return f(*args, **kwargs)
+  File "C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\Lib\site-packages\chromadb\api\segment.py", line 797, in _validate_dimension
+    raise InvalidDimensionException(
+chromadb.errors.InvalidDimensionException: Embedding dimension 384 does not match collection dimensionality 768

@@ -1,0 +1,111 @@
+BM25 not available (pip install rank-bm25 nltk)
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Attempted to embed empty or non-string text. Returning zero vector.
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Attempted to embed empty or non-string text. Returning zero vector.
+Truncated text to 2000 characters for embedding
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 6 is greater than number of elements in index 3, updating n_results = 3
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 6 is greater than number of elements in index 5, updating n_results = 5
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+[ChromaDB] Query failed: Number of requested results 0, cannot be negative, or zero.
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 60000 is greater than number of elements in index 67, updating n_results = 67
+
+================================================================================
+EDGE CASE STRESS TEST SUITE
+================================================================================
+
+[SECTION 1] Embedding Edge Cases
+----------------------------------------
+  [PASS] Empty string storage
+  [PASS] Whitespace-only string
+  [PASS] Very long text (25KB)
+  [PASS] Single character
+
+[SECTION 2] Unicode Edge Cases
+----------------------------------------
+  [PASS] Emoji-heavy text
+  [PASS] RTL text (Arabic/Hebrew)
+  [PASS] Zero-width characters
+  [PASS] Mixed scripts (Latin/CJK/Cyrillic)
+
+[SECTION 3] Injection Attempts
+----------------------------------------
+  [FAIL] SQL injection in text
+        Stored as literal
+  [PASS] Prompt injection stored literally
+  [PASS] Path traversal in tags
+  [PASS] JSON in text content
+
+[SECTION 4] Boundary Conditions
+----------------------------------------
+  [PASS] Importance boundary handling
+  [PASS] Confidence boundary handling
+  [PASS] Empty tags list
+  [PASS] 100 tags
+
+[SECTION 5] Malformed Input
+----------------------------------------
+  [PASS] None in tags list
+  [PASS] Numeric tags coercion
+
+[SECTION 6] Concurrent Operations
+----------------------------------------
+  [PASS] 20 concurrent stores
+  [PASS] Store while searching
+
+[SECTION 7] Search Edge Cases
+----------------------------------------
+  [PASS] Search with no matches
+  [PASS] Special char queries
+  [PASS] Search limit=0
+  [PASS] Search limit=10000
+
+================================================================================
+FINAL RESULTS
+================================================================================
+Passed: 23/24
+Failed: 1/24
+
+Failed tests:
+  - SQL injection in text: Stored as literal
+
+================================================================================
+FAIL - 1 edge cases need attention
+================================================================================

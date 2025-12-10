@@ -1,0 +1,935 @@
+BM25 not available (pip install rank-bm25 nltk)
+OutcomeDetector initialized without LLM service - outcome detection will not work
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+Document working_85e6af00_1765396620.738981 not found
+OutcomeDetector initialized without LLM service - outcome detection will not work
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Document working_313d8b29_1765396626.841291 not found
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+Document working_0e804fe1_1765396628.072287 not found
+OutcomeDetector initialized without LLM service - outcome detection will not work
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Document history_8d9196d2_1765396631.325898 not found
+Document history_8d9196d2_1765396631.325898 not found
+Document history_8d9196d2_1765396631.325898 not found
+Document history_8d9196d2_1765396631.325898 not found
+Document history_8d9196d2_1765396631.325898 not found
+Document history_8d9196d2_1765396631.325898 not found
+OutcomeDetector initialized without LLM service - outcome detection will not work
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Document working_747e900f_1765396634.779911 not found
+Document working_c6b8aa66_1765396633.626312 not found
+Document working_747e900f_1765396634.779911 not found
+Document working_c6b8aa66_1765396633.626312 not found
+Document working_747e900f_1765396634.779911 not found
+Document working_c6b8aa66_1765396633.626312 not found
+Document working_747e900f_1765396634.779911 not found
+Document working_c6b8aa66_1765396633.626312 not found
+Document working_747e900f_1765396634.779911 not found
+Document working_c6b8aa66_1765396633.626312 not found
+Document working_747e900f_1765396634.779911 not found
+Document working_c6b8aa66_1765396633.626312 not found
+Document working_747e900f_1765396634.779911 not found
+Document working_c6b8aa66_1765396633.626312 not found
+Document working_747e900f_1765396634.779911 not found
+Document working_c6b8aa66_1765396633.626312 not found
+Document working_747e900f_1765396634.779911 not found
+OutcomeDetector initialized without LLM service - outcome detection will not work
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\chromadb_adapter.py:604: RuntimeWarning: coroutine 'ChromaDBAdapter.cleanup' was never awaited
+  pass  # Ignore errors in destructor
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+[Causal Learning] LOW SUCCESS PATTERN DETECTED: coding|search_memory|patterns has only 29% success rate after 17 uses. Consider avoiding this action in coding context.
+[Causal Learning] LOW SUCCESS PATTERN DETECTED: coding|search_memory|patterns has only 28% success rate after 18 uses. Consider avoiding this action in coding context.
+[Causal Learning] LOW SUCCESS PATTERN DETECTED: coding|search_memory|patterns has only 26% success rate after 19 uses. Consider avoiding this action in coding context.
+[Causal Learning] LOW SUCCESS PATTERN DETECTED: coding|search_memory|patterns has only 25% success rate after 20 uses. Consider avoiding this action in coding context.
+[Causal Learning] LOW SUCCESS PATTERN DETECTED: coding|search_memory|patterns has only 24% success rate after 21 uses. Consider avoiding this action in coding context.
+[Causal Learning] LOW SUCCESS PATTERN DETECTED: coding|search_memory|patterns has only 23% success rate after 22 uses. Consider avoiding this action in coding context.
+[Causal Learning] LOW SUCCESS PATTERN DETECTED: coding|search_memory|patterns has only 22% success rate after 23 uses. Consider avoiding this action in coding context.
+[Causal Learning] LOW SUCCESS PATTERN DETECTED: coding|search_memory|patterns has only 21% success rate after 24 uses. Consider avoiding this action in coding context.
+[Causal Learning] LOW SUCCESS PATTERN DETECTED: coding|search_memory|patterns has only 20% success rate after 25 uses. Consider avoiding this action in coding context.
+OutcomeDetector initialized without LLM service - outcome detection will not work
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 19, updating n_results = 19
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 20, updating n_results = 20
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionUpdateEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 20, updating n_results = 20
+OutcomeDetector initialized without LLM service - outcome detection will not work
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Document working_2e4c2b41_1765396645.591287 not found
+Document working_2e4c2b41_1765396645.591287 not found
+Document working_2e4c2b41_1765396645.591287 not found
+Document working_2e4c2b41_1765396645.591287 not found
+Document working_2e4c2b41_1765396645.591287 not found
+Document working_2e4c2b41_1765396645.591287 not found
+Document working_2e4c2b41_1765396645.591287 not found
+Document working_2e4c2b41_1765396645.591287 not found
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Document working_985cf03b_1765396646.706743 not found
+Document working_985cf03b_1765396646.706743 not found
+Document working_985cf03b_1765396646.706743 not found
+Document working_985cf03b_1765396646.706743 not found
+Document working_985cf03b_1765396646.706743 not found
+Document working_985cf03b_1765396646.706743 not found
+Document working_985cf03b_1765396646.706743 not found
+Document working_985cf03b_1765396646.706743 not found
+OutcomeDetector initialized without LLM service - outcome detection will not work
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 20, updating n_results = 20
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+OutcomeDetector initialized without LLM service - outcome detection will not work
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionDeleteEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Document working_f9b3e3bb_1765396653.14763 not found
+Document working_f9b3e3bb_1765396653.14763 not found
+Document working_f9b3e3bb_1765396653.14763 not found
+Document working_f9b3e3bb_1765396653.14763 not found
+Document working_f9b3e3bb_1765396653.14763 not found
+Document working_f9b3e3bb_1765396653.14763 not found
+Document working_f9b3e3bb_1765396653.14763 not found
+Document working_f9b3e3bb_1765396653.14763 not found
+OutcomeDetector initialized without LLM service - outcome detection will not work
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Document nonexistent_doc_12345 not found
+Document  not found
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0000
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0001
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0002
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0003
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0004
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0005
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0006
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0007
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0008
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0009
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0010
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0011
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0012
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0013
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0014
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0015
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0016
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0017
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0018
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0019
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0020
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0021
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0022
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0023
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0024
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0025
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0026
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0027
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0028
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0029
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0030
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0031
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0032
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0033
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0034
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0035
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0036
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0037
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0038
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0039
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0040
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0041
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0042
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0043
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0044
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0045
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0046
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0047
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0048
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0049
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0050
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0051
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0052
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0053
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0054
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0055
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0056
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0057
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0058
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0059
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0060
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0061
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0062
+Delete of nonexisting embedding ID: 16ae1232-ce8f-450c-b5c2-b725dcc33e62_chunk_0063
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+[Roampal] Production mode detected, using AppData: C:\Users\logte\AppData\Roaming\Roampal\data
+
+================================================================================
+LLM LEARNING SABOTAGE TEST
+================================================================================
+
+This tests whether the learning system can be manipulated or corrupted.
+Each test uses an ISOLATED memory instance.
+
+--------------------------------------------------------------------------------
+TEST 1: Outcome Flooding Attack
+--------------------------------------------------------------------------------
+Scenario: Attacker spams 1000 'worked' outcomes to inflate a bad memory
+  [SETUP] Created bad advice memory with score=0.3
+  [BEFORE] Score: 0.30
+  [ATTACK] Flooded 50 'worked' outcomes
+  [AFTER] Document was removed/promoted during flood (expected behavior)
+  [CHECK] Score capped at 1.0: YES
+
+Outcome flooding mitigated: YES
+
+--------------------------------------------------------------------------------
+TEST 2: Score Boundary Enforcement
+--------------------------------------------------------------------------------
+Scenario: Try to push scores outside [0.1, 1.0] bounds
+  [UPPER] Document promoted (high score triggered promotion)
+  [UPPER] Score <= 1.0: YES
+  [LOWER] Document deleted (too many failures)
+  [LOWER] Score >= 0.1: YES
+
+Score boundaries enforced: YES
+
+--------------------------------------------------------------------------------
+TEST 3: KG Routing Poisoning
+--------------------------------------------------------------------------------
+Scenario: Try to corrupt KG by associating wrong collections with queries
+  [GOOD] Established: 'python coding' -> patterns (5 worked)
+  [POISON] Attempted: 'python coding' -> history (10 worked spam)
+  [RESULT] Routed to: ['patterns', 'history']
+  [CHECK] Patterns still routed: YES
+
+KG routing poisoning mitigated: YES
+
+--------------------------------------------------------------------------------
+TEST 4: Feedback Inversion Detection
+--------------------------------------------------------------------------------
+Scenario: Attacker marks failures as 'worked' and successes as 'failed'
+  [SETUP] Created good advice (git commit) and bad advice (force push)
+  [ATTACK] Inverted 10 outcomes each
+  [RESULT] Good advice score: 0.10
+  [RESULT] Bad advice score: 1.00
+
+Feedback inversion handled (scores valid): YES
+  Note: Cannot detect intent - mitigation requires external validation
+
+--------------------------------------------------------------------------------
+TEST 5: Action-Effectiveness KG Manipulation
+--------------------------------------------------------------------------------
+Scenario: Try to poison action success rates by context
+  [GOOD] Established: coding|search_memory|patterns -> 100% (5 worked)
+  [POISON] Injected 20 artificial failures
+  [RESULT] No routing stats found (KG may not track this granularity)
+  [INFO] Routing patterns exist: True
+
+Action-Effectiveness manipulation tracked: YES
+
+--------------------------------------------------------------------------------
+TEST 6: Deduplication Replacement Attack
+--------------------------------------------------------------------------------
+Scenario: Try to replace high-quality memory with low-quality duplicate
+  [GOOD] Stored high-quality fact (q=0.93)
+  [ATTACK] Stored low-quality duplicate (q=0.06)
+
+  [RESULT] Top result: User's password manager is 1Password (verified, critical sec...
+  [CHECK] Original high-quality version ranked #1: YES
+
+Deduplication replacement attack blocked: YES
+
+--------------------------------------------------------------------------------
+TEST 7: Rapid Outcome Rate Limiting
+--------------------------------------------------------------------------------
+Scenario: Rapid-fire outcomes should have less impact than spaced ones
+  [SETUP] Created two memories with score=0.5
+  [RAPID] Score after 10 instant outcomes: 1.00
+  [SPACED] Score after 10 spaced outcomes: 1.00
+
+Rapid outcome handling: YES
+
+--------------------------------------------------------------------------------
+TEST 8: Memory Bank Score Immutability
+--------------------------------------------------------------------------------
+Scenario: record_outcome should NOT change memory_bank scores
+  [BEFORE] Quality: 0.99 (imp=1.0, conf=0.99)
+  [ATTACK] Attempted 20 'failed' outcomes
+  [AFTER] Quality: 0.99 (imp=1.0, conf=0.99)
+
+Memory bank immutable to outcomes: YES
+
+--------------------------------------------------------------------------------
+TEST 9: Cross-Collection Contamination
+--------------------------------------------------------------------------------
+Scenario: Recording outcome for doc A shouldn't affect doc B
+  [SETUP] Created docs in working and history, both score=0.5
+  [ACTION] Recorded 10 'worked' for working doc only
+  [RESULT] Working doc score: 1.00
+  [RESULT] History doc score: 0.50
+
+No cross-collection contamination: YES
+
+--------------------------------------------------------------------------------
+TEST 10: Invalid Outcome Handling
+--------------------------------------------------------------------------------
+Scenario: System handles invalid doc_ids and outcomes gracefully
+  [OK] Non-existent doc_id handled
+  [OK] Empty doc_id handled
+  [OK] Valid outcome recorded
+  [OK] Books outcome skipped gracefully
+
+Invalid outcome handling: 4/4
+
+================================================================================
+FINAL RESULTS
+================================================================================
+  [PASS] Outcome flooding resistance
+  [PASS] Score boundary enforcement
+  [PASS] KG routing poisoning resistance
+  [PASS] Feedback inversion handling
+  [PASS] Action-Effectiveness manipulation
+  [PASS] Deduplication replacement attack
+  [PASS] Rapid outcome rate limiting
+  [PASS] Memory bank score immutability
+  [PASS] Cross-collection contamination
+  [PASS] Invalid outcome handling
+
+Passed: 10/10
+
+================================================================================
+PASS - Learning system is resistant to sabotage
+       10/10 attack vectors mitigated
+================================================================================

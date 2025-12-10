@@ -1,0 +1,216 @@
+BM25 not available (pip install rank-bm25 nltk)
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 5, updating n_results = 5
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 5, updating n_results = 5
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 5, updating n_results = 5
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 5, updating n_results = 5
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 5, updating n_results = 5
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\chromadb_adapter.py:604: RuntimeWarning: coroutine 'ChromaDBAdapter.cleanup' was never awaited
+  pass  # Ignore errors in destructor
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 3, updating n_results = 3
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 3, updating n_results = 3
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 3, updating n_results = 3
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 3, updating n_results = 3
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 3, updating n_results = 3
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 4, updating n_results = 4
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 4, updating n_results = 4
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 4, updating n_results = 4
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 4, updating n_results = 4
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 8, updating n_results = 8
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 30 is greater than number of elements in index 11, updating n_results = 11
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 3, updating n_results = 3
+Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 3, updating n_results = 3
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 3, updating n_results = 3
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 3, updating n_results = 3
+Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+Number of requested results 18 is greater than number of elements in index 3, updating n_results = 3
+
+================================================================================
+SEARCH QUALITY DIAGNOSTIC SUITE
+================================================================================
+
+This suite measures search quality across multiple dimensions.
+These aren't pass/fail - they establish baselines for improvement.
+
+--------------------------------------------------------------------------------
+TEST 1: Synonym Understanding
+--------------------------------------------------------------------------------
+Scenario: Store facts with one word, query with synonyms
+  [STORE] Stored 5 facts
+  [OK] car query for 'automobile'
+  [OK] dog query for 'canine'
+  [OK] lives query for 'resides'
+  [OK] job query for 'employed'
+  [OK] wife query for 'spouse'
+
+  Synonym understanding: 5/5 (100%)
+
+--------------------------------------------------------------------------------
+TEST 2: Typo Tolerance
+--------------------------------------------------------------------------------
+Scenario: Query with common typos/misspellings
+  [STORE] Stored 3 facts with correct spelling
+  [OK] Microsft -> Microsoft
+  [OK] Cheescake -> Cheesecake
+  [OK] Masachusetts -> Massachusetts
+  [OK] sofware -> software
+  [OK] restarant -> restaurant
+
+  Typo tolerance: 5/5 (100%)
+
+--------------------------------------------------------------------------------
+TEST 3: Acronym Expansion
+--------------------------------------------------------------------------------
+Scenario: Query with acronyms, facts have full names (and vice versa)
+  [STORE] Stored 4 facts (mix of full names and acronyms)
+  [OK] NYC -> New York City
+  [OK] NASA -> National Aeronautics...
+  [MISS] API -> Application Programming Interface
+        Got: User works at the National Aeronautics and Space Administrat...
+  [OK] Full name -> UCLA
+
+  Acronym understanding: 3/4 (75%)
+
+--------------------------------------------------------------------------------
+TEST 4: Result Diversity
+--------------------------------------------------------------------------------
+Scenario: Multiple facts about same topic - search should show variety
+  [STORE] Stored 8 facts about Max the dog
+
+  Results returned: 5
+  Unique aspects covered: 5
+  Aspects: Counter({'name': 1, 'breed': 1, 'food': 1, 'living': 1, 'health': 1})
+  Diversity score: 100%
+
+--------------------------------------------------------------------------------
+TEST 5: Recency vs Relevance Balance
+--------------------------------------------------------------------------------
+Scenario: Old highly-relevant fact vs new somewhat-relevant fact
+  [OLD] Stored 1 old, highly-relevant fact (q=0.90)
+  [NEW] Stored 10 new, less-relevant facts (q=0.25 each)
+
+  Top result: User's favorite programming language is Python, which they'v...
+  Highly-relevant old fact ranked #1: YES
+  Python fact rank: 1
+  Relevance score: 100%
+
+--------------------------------------------------------------------------------
+TEST 6: Partial Match Quality
+--------------------------------------------------------------------------------
+Scenario: Query contains only part of the stored information
+  [STORE] Stored 3 detailed facts
+  [OK] First + Last name
+  [OK] Partial phone
+  [OK] Email prefix
+  [OK] Birth city
+  [OK] Email domain
+
+  Partial match accuracy: 5/5 (100%)
+
+================================================================================
+SEARCH QUALITY SCORECARD
+================================================================================
+  Synonym understanding     [####################] 100%
+  Typo tolerance            [####################] 100%
+  Acronym expansion         [###############-----] 75%
+  Result diversity          [####################] 100%
+  Recency vs relevance      [####################] 100%
+  Partial match quality     [####################] 100%
+
+  Average Search Quality Score: 96%
+
+--------------------------------------------------------------------------------
+IMPROVEMENT OPPORTUNITIES:
+--------------------------------------------------------------------------------
+  [MED] Acronym expansion at 75% - room for improvement
+
+================================================================================
+BASELINE ESTABLISHED - Average: 96%
+Search quality is acceptable, but improvements possible
+================================================================================

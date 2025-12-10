@@ -1,7 +1,0 @@
-You are an AI assistant. Analyze the user's request and determine if you need to use any tools.
-
-User query: {{ user_input }}
-
-Available context: {{ context }}
-
-Respond naturally and helpfully to the user's request. If you need to search for information or use tools, do so appropriately.

@@ -6,12 +6,14 @@
 [![Multi-Provider](https://img.shields.io/badge/LLM-Ollama%20%7C%20LM%20Studio-blue)](https://roampal.ai)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 
-**The memory layer that learns what actually works**
+**Memory that learns what works.**
 
-Stop re-explaining yourself every conversation. Roampal remembers your context, learns what actually works for you, and gets smarter over time—all while keeping your data 100% private and local.
+*Not just what's similar—what actually helped.*
+
+Stop re-explaining yourself every conversation. Roampal remembers outcomes, learns from feedback, and gets smarter over time—all 100% private and local.
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Roampal - Chat with Knowledge Graph" width="800">
+  <img src="screenshots/roampalscreen.png" alt="Roampal - Chat with Knowledge Graph" width="800">
 </p>
 
 > **Vector search: 0%. Roampal: 97%. Same adversarial queries. (p=0.001)** [(Full benchmarks)](docs/BENCHMARKS.md)
@@ -90,11 +92,11 @@ Outcome learning beats rerankers **4×**.
 **Learning Curve** (how fast it learns):
 | Maturity | Uses | Accuracy |
 |----------|------|----------|
-| Cold Start | 0 | 10% |
-| Early | 3 | **100%** |
-| Mature | 20 | 100% |
+| Cold Start | 0 | 0% |
+| Early | 3 | 50% |
+| Mature | 20 | **60%** |
 
-Just 3 uses → 100% accuracy. p=0.005.
+3 uses → 50% accuracy. Training domains reach 100%.
 
 <details>
 <summary>Full 4-Way Comparison (MRR, nDCG@5)</summary>
@@ -107,6 +109,8 @@ Just 3 uses → 100% accuracy. p=0.005.
 | Reranker Only | 20% | 0.600 | 0.705 |
 | **Outcomes Only** | **50%** | **0.750** | **0.815** |
 | Full Roampal | 44% | 0.720 | 0.793 |
+
+*Note: Full Roampal includes cross-domain holdout (nutrition, crypto) where no training occurred - training domains alone achieve 100%.*
 
 **Statistical Significance**:
 - Cold→Mature: p=0.005** (highly significant)

@@ -1,3 +1,0 @@
-Rate usefulness of this fragment for query '{query}': 0 (useless) to 1 (essential).
-Fragment: {fragment_text}
-Rating:

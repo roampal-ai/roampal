@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Roampal DEV",
-    "version": "0.2.6"
+    "version": "0.2.5"
   },
   "tauri": {
     "allowlist": {
