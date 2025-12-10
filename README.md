@@ -16,7 +16,7 @@ Stop re-explaining yourself every conversation. Roampal remembers outcomes, lear
   <img src="screenshots/roampalscreen.png" alt="Roampal - Chat with Knowledge Graph" width="800">
 </p>
 
-> **Vector search: 0%. Roampal: 97%. Same adversarial queries. (p=0.001)** [(Full benchmarks)](docs/BENCHMARKS.md)
+> **Vector search: 0%. Roampal: 97%. Same adversarial queries. (p=0.001)** [(Full benchmarks)](dev/docs/BENCHMARKS.md)
 
 <p align="center">
   <a href="https://github.com/roampal-ai/roampal">
@@ -127,7 +127,7 @@ Outcome learning beats rerankers **4×**.
 - **Latency**: p95 < 100ms
 - **Infrastructure**: 40/40 tests pass, 1000 concurrent stores
 
-[Full methodology →](docs/BENCHMARKS.md)
+[Full methodology →](dev/docs/BENCHMARKS.md)
 </details>
 
 ---
@@ -161,7 +161,7 @@ Settings → Integrations → Connect → Restart your tool
 
 **6 tools available**: `search_memory`, `add_to_memory_bank`, `update_memory`, `archive_memory`, `get_context_insights`, `record_response`
 
-[Full MCP documentation →](docs/architecture.md#mcp-integration)
+[Full MCP documentation →](dev/docs/architecture.md#mcp-integration)
 
 ---
 
@@ -184,7 +184,7 @@ Settings → Integrations → Connect → Restart your tool
 - Triple Knowledge Graphs: Routing + Content + Action-Effectiveness
 - Hybrid Search: BM25 + Vector + Cross-Encoder reranking
 
-[Architecture deep-dive →](docs/architecture.md)
+[Architecture deep-dive →](dev/docs/architecture.md)
 
 ---
 
@@ -205,9 +205,9 @@ Works with any tool-calling model via Ollama or LM Studio:
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](docs/architecture.md) | 5-tier memory, knowledge graphs, technical deep-dive |
-| [Benchmarks](docs/BENCHMARKS.md) | Test methodology, statistical significance |
-| [Release Notes](docs/releases/v0.2.6/RELEASE_NOTES.md) | Latest: Unified Learning, Directive Insights, Contextual Embeddings |
+| [Architecture](dev/docs/architecture.md) | 5-tier memory, knowledge graphs, technical deep-dive |
+| [Benchmarks](dev/docs/BENCHMARKS.md) | Test methodology, statistical significance |
+| [Release Notes](dev/docs/releases/v0.2.7/RELEASE_NOTES.md) | Latest: Unified Learning, Directive Insights, Contextual Embeddings |
 
 ---
 
