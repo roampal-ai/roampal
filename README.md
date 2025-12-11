@@ -8,7 +8,7 @@
 
 **Memory that learns what works.**
 
-*Not just what's similar—what actually helped.*
+*Not just what's similar—what actually helped. Say it worked. Say it didn't. The AI remembers.*
 
 Stop re-explaining yourself every conversation. Roampal remembers outcomes, learns from feedback, and gets smarter over time—all 100% private and local.
 

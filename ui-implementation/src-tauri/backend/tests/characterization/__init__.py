@@ -1,0 +1,1 @@
+# Characterization tests package
