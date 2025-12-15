@@ -1,0 +1,48 @@
+============================= test session starts =============================
+platform win32 -- Python 3.10.11, pytest-9.0.0, pluggy-1.6.0 -- C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\python.exe
+cachedir: .pytest_cache
+rootdir: C:\ROAMPAL\dev\benchmarks
+configfile: pytest.ini
+plugins: anyio-4.11.0, langsmith-0.4.36, asyncio-1.3.0
+asyncio: mode=auto, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
+
+test_learning_speed.py::test_cold_start_baseline PASSED                  [ 12%]
+test_learning_speed.py::test_learning_curve PASSED                       [ 25%]
+test_learning_speed.py::test_adaptation_speed PASSED                     [ 37%]
+test_learning_speed.py::test_knowledge_retention PASSED                  [ 50%]
+test_learning_speed.py::test_pattern_recognition PASSED                  [ 62%]
+test_learning_speed.py::test_context_specialization PASSED               [ 75%]
+test_learning_speed.py::test_learning_efficiency PASSED                  [ 87%]
+test_learning_speed.py::test_learning_speed PASSED                       [100%]
+
+============================== warnings summary ===============================
+test_learning_speed.py::test_cold_start_baseline
+  C:\ROAMPAL\ui-implementation\src-tauri\backend\config\settings.py:106: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class FragmentFileMemorySettings(BaseModel):
+
+test_learning_speed.py::test_cold_start_baseline
+  C:\ROAMPAL\ui-implementation\src-tauri\backend\config\settings.py:145: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class PromptConfigBase(BaseModel):
+
+test_learning_speed.py::test_cold_start_baseline
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+test_learning_speed.py::test_cold_start_baseline
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+test_learning_speed.py::test_learning_curve
+test_learning_speed.py::test_adaptation_speed
+test_learning_speed.py::test_knowledge_retention
+test_learning_speed.py::test_pattern_recognition
+test_learning_speed.py::test_context_specialization
+test_learning_speed.py::test_learning_efficiency
+test_learning_speed.py::test_learning_speed
+  C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\chromadb_adapter.py:604: RuntimeWarning: coroutine 'ChromaDBAdapter.cleanup' was never awaited
+    pass  # Ignore errors in destructor
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 8 passed, 11 warnings in 52.15s =======================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

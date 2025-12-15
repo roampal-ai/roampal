@@ -1,297 +1,224 @@
-# Roampal Benchmark Suite
+# Roampal Memory System - Comprehensive Test Suite
 
-**Status**: Production-ready validation complete - 40/40 tests passing
+**Purpose**: Validate every feature of the Roampal memory system through exhaustive testing, from basic functionality to extreme stress scenarios.
 
-Comprehensive test suite validating Roampal's 5-tier memory architecture, 3 knowledge graphs, and outcome-based learning system.
+## Test Suites
 
----
-
-## Executive Summary
-
-**Headline Result**:
-> **Plain vector search: 0% accuracy. Roampal: 97% accuracy. Same adversarial queries. (p=0.001)**
-
-**All tests passing**: 40/40 (30 comprehensive + 10 torture)
-
-**Key Results**:
-- **Roampal vs Vector DB**: 97% vs 0% on adversarial queries (p=0.001, d=7.49)
-- Statistical learning proven: 58% → 93% accuracy (+35pp, p=0.005, Cohen's d=13.4)
-- Dynamic weight shifting: 5/5 scenarios - proven memories outrank semantic matches
-- Search latency validated: p95=77ms @ 100 memories
-- Production infrastructure verified: 1000 concurrent stores, zero corruption
-
-**Full documentation**: See [docs/BENCHMARKS.md](../docs/BENCHMARKS.md) for complete results and methodology.
-
----
-
-## Quick Start
+### 1. Comprehensive Test (30 tests, ~4 min)
+**Purpose**: Validate all core features work correctly
 
 ```bash
-# Comprehensive Test Suite (30 tests, ~5s)
-cd benchmarks/comprehensive_test
+cd dev/benchmarks
 python test_comprehensive.py
+```
 
-# Torture Test Suite (10 tests, ~93s)
+**Coverage**: All 5 tiers, 3 KGs, scoring, promotion, deduplication, edge cases
+
+### 2. Torture Test Suite (10 tests, ~2 min)
+**Purpose**: Stress test the system with extreme scenarios
+
+```bash
+cd dev/benchmarks
 python test_torture_suite.py
+```
 
-# Statistical Significance Test (~10-15 min)
-cd learning_curve_test
-python test_statistical_significance_synthetic.py
+**Coverage**: High volume (1000 stores), adversarial inputs, capacity limits, concurrent access
 
-# Latency Benchmark (~2-3 min)
-cd ../
-python test_latency_benchmark.py
+### 3. Semantic Confusion Test (~30s)
+**Purpose**: Validate quality-based ranking cuts through semantic noise
 
-# Semantic Confusion Test (~30s)
+```bash
+cd dev/benchmarks
 python test_semantic_confusion.py
-
-# Token Efficiency Benchmark (~2 min)
-python test_token_efficiency.py
 ```
 
----
+**Scenario**: 15:1 noise ratio (3 truth vs 47 confusing facts)
+**Result**: Truth ranked #1 in 4/5 queries (80%)
 
-## Core Test Suites
+### 4. Stale Data Test (~20s)
+**Purpose**: Validate fresh high-quality data beats stale low-quality data
 
-### 1. Comprehensive Test Suite (30 tests)
-
-**Location**: `benchmarks/comprehensive_test/test_comprehensive.py`
-**Runtime**: ~5 seconds
-**Status**: 30/30 PASS
-
-**What Gets Tested**:
-- All 5 memory tiers (books, working, history, patterns, memory_bank)
-- All 3 Knowledge Graphs (Routing KG, Content KG, Action-Effectiveness KG)
-- Outcome-based scoring (+0.2 worked, -0.3 failed, boundaries [0.0, 1.0])
-- Promotion logic (Working→History @ 0.7+, History→Patterns @ 0.9+)
-- Deduplication (80% similarity threshold, keeps highest quality)
-- Quality ranking (importance × confidence)
-- Edge cases (empty collections, boundary values)
-
-**Key Validations**:
-- Storage & retrieval infrastructure works correctly
-- Score boundaries enforced ([0.0, 1.0])
-- Promotion thresholds respected
-- Deduplication preserves quality
-- All 3 KGs operational
-
----
-
-### 2. Torture Test Suite (10 tests)
-
-**Location**: `benchmarks/comprehensive_test/test_torture_suite.py`
-**Runtime**: ~93 seconds
-**Status**: 10/10 PASS
-
-**Extreme Stress Scenarios**:
-
-| Test | Scenario | Runtime | Status |
-|------|----------|---------|--------|
-| 1. High Volume Stress | 1000 rapid stores | 58.5s | PASS |
-| 2. Long-Term Evolution | 100 queries with outcomes | 21.3s | PASS |
-| 3. Adversarial Deduplication | 50 near-identical memories | 5.8s | PASS |
-| 4. Score Boundary Stress | 50 oscillating outcomes | 0.9s | PASS |
-| 5. Cross-Collection Competition | Same content, multiple tiers | 0.9s | PASS |
-| 6. Routing Convergence | 100 routing decisions | 6.0s | PASS |
-| 7. Promotion Cascade | Multi-tier promotion | 0.9s | PASS |
-| 8. Memory Bank Capacity | 600 items vs 500 cap | 37.1s | PASS |
-| 9. Knowledge Graph Integrity | Deletions & failures | 1.5s | PASS |
-| 10. Concurrent Access | 5 simultaneous conversations | 1.3s | PASS |
-
-**Key Achievements**:
-- Zero data corruption across 1000 rapid stores
-- Zero ID collisions under concurrent access
-- Deduplication kept highest-quality versions
-- Capacity enforcement functional (hard cap at 500)
-- Content KG survives memory failures
-
----
-
-### 3. Roampal vs Plain Vector Database (THE KEY TEST)
-
-**Location**: `benchmarks/comprehensive_test/test_roampal_vs_vector_db.py`
-**Runtime**: ~30 seconds
-**Status**: PASS (97% vs 0%, p=0.001, d=7.49)
-
-**What Was Compared**:
-- **Control**: Plain ChromaDB with pure L2 distance ranking (no outcomes, no weights)
-- **Treatment**: Roampal with outcome scoring (+0.2 worked, -0.3 failed) + dynamic weight shifting
-
-**Test Design**:
-- 30 scenarios across 6 categories (debugging, database, API, errors, async, git)
-- Each scenario has "good" advice (worked) and "bad" advice (failed)
-- Queries are **adversarial** - designed to semantically match the BAD advice
-
-**Example**:
-- Query: "How do I **print** and see **variable values** while debugging?"
-- Bad advice: "Add **print()** statements to see **variable values**" (semantic match!)
-- Good advice: "Use pdb with breakpoints" (no keyword overlap)
-
-**Results**:
-- Plain vector search: 0/30 correct (0%)
-- Roampal: 29/30 correct (96.7%)
-- p=0.001 (0.1% chance this is luck)
-- Cohen's d=7.49 (massive effect - 0.8 is threshold for "large")
-
-**Why**: Roampal learned that print debugging had **failed** before (score=0.2), while pdb had **worked** (score=0.9). The 60% score weighting overrode semantic similarity.
-
----
-
-### 4. Statistical Significance Test
-
-**Location**: `benchmarks/comprehensive_test/learning_curve_test/test_statistical_significance_synthetic.py`
-**Runtime**: ~10-15 minutes
-**Status**: PASS (p=0.005, extremely significant)
-
-**Methodology**:
-- 12 fictional stories, 500 facts seeded, 120 test questions
-- Real embeddings: `sentence-transformers/all-MiniLM-L6-v2`
-- Questions asked at visits 3, 6, 9, 10
-- Paired t-test + Cohen's d effect size
-
-**Results**:
-- **Baseline**: 58.3% accuracy (random search, no learning)
-- **After Learning**: 93.3% accuracy (+35pp improvement)
-- **Statistical Proof**: p=0.005, Cohen's d=13.4 (extremely large effect)
-- **Phases**: Initial (58%) → Learned (88%) → Maintenance (93%)
-
-**Proves**: System actually learns from outcome-based scoring, not random variation.
-
----
-
-### 5. Dynamic Weight Shift Test
-
-**Location**: `benchmarks/comprehensive_test/test_dynamic_weight_shift.py`
-**Runtime**: ~10 seconds
-**Status**: PASS (5/5 scenarios)
-
-**The Mechanism**:
-```
-New memories:     70% embedding similarity, 30% score
-Proven memories:  40% embedding similarity, 60% score
+```bash
+cd dev/benchmarks
+python test_stale_data.py
 ```
 
-**What It Tests**: Proven memories (uses≥5, score≥0.8) rank well even with poor query matches.
+**Scenario**: OLD facts (q=0.20) conflict with NEW facts (q=0.90)
+**Result**: NEW ranked #1 in 3/5 queries (60%) - OLD wins when semantically closer
 
-**Results**: 5/5 scenarios passed - proven memories outranked semantically-closer new memories.
+### 5. Edge Case Test (24 tests, ~30s)
+**Purpose**: Validate system handles edge cases and adversarial inputs
 
----
+```bash
+cd dev/benchmarks
+python test_edge_cases.py
+```
 
-### 6. Latency Benchmark
+**Coverage**: 7 sections
+- Embedding edge cases (empty, whitespace, 25KB text, single char)
+- Unicode (emoji, RTL, zero-width, mixed scripts)
+- Injection attempts (SQL, prompt, path traversal, JSON)
+- Boundary conditions (importance/confidence limits)
+- Malformed input (None values, numeric coercion)
+- Concurrent operations (20 parallel stores)
+- Search edge cases (special chars, limit 0, limit 10000)
 
-**Location**: `benchmarks/comprehensive_test/test_latency_benchmark.py`
-**Runtime**: ~2-3 minutes
-**Status**: PASS (sub-100ms validated)
+**Result**: 24/24 tests pass
 
-**Test Sizes**: 10, 50, 100, 500 memories
-**Queries Per Test**: 100 searches per size
+### 6. Contradiction Test (5 tests, ~10s)
+**Purpose**: Validate quality-based ranking resolves conflicting facts
 
-**Results @ 100 memories**:
-- **p50**: 64.60ms
-- **p95**: 77ms
-- **p99**: 87.71ms
+```bash
+cd dev/benchmarks
+python test_contradictions.py
+```
 
-**Scalability**: Performance degrades gracefully as collection grows (500 memories: p95=122ms)
+**Scenarios**:
+1. Direct contradiction (blue vs green)
+2. Many-wrong vs one-right (5:1 noise)
+3. Temporal update (Boston -> Seattle)
+4. Confidence conflict (uncertain vs confirmed)
+5. Implicit contradiction (hates caffeine vs loves coffee)
 
----
+**Result**: 5/5 tests pass - High-quality info ranked #1
 
-### 7. Semantic Confusion Test (v0.2.1)
+### 7. Catastrophic Forgetting Test (5 tests, ~60s)
+**Purpose**: Validate old knowledge survives after adding new knowledge
 
-**Location**: `benchmarks/comprehensive_test/test_semantic_confusion.py`
-**Runtime**: ~30 seconds
-**Status**: PASS (4/5 queries, 80% rank-1 accuracy)
+```bash
+cd dev/benchmarks
+python test_catastrophic_forgetting.py
+```
 
-**Scenario**:
-- 3 ground truth facts about "Sarah Chen" (HIGH quality: importance=0.95, confidence=0.98)
-- 47 confusing noise facts (LOW quality: importance=0.25, confidence=0.30)
-- **15:1 noise ratio** (brutal test)
-- All facts semantically similar (similar names, ages, jobs, companies)
+**Scenarios**:
+1. Unrelated domain retention (family + cooking -> family still works)
+2. Same domain retention (old work + new work -> old work accessible)
+3. Bulk insert survival (3 critical + 100 random -> critical #1)
+4. Quality preservation (1 verified vs 20 rumors -> verified #1)
+5. Cross-domain isolation (5 topics don't interfere)
 
-**Confusion Tactics**:
-- Similar names: Sara, Sarah M., Sandra, Sera, S. Chen
-- Partially correct combos: "Sarah Chen, 34, engineer at Google" (wrong company!)
-- Red herrings: "The user mentioned Sarah Chen..."
+**Result**: 5/5 tests pass - No catastrophic forgetting
 
-**5 Progressive Queries** (easiest → hardest):
-| Query | Difficulty | Truth Ranked #1? |
-|-------|------------|------------------|
-| "Sarah Chen TechCorp engineer" | EASY | ✅ Yes |
-| "What does Sarah Chen do?" | MEDIUM | ✅ Yes |
-| "Sarah age job company" | HARD | ✅ Yes |
-| "the user Sarah" | BRUTAL | ❌ No (expected - noise has "user" keyword) |
-| "software engineer 34 years old" | NIGHTMARE | ✅ Yes (no name in query!) |
+### 8. Context Poisoning Test (5 tests, ~15s)
+**Purpose**: Validate system resists adversarial data attacks
 
-**Mechanism Tested** (3-stage quality enforcement):
-1. Distance boost: `adjusted_distance = L2_distance × (1.0 - quality × 0.8)`
-2. L2→Similarity: `similarity = 1 / (1 + distance)` (fixed in v0.2.1)
-3. CE multiplier: `final_score = blended_score × (1 + quality)`
+```bash
+cd dev/benchmarks
+python test_context_poisoning.py
+```
 
-**Result**: Quality ranking (12x difference: 0.93 vs 0.08) successfully cuts through 15:1 noise ratio.
+**Attack Scenarios**:
+1. Exact duplicate poisoning (deduplication keeps best)
+2. Near-duplicate confusion (green beats 4 blue variants)
+3. Entity confusion (manager John Smith beats 5 other John Smiths)
+4. Temporal confusion (verified date beats 4 wrong dates)
+5. Negation poisoning (IS allergic beats NOT allergic)
 
----
+**Result**: 5/5 tests pass - System resistant to poisoning
 
-### 8. Token Efficiency Benchmark (Personal Finance)
+### 9. Learning Sabotage Test (10 tests, ~30s)
+**Purpose**: Validate LLM learning system resists manipulation attacks
 
-**Location**: `benchmarks/comprehensive_test/test_token_efficiency.py`
-**Runtime**: ~2 minutes
-**Status**: PASS (100% vs 0% on adversarial queries)
+```bash
+cd dev/benchmarks
+python test_learning_sabotage.py
+```
 
-**Test Design**:
-- 100 adversarial personal finance scenarios across 10 categories
-- Each scenario has research-backed "good" advice and common "bad" advice
-- Queries semantically match the BAD advice (adversarial design)
-- Sources: S&P SPIVA, Schwab Research, Vanguard, DALBAR studies
+**Attack Scenarios**:
+1. Outcome flooding (spam 50 'worked' to inflate bad memory)
+2. Score boundary enforcement (try to exceed 0.1-1.0 bounds)
+3. KG routing poisoning (associate wrong collections with queries)
+4. Feedback inversion (mark failures as success, vice versa)
+5. Action-Effectiveness manipulation (poison success rates)
+6. Deduplication replacement (try to replace good with bad duplicate)
+7. Rapid outcome rate limiting (rapid-fire vs spaced outcomes)
+8. Memory bank immutability (outcomes shouldn't change quality scores)
+9. Cross-collection contamination (outcomes leak to other docs)
+10. Invalid outcome handling (non-existent docs, empty IDs)
 
-**Categories Tested**:
-| Category | Examples |
-|----------|----------|
-| Market Timing | Buying dips vs staying invested |
-| Stock Picking | Individual stocks vs index funds |
-| Fee Awareness | High-fee funds vs low-cost alternatives |
-| Emotional Trading | Panic selling vs staying the course |
-| Diversification | Concentrated bets vs broad allocation |
-| Tax Efficiency | Frequent trading vs tax-loss harvesting |
-| Emergency Funds | Investing emergency funds vs cash reserves |
-| Debt Management | Investing while in debt vs paying down debt |
-| Retirement Timing | Early withdrawal vs letting it compound |
-| Insurance | Skipping coverage vs adequate protection |
+**Result**: 10/10 tests pass - Learning system resistant to sabotage
 
-**Why This Test Matters**:
-Personal finance is adversarial by nature - bad advice often *sounds* more appealing:
-- "Buy the dip!" sounds active and smart
-- "Stay invested through volatility" sounds passive and boring
-- Yet research shows the passive approach outperforms 90%+ of the time
+### 10. Search Quality Test (6 metrics, ~20s)
+**Purpose**: Validate search quality across multiple dimensions
 
-**Results**:
-- Plain vector search: 0/100 correct (0%)
-- Roampal: 100/100 correct (100%)
-- Token efficiency: 20 tokens/query vs 55-93 for full context
+```bash
+cd dev/benchmarks
+python test_search_quality.py
+```
 
-**How It Works**:
-Same mechanism as the programming benchmark - outcome scores (0.9 worked vs 0.2 failed) override semantic similarity. The system learned which advice actually worked.
+**Quality Metrics**:
+1. Synonym understanding (car → automobile)
+2. Typo tolerance (Microsft → Microsoft)
+3. Acronym expansion (API → Application Programming Interface)
+4. Result diversity (varied aspects, not redundant)
+5. Recency vs relevance balance
+6. Partial match quality
 
----
+**Result**: 100% average (6/6 metrics at 100%)
 
-### 9. Comprehensive 4-Way Benchmark (v0.2.5)
+### 11. Recovery Resilience Test (6 tests, ~60s)
+**Purpose**: Validate system recovers from failures gracefully
 
-**Location**: `benchmarks/comprehensive_test/test_comprehensive_benchmark.py`
-**Runtime**: ~5 minutes
-**Status**: PASS (p=0.005, highly significant)
+```bash
+cd dev/benchmarks
+python test_recovery_resilience.py
+```
 
+**Scenarios**:
+1. Interrupted store recovery
+2. Empty collection handling
+3. Malformed metadata resilience
+4. Concurrent modification safety
+5. Large batch atomicity (100 stores)
+6. Knowledge graph consistency
+
+**Result**: 6/6 tests pass - System resilient to failures
+
+### 12. Learning Speed & Effectiveness Test (7 tests, ~30s)
+**Purpose**: Benchmark how quickly and effectively the system learns
+
+```bash
+cd dev/benchmarks
+python test_learning_speed.py
+```
+
+**Benchmarks**:
+1. Cold start baseline - routing accuracy with no prior learning
+2. Learning curve - track improvement as feedback accumulates
+3. Adaptation speed - interactions needed to learn new patterns
+4. Knowledge retention - learning persists after noise
+5. Pattern recognition - reuse successful routes for similar queries
+6. Context specialization - learn context-specific strategies
+7. Learning efficiency - improvement per unit of feedback
+
+**Result**: 99% average score (Grade: A - Excellent Learner)
+- Cold start baseline: 100%
+- Learning curve: 100%
+- Adaptation speed: 90% (learns in 1 interaction)
+- Knowledge retention: 100%
+- Pattern recognition: 100%
+- Context specialization: 100%
+- Learning efficiency: 100%
+
+### 13. Comprehensive 4-Way Benchmark (200 tests, ~5 min)
 **Purpose**: Definitive comparison of RAG vs Reranker vs Outcomes vs Full Roampal
+
+```bash
+cd dev/benchmarks
+python test_comprehensive_benchmark.py
+```
 
 **Design**: 4 conditions × 5 maturity levels × 10 adversarial scenarios = 200 tests
 
-**Four Conditions**:
-- **RAG Baseline**: Pure ChromaDB L2 distance
-- **Reranker Only**: Vector + ms-marco cross-encoder (no outcomes)
-- **Outcomes Only**: Vector + Wilson scoring (no reranker)
-- **Full Roampal**: Vector + reranker + Wilson scoring
+**Conditions**:
+- RAG Baseline: Pure ChromaDB L2 distance
+- Reranker Only: Vector + ms-marco cross-encoder (no outcomes)
+- Outcomes Only: Vector + Wilson scoring (no reranker)
+- Full Roampal: Vector + reranker + Wilson scoring
 
 **Metrics**: Top-1 Accuracy, MRR, nDCG@5, Token Efficiency
 
 **Results**:
-
 | Condition | Top-1 | MRR | nDCG@5 |
 |-----------|-------|-----|--------|
 | RAG Baseline | 10% | 0.550 | 0.668 |
@@ -300,7 +227,6 @@ Same mechanism as the programming benchmark - outcome scores (0.9 worked vs 0.2 
 | Full Roampal | 44% | 0.720 | 0.793 |
 
 **Learning Curve** (Full Roampal):
-
 | Maturity | Uses | Top-1 | MRR |
 |----------|------|-------|-----|
 | Cold Start | 0 | 0% | 0.500 |
@@ -310,145 +236,145 @@ Same mechanism as the programming benchmark - outcome scores (0.9 worked vs 0.2 
 **Key Finding**: Outcome learning (+40 pts) dominates reranker (+10 pts) by 4×
 
 **Statistical Significance**:
-- **Cold→Mature**: p=0.0051** (highly significant)
-- **Full vs RAG (MRR)**: p=0.0150*
-- **Full vs Reranker (MRR)**: p=0.0368*
+- Cold→Mature: p=0.0051** (highly significant)
+- Full vs RAG (MRR): p=0.0150*
+- Full vs Reranker (MRR): p=0.0368*
 
-**Improvement Breakdown**:
-- Reranker contribution: +10 pts
-- Outcomes contribution: +40 pts (4× more impactful)
-
-**Why This Matters**:
-1. Outcome-based learning is the dominant factor, not semantic reranking
-2. Just 3 uses is enough to reach near-maximum accuracy
-3. The system learns what actually worked, not what sounds related
-
----
-
-## Production Evidence
-
-**Real-World Learning Verified**:
-
-The system caught qwen2.5:14b hallucinating on recall tests (0-10% accuracy), learned that:
-- `create_memory()` → 5% success (18 failures, 1 lucky guess)
-- `search_memory()` → 85% success (42 correct answers, 3 misses)
-
-After 3+ uses, system auto-injects warnings into LLM prompts:
-```
-Tool Guidance (learned from past outcomes):
-  [OK] search_memory() → 87% success (42 uses)
-  [X] create_memory() → only 5% success (19 uses) - AVOID
-```
-
-LLM sees warning and self-corrects → hallucinations prevented in real-time.
-
-**Source**: [RELEASE_NOTES_0.2.1.md](../docs/RELEASE_NOTES_0.2.1.md#1-action-level-causal-learning-new---2025-11-21)
-
----
-
-## Test Infrastructure
-
-### Mock Services
-All tests use mock LLM services for deterministic, reproducible results:
-- No API keys required
-- No network calls
-- Instant execution
-- Consistent outcomes
-
-**Location**: `benchmarks/comprehensive_test/mock_utilities.py`
-
-### Test Data Fixtures
-Pre-generated realistic test data for consistent benchmarking:
-- Fictional character facts (age, occupation, relationships)
-- Conversation patterns
-- Query/answer pairs
-
-**Location**: `benchmarks/comprehensive_test/test_data_fixtures.py`
-
----
-
-## Key Benchmarks (Start Here)
-
-If you only run a few tests, run these:
-
-| Test | What It Proves | Command |
-|------|---------------|---------|
-| **4-Way Benchmark** | Outcomes +40 pts, reranker +10 pts (4× difference) | `python test_comprehensive_benchmark.py` |
-| **Roampal vs Vector DB** | 97% vs 0% on adversarial queries | `python test_roampal_vs_vector_db.py` |
-| **Token Efficiency** | 96% vs 1% on personal finance, 79% fewer tokens | `python test_token_efficiency.py` |
-| **Statistical Significance** | Learning proven: 58%→93%, p=0.005 | `python learning_curve_test/test_statistical_significance_synthetic.py` |
-
----
-
-## Historical Note
-
-Earlier versions included tests for LongMemEval, LOCOMO, and other academic benchmarks. These were removed because:
-- Academic benchmarks didn't match real-world adversarial usage patterns
-- LOCOMO's 26K tokens fit entirely in modern context windows
-- Superseded by the comprehensive test suite above
-
----
-
-## Documentation
-
-**Full Benchmark Report**: [docs/BENCHMARKS.md](../docs/BENCHMARKS.md)
-**Release Notes**: [docs/RELEASE_NOTES_0.2.1.md](../docs/RELEASE_NOTES_0.2.1.md)
-**Architecture**: [docs/architecture.md](../docs/architecture.md)
-
-**Test Coverage**: 40/40 tests passing (100% success rate)
-
----
-
-## Running All Tests
+### 14. Learning Curve Test (50 tests, ~2 min)
+**Purpose**: Prove outcome history improves adversarial resistance
 
 ```bash
-# Full validation suite (all 40 tests)
-cd benchmarks/comprehensive_test
-
-# Comprehensive (5s)
-python test_comprehensive.py
-
-# Torture (93s)
-python test_torture_suite.py
-
-# Statistical significance (10-15 min)
-cd learning_curve_test
-python test_statistical_significance_synthetic.py
-
-# Latency (2-3 min)
-cd ../
-python test_latency_benchmark.py
-
-# Semantic confusion (30s)
-python test_semantic_confusion.py
-
-# Token efficiency (2 min)
-python test_token_efficiency.py
+cd dev/benchmarks
+python test_learning_curve.py
 ```
 
-**Total runtime**: ~15-20 minutes for complete validation
+**Design**: 10 scenarios × 5 maturity levels (cold_start → mature)
 
----
+**Results**:
+| Maturity | Uses | Accuracy |
+|----------|------|----------|
+| Cold Start | 0 | 10% |
+| Early | 3 | 100% |
+| Established | 5 | 100% |
+| Proven | 10 | 100% |
+| Mature | 20 | 100% |
+
+**Improvement**: +90 percentage points (10% → 100%)
+
+**Key Finding**: Just 3 uses is enough for 100% accuracy on adversarial queries
+
+### 15. Outcome Learning A/B Test (5 scenarios, ~30s)
+**Purpose**: Definitive proof that outcome scoring adds value beyond vector similarity
+
+```bash
+cd dev/benchmarks
+python test_outcome_learning_ab.py
+```
+
+**Design**: Uses *semantically identical* text to isolate outcome scoring value
+- 5 scenarios, each with 4 copies of identical text
+- 1 copy marked "worked", 3 copies marked "failed"
+- Treatment: Apply outcome scores (worked=0.7, failed=0.3)
+- Control: No outcome scoring (all stay at 0.5)
+
+**Results**:
+| Condition | Precision |
+|-----------|-----------|
+| WITH outcomes | **100%** |
+| WITHOUT outcomes | 40% |
+
+**Statistical Significance**:
+- Cohen's d: 1.55 (LARGE effect)
+- Improvement: +60 percentage points
+
+**Key Finding**: When text is identical, outcome scoring is the ONLY differentiator. This is the cleanest proof that "memory learns what works."
+
+## What Gets Tested
+
+### Core Infrastructure
+- ✅ All 5 memory collections (books, working, history, patterns, memory_bank)
+- ✅ Content Knowledge Graph (entity extraction & relationships)
+- ✅ Storage & retrieval (basic, hybrid, reranking)
+- ✅ Outcome-based scoring (+0.2 worked, -0.3 failed)
+- ✅ Promotion & demotion logic (working→history→patterns)
+- ✅ Deduplication (95% similarity threshold)
+- ✅ Quality ranking (importance × confidence)
+
+### Stress Testing
+- ✅ High volume (1000 rapid stores)
+- ✅ Adversarial deduplication (50 similar memories)
+- ✅ Score boundary stress (oscillating outcomes)
+- ✅ Capacity enforcement (500-item memory_bank cap)
+- ✅ Concurrent access (5 simultaneous conversations)
+- ✅ Knowledge graph resilience (failures & deletions)
+
+## Expected Results
+
+### Comprehensive Test
+```
+30/30 tests passed (100%)
+Runtime: ~4 minutes
+```
+
+### Torture Test Suite
+```
+10/10 tests passed (100%)
+Runtime: ~90 seconds
+
+Tests:
+1. High Volume Stress (1000 memories)          58.5s ✅
+2. Long-Term Evolution (100 queries)           21.3s ✅
+3. Adversarial Deduplication (50 similar)       5.8s ✅
+4. Score Boundary Stress (50 oscillations)      0.9s ✅
+5. Cross-Collection Competition                 0.9s ✅
+6. Routing Convergence (100 queries)            6.0s ✅
+7. Promotion Cascade                            0.9s ✅
+8. Memory Bank Capacity (500 cap)              37.1s ✅
+9. Knowledge Graph Integrity                    1.5s ✅
+10. Concurrent Access (5 conversations)         1.3s ✅
+```
 
 ## What This Proves
 
-**Production Ready**:
-- Infrastructure handles 1000 concurrent stores without corruption
-- Sub-100ms search latency at typical memory volumes
-- Zero edge case failures (boundary values, empty collections, concurrent access)
+### ✅ Infrastructure is Production-Ready
+- 1000 rapid stores with zero corruption or ID collisions
+- Deduplication correctly keeps highest-quality versions
+- Ranking algorithm works (high-score memories ranked first)
+- Capacity enforcement functional (hard cap at 500 items)
+- Concurrent access safe (5 simultaneous conversations)
 
-**Learning Works**:
-- Statistical proof: 58% → 93% accuracy (p=0.005, Cohen's d=13.4)
-- Real-world evidence: System prevents LLM hallucinations by learning tool effectiveness
-- Semantic confusion handled: Prioritizes correct answers over noise (4:1 ratio)
+### ✅ Learning Mechanisms Work
+- Outcome-based scoring updates correctly
+- Promotion thresholds trigger (working → history @ score≥0.7)
+- Content KG survives memory failures and deletions
+- Score boundaries respected [0.1, 1.0]
 
-**Architecture Validated**:
-- 5-tier memory system functional
-- 3 Knowledge Graphs operational (Routing, Content, Action-Effectiveness)
-- Outcome-based scoring drives improvement
-- Promotion logic works correctly
-- Deduplication preserves quality
+### ❌ Not Tested (requires real LLM)
+- Semantic similarity with real embeddings
+- LLM-based routing decisions
+- Long-term decay behavior over actual time
 
----
+## Files
 
-**Last Updated**: December 9, 2025
+### Core Tests
+- `test_comprehensive.py` - 30-test comprehensive suite
+- `test_torture_suite.py` - 10-test stress suite
+- `mock_utilities.py` - Mock LLM/embeddings (deterministic)
+
+### Documentation
+- `README.md` - This file
+
+### Learning Curve Tests
+
+### Dashboards
+
+## Test Data
+
+**No LLM required** - Uses mock services for deterministic testing:
+- Mock embeddings: SHA-256 hash → 768d vector (consistent but not semantic)
+- Mock LLM: Rule-based responses
+- Predefined test scenarios
+
+## Quick Links
+
+- [README.md](README.md) - You are here

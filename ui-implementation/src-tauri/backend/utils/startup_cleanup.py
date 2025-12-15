@@ -231,7 +231,7 @@ async def delete_chromadb_collections_for_shard(shard_name: str) -> List[str]:
             client = None
             try:
                 # First, try to import and reuse the memory visualization router's client
-                from backend.app.routers.memory_visualization_router import get_chroma_client
+                from app.routers.memory_visualization_router import get_chroma_client
                 client = get_chroma_client()
                 logger.info(f"Reusing existing ChromaDB client for shard {shard_name} deletion")
             except Exception as e:

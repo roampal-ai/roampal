@@ -138,8 +138,9 @@ class ContextService:
 
                         # Only include proven patterns
                         if score >= self.config.promotion_score_threshold and last_outcome == "worked":
+                            # v0.2.8: Full content, no truncation
                             patterns.append({
-                                "text": doc.get("content", "")[:200],
+                                "text": doc.get("content", ""),
                                 "score": score,
                                 "uses": uses,
                                 "collection": coll_name,
@@ -167,11 +168,12 @@ class ContextService:
                 recent_failures = [f for f in failures if f.get("timestamp", "")][-2:]
 
                 for failure in recent_failures:
+                    # v0.2.8: Full content, no truncation
                     past_outcomes.append({
                         "outcome": "failed",
                         "reason": failure_key,
                         "when": failure.get("timestamp", ""),
-                        "insight": f"Note: Similar approach failed before due to: {failure_key[:80]}"
+                        "insight": f"Note: Similar approach failed before due to: {failure_key}"
                     })
 
         return past_outcomes
@@ -269,8 +271,9 @@ class ContextService:
                     # Calculate similarity
                     similarity = 1.0 / (1.0 + item.get("distance", 1.0))
                     if similarity > 0.85:  # Very similar
+                        # v0.2.8: Full content, no truncation
                         repetitions.append({
-                            "text": item.get("content", "")[:150],
+                            "text": item.get("content", ""),
                             "similarity": similarity,
                             "insight": f"You mentioned something similar recently (similarity: {int(similarity*100)}%)"
                         })

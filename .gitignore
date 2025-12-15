@@ -151,7 +151,6 @@ docs/BUILD_GUIDE.md
 release/
 test_data/
 test_docs/
-tests/
 
 # Benchmark test data (generated)
 dev/benchmarks/comprehensive_test/ab_test_data/

@@ -1,6 +1,6 @@
 import re
 from typing import List, Dict, Any, Set, Tuple, Optional
-from backend.config.settings import settings
+from config.settings import settings
 
 # --- Original Content ---
 

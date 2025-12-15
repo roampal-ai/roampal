@@ -5,7 +5,7 @@ import re
 
 from core.interfaces.intent_router_interface import IntentRouterInterface
 from core.types.common_types import Action, ActionType, Message
-from backend.utils.text_utils import strip_fluff_phrases, extract_entities_for_action
+from utils.text_utils import strip_fluff_phrases, extract_entities_for_action
 
 logger = logging.getLogger(__name__)
 

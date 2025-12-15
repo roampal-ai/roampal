@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/tauri';
 import { DataManagementModal } from './DataManagementModal';
 import { MemoryBankModal } from './MemoryBankModal';
 import { ModelContextSettings } from './ModelContextSettings';
@@ -110,7 +111,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
           </div>
 
           {/* Content */}
-          <div className="p-4 sm:p-6 space-y-3">
+          <div className="p-4 sm:p-6 space-y-3 pb-8">
             {/* LLM Providers Status */}
             {providers.length > 0 && (
               <div className="space-y-2 pb-3 border-b border-zinc-800">
@@ -213,6 +214,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
                 </svg>
                 <span className="text-sm font-medium text-blue-500">Data Management</span>
+              </button>
+            </div>
+
+            {/* v0.2.8: Exit Roampal Button - clean shutdown */}
+            <div className="pt-2">
+              <button
+                onClick={async () => {
+                  try {
+                    await invoke('exit_app');
+                  } catch (error) {
+                    console.error('Failed to exit:', error);
+                  }
+                }}
+                className="w-full h-10 px-3 py-2 flex items-center justify-center gap-2 rounded-lg bg-red-600/10 hover:bg-red-600/20 border border-red-600/30 transition-colors"
+              >
+                <svg className="w-4 h-4 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+                <span className="text-sm font-medium text-red-500">Exit Roampal</span>
               </button>
             </div>
           </div>

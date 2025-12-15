@@ -66,17 +66,7 @@ class OutcomeService:
         Returns:
             Updated metadata or None if document not found
         """
-        # SAFEGUARD: Books are reference material, not scorable memories
-        if doc_id.startswith("books_"):
-            logger.warning(f"Cannot score book chunks - static reference material (doc_id: {doc_id})")
-            return None
-
-        # SAFEGUARD: Memory bank is user identity/facts, not scorable patterns
-        if doc_id.startswith("memory_bank_"):
-            logger.warning(f"Cannot score memory_bank - persistent user facts (doc_id: {doc_id})")
-            return None
-
-        # Find collection and document
+        # Find collection and document FIRST (needed for KG routing update)
         collection_name = None
         doc = None
 
@@ -85,6 +75,33 @@ class OutcomeService:
                 collection_name = coll_name
                 doc = adapter.get_fragment(doc_id)
                 break
+
+        # UPDATE KG ROUTING FIRST - even for books/memory_bank
+        # This allows KG to learn which collections answer which queries
+        if doc and collection_name and self.kg_service:
+            metadata = doc.get("metadata", {})
+            # For quiz retrievals, use quiz_question from context; otherwise use stored query
+            problem_text = ""
+            if context and "quiz_question" in context:
+                problem_text = context["quiz_question"]
+            else:
+                problem_text = metadata.get("query", "") or metadata.get("text", "")[:200]
+
+            if problem_text:
+                await self.kg_service.update_kg_routing(problem_text, collection_name, outcome)
+                logger.info(f"[KG] Updated routing for '{problem_text[:50]}' -> {collection_name} (outcome={outcome})")
+
+        # SAFEGUARD: Books are reference material, not scorable memories
+        # But we still updated KG routing above so system learns to route to books
+        if doc_id.startswith("books_"):
+            logger.info(f"[KG] Learned routing pattern for books, but skipping score update (static reference material)")
+            return None
+
+        # SAFEGUARD: Memory bank is user identity/facts, not scorable patterns
+        # But we still updated KG routing above so system learns to route to memory_bank
+        if doc_id.startswith("memory_bank_"):
+            logger.info(f"[KG] Learned routing pattern for memory_bank, but skipping score update (persistent user facts)")
+            return None
 
         if not doc:
             logger.warning(f"Document {doc_id} not found")
@@ -217,7 +234,20 @@ class OutcomeService:
             return
 
         # Update routing patterns
-        collection_name = doc_id.split("_")[0] if "_" in doc_id else "unknown"
+        # Extract collection name from doc_id (handles memory_bank correctly)
+        # doc_id format: collection_uuid or collection_name_uuid
+        if doc_id.startswith("memory_bank_"):
+            collection_name = "memory_bank"
+        elif doc_id.startswith("books_"):
+            collection_name = "books"
+        elif doc_id.startswith("working_"):
+            collection_name = "working"
+        elif doc_id.startswith("history_"):
+            collection_name = "history"
+        elif doc_id.startswith("patterns_"):
+            collection_name = "patterns"
+        else:
+            collection_name = doc_id.split("_")[0] if "_" in doc_id else "unknown"
         await self.kg_service.update_kg_routing(problem_text, collection_name, outcome)
 
         if outcome == "worked" and problem_text and solution_text:
@@ -235,7 +265,7 @@ class OutcomeService:
 
             # Track solution pattern
             self.kg_service.add_solution_pattern(
-                doc_id, solution_text[:200], new_score,
+                doc_id, solution_text, new_score,
                 [problem_key], solution_concepts[:5]
             )
 
@@ -288,7 +318,7 @@ class OutcomeService:
             self.kg_service.add_problem_solution(
                 problem_signature=problem_signature,
                 doc_id=doc_id,
-                solution_text=solution_text[:500],
+                solution_text=solution_text,
                 context=context
             )
 
@@ -296,8 +326,8 @@ class OutcomeService:
             pattern_hash = f"{problem_signature}::{doc_id}"
             self.kg_service.add_solution_pattern_entry(
                 pattern_hash=pattern_hash,
-                problem_text=problem_text[:200],
-                solution_text=solution_text[:200],
+                problem_text=problem_text,
+                solution_text=solution_text,
                 outcome="worked"
             )
 

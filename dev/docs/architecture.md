@@ -4,6 +4,53 @@
 
 Roampal is an intelligent chatbot with persistent memory and learning capabilities. The system features a **memory-first** architecture that learns from conversations and improves over time.
 
+## Architecture Refactor (v0.2.7)
+
+**IMPORTANT**: In v0.2.7, the monolithic `UnifiedMemorySystem` (4,746 lines) was refactored into a **facade pattern** with **8 extracted services**. v0.2.8 completed API compatibility and stabilized the architecture. Line number references throughout this document may point to the pre-refactor monolith.
+
+### New Architecture
+
+| Component | Lines | Purpose |
+|-----------|-------|---------|
+| `unified_memory_system.py` | 1203 | **Facade** - coordinates services, maintains API |
+| `knowledge_graph_service.py` | 949 | KG operations, routing patterns, entity extraction |
+| `search_service.py` | 646 | Search, reranking, dynamic weighting |
+| `chromadb_adapter.py` | 604 | Vector DB operations, BM25 hybrid search |
+| `smart_book_processor.py` | 657 | Book ingestion, chunking, contextual embedding |
+| `content_graph.py` | 543 | Entity relationships, content KG |
+| `promotion_service.py` | 473 | Working→History→Patterns promotion |
+| `context_service.py` | 455 | Conversation context analysis |
+| `routing_service.py` | 444 | Query routing, acronym expansion |
+| `memory_bank_service.py` | 430 | Memory bank CRUD operations |
+| `outcome_service.py` | 370 | Outcome recording, score updates |
+| `scoring_service.py` | 324 | Wilson scoring, score calculations |
+| `types.py` | 296 | Shared types, ActionOutcome enum |
+
+### Key Methods by Service
+
+| Feature | Pre-Refactor Location | Post-Refactor Location |
+|---------|----------------------|------------------------|
+| Cross-encoder reranking | `unified_memory_system.py:591-659` | `search_service.py:447+` |
+| Acronym expansion | `unified_memory_system.py:972-1144` | `routing_service.py:39+` |
+| Outcome recording | `unified_memory_system.py:2296-2424` | `outcome_service.py:50+` |
+| KG routing updates | `unified_memory_system.py` | `knowledge_graph_service.py:381+` |
+| Promotion logic | `unified_memory_system.py` | `promotion_service.py` |
+| Context analysis | `unified_memory_system.py:1736` | `context_service.py` |
+
+### API Compatibility
+
+The facade (`unified_memory_system.py`) maintains backwards compatibility with existing routers:
+- **Core**: `search()`, `store()`, `record_outcome()` - same signatures
+- **Stats**: `get_stats()`, `get_kg_entities()`, `get_kg_relationships()` - same signatures
+- **Cold Start**: `get_cold_start_context()` - auto-injects user profile, patterns, history
+- **Context**: `detect_context_type()` - returns debug/error/general/etc
+- **Learning**: `get_action_effectiveness()`, `record_action_outcome()` - causal learning
+- **Routing**: `get_tier_recommendations()`, `_update_kg_routing()` - KG-based routing
+- **KG Ops**: `get_facts_for_entities()`, `_cleanup_kg_dead_references()` - entity lookup
+- **Backup**: `export_backup()`, `import_backup()` - state persistence
+- **Embedding**: `_generate_contextual_prefix()` - contextual retrieval (Anthropic technique)
+- Collection names use `roampal_` prefix for ChromaDB compatibility
+
 ## Performance Benchmarks
 
 ### Headline Result (v0.2.5)
@@ -456,12 +503,45 @@ All collections use equal search depth via **`SEARCH_MULTIPLIER = 3`** (hardcode
 
 This ensures fair competition when multiple collections are searched together. The 3× multiplier provides deeper candidate pool for better ranking, then final top-k selection occurs after cross-collection merging and re-ranking.
 
-**Implementation Note**: Currently hardcoded as `limit * 3` in 4 locations (unified_memory_system.py:1090, 1129, 1144, 1152). Should be refactored to class constant for maintainability.
+**Implementation Note**: Currently hardcoded as `limit * 3` in 4 locations (unified_memory_system.py:1359, 1398, 1413, 1421). Should be refactored to class constant for maintainability.
 
 **Why This Matters:**
 - Previous system: Memory_bank got limit×1, Working got limit×3
 - Result: Working memory systematically crowded out memory_bank facts
 - Fix: All collections get equal search depth for fair competition
+
+### No Truncation Policy (v0.2.8)
+
+**Decision:** Return full memory content everywhere. No character limits.
+
+**What Changed:**
+- Removed `_smart_truncate()` function and all calls to it
+- Removed 300-character limit from MCP `search_memory` tool
+- Removed content truncation from `get_context_insights` facts/patterns
+- Removed truncation from `get_facts_for_entities()`
+- Removed truncation from `analyze_conversation_context()`
+
+**Why:**
+- Cold-start pulls ~5 memories = maybe 2-3k tokens max
+- Modern LLMs handle 100k+ context easily
+- Truncation was premature optimization that made context worse
+- "Lost in the middle" research was about massive RAG with hundreds of chunks, not 5-10 memories
+
+**Result:**
+- `search_memory` (MCP): Full content
+- `get_context_insights`: Full content
+- Cold-start injection: Full content (limit by count, not chars)
+
+**Files Modified:**
+| File | Change |
+|------|--------|
+| `main.py:1113` | Removed `[:300]` from MCP search_memory |
+| `main.py:1383-1395` | Removed truncation from get_context_insights |
+| `unified_memory_system.py:2055` | Removed `_smart_truncate()` from cold-start |
+| `unified_memory_system.py:2806` | Removed `[:150]` from `get_facts_for_entities()` |
+| `unified_memory_system.py:3107,3127,3182` | Removed 3 truncation locations |
+| `agent_chat.py:305,483,641,842,2288` | Removed 5 truncation locations |
+| `context_service.py:142,174,275` | Removed 3 truncation locations |
 
 ### Enhanced Retrieval Pipeline (v0.2.2 - Nov 2025)
 
@@ -481,8 +561,8 @@ After: "User memory, High importance: Gemma is 31"
 **Impact:** 49% reduction in retrieval failures (67% with reranking)
 **Cost:** ~$1 per million tokens (with LLM prompt caching)
 **Implementation:**
-- `unified_memory_system.py:506-589` - `_generate_contextual_prefix()` method
-- `unified_memory_system.py:821` - Applied during storage before embedding
+- `unified_memory_system.py:261-345` - `_generate_contextual_prefix()` method
+- `unified_memory_system.py:383` - Applied during storage before embedding
 - **Graceful Fallback**: Uses original text if LLM unavailable or timeout (5s)
 
 #### 2. Hybrid Search (BM25 + Vector + RRF)
@@ -1803,27 +1883,7 @@ Two critical fixes implemented to improve UX:
    - **Fix**: Extract `toolExecutions` from `msg.metadata.toolResults` when loading messages
    - **Result**: Tool indicators correctly show ✓ checkmark with result count after page refresh
 
-### 3. Session Cleanup Manager (`modules/memory/session_cleanup.py`)
-
-Manages session file lifecycle and prevents disk bloat.
-
-**Implementation:** [main.py:156-161](../ui-implementation/src-tauri/backend/main.py#L156-L161)
-
-**Features:**
-- Automatic cleanup of old session files (configurable max sessions)
-- FIFO (First In, First Out) deletion strategy
-- Prevents unlimited session file growth
-- Configurable retention policy
-- Async initialization and cleanup
-
-**Configuration:**
-- `max_sessions`: Maximum number of sessions to retain (default varies by environment)
-- Session directory: `{DATA_PATH}/sessions/`
-- Each session stored as JSON with conversation history and metadata
-
-**Purpose:** Ensures session storage doesn't grow unbounded while preserving recent conversation history.
-
-### 4. Book Processor (`modules/memory/smart_book_processor.py`)
+### 3. Book Processor (`modules/memory/smart_book_processor.py`)
 
 Processes uploaded documents for the knowledge base.
 
@@ -2122,36 +2182,29 @@ The prompting system builds structured, secure prompts with personality, memory 
   - User asks about preferences, context, or uploaded documents
   - Query could benefit from learned patterns or proven solutions
   - Ambiguous questions that might have relevant history
-- **COLD START BEHAVIOR (v0.2.5 - Multi-Source Enhanced):**
+- **COLD START BEHAVIOR (v0.2.8 - Simplified Semantic Search):**
   - **What**: Automatic context injection on message 1 of new conversations
-  - **Why**: Enables personalized, context-aware first responses with full situational awareness
-  - **Sources** (v0.2.5):
-    - **memory_bank** (3-5 items): User identity, preferences, goals - sorted by `quality × log(mentions+1)`
-    - **patterns** (1 item): Top proven solution/approach
-    - **history** (1 item): Recent session context
-  - **Scoring** (v0.2.5): Uses `avg_quality × log(mentions+1)` instead of raw mention count
-    - Prevents frequently-mentioned trivia from dominating
-    - Prevents one-off high-importance facts from beating proven knowledge
-    - Balances quality AND usage frequency
+  - **Why**: Enables personalized, context-aware first responses
+  - **Change in v0.2.8**: Replaced KG-based ranking (`quality × log(mentions)`) with simple semantic search
+  - **Query**: Single search covering user context + what works + what to avoid + agent growth:
+    ```python
+    query = "user name identity preferences goals what works how to help effectively learned mistakes to avoid proven approaches communication style agent mistakes agent needs to learn agent growth areas"
+    ```
   - **When**: **ALWAYS** on message 1 (internal) or first tool call (external) - no conditions
-  - **Result**: Conversations start with full context - who user is, what worked before, what happened recently
-  - **Implementation**: See detailed documentation in [MCP Integration section #7](#available-mcp-tools-5)
+  - **Result**: Conversations start with relevant context - who user is, what worked before, what to avoid
   - **Internal LLM**: System message injection before first user message ([agent_chat.py:576-603](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py#L576-L603))
   - **External LLM (MCP)**: Prepended to first tool response ([main.py:163-194](../ui-implementation/src-tauri/backend/main.py#L163-L194))
-  - **Shared Logic**: `memory.get_cold_start_context()` ([unified_memory_system.py:1848-1974](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L1848-L1974))
+  - **Shared Logic**: `memory.get_cold_start_context()` ([unified_memory_system.py:1884-1926](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L1884-L1926))
   - **Protection**: Layer 4 injection filtering built-in
-  - **Simplicity**: No tracking logic - just always injects on first message/tool call
-  - **Output Format**:
+  - **Simplicity**: One search call, no KG ranking, no fallback logic
+  - **Output Format** (v0.2.8 - Simplified):
     ```
-    [User Profile] (identity, preferences, goals):
-    - User's name, communication style, current projects...
-
-    [Proven Patterns] (what worked before):
-    - Effective approaches from patterns collection...
-
-    [Recent Context] (last session):
-    - What happened in recent conversations...
+    ═══ KNOWN CONTEXT (auto-loaded) ═══
+    - memory 1
+    - memory 2
+    - memory 3
     ```
+  - **Why Simplified**: Removed verbose section labels (`[User Profile]`, `[Proven Patterns]`, etc.) - the header "KNOWN CONTEXT" is sufficient
 - **WHEN NOT TO USE search_memory:**
   - General knowledge questions (use training data)
   - Current conversation continuation (context already present)
@@ -2211,7 +2264,7 @@ The prompting system builds structured, secure prompts with personality, memory 
   - "ignore instructions"
   - "hacked", "pwned"
   - Other instruction override patterns
-- Limits to top 10 facts after filtering, smart-truncated at sentence/word boundaries (max 250 chars)
+- Limits to top 10 facts after filtering (v0.2.8: full content returned, no character truncation)
 - Logs filtered attempts with `[COLD-START] All results filtered by Layer 4 injection protection`
 - **Result**: Cold-start auto-trigger won't inject malicious data (both internal + external LLMs)
 
@@ -2751,7 +2804,6 @@ POST /api/agent/chat              # Main chat endpoint
 POST /api/agent/stream            # Streaming chat (auto-generates title after first exchange)
 POST /api/chat/create-conversation # Create new conversation
 POST /api/chat/switch-conversation # Switch conversations
-POST /api/chat/cleanup-sessions   # Clean up old sessions
 POST /api/chat/generate-title     # Manual title generation (fallback only)
 GET  /api/chat/stats              # Memory statistics
 GET  /api/chat/feature-mode       # Get current feature mode
@@ -2794,7 +2846,57 @@ POST /api/memory-bank/archive/{doc_id} # Archive memory (MCP tool endpoint)
 POST /api/memory-bank/restore/{doc_id} # User restore archived memory
 DELETE /api/memory-bank/delete/{doc_id} # User hard delete memory
 GET  /api/memory-bank/archived    # List archived memories
+
+# Update Notifications (NEW - v0.2.8)
+GET  /api/check-update            # Check for available updates
+  Response: {
+    available: boolean,
+    version?: string,      # e.g., "0.2.9"
+    notes?: string,        # Brief changelog
+    download_url?: string, # Gumroad product URL
+    is_critical?: boolean  # Force update below min_version
+  }
 ```
+
+### Update Notification System (v0.2.8)
+
+**Architecture:**
+```
+┌─────────────────┐         ┌──────────────────────┐
+│  Roampal App    │ ──GET── │ roampal.ai/updates/  │
+│  (on startup)   │         │ latest.json          │
+└────────┬────────┘         └──────────────────────┘
+         │
+         ▼ (if newer version)
+┌─────────────────┐         ┌──────────────────────┐
+│ Show banner:    │ ─click─ │ Open Gumroad page    │
+│ "Update avail"  │         │ in default browser   │
+└─────────────────┘         └──────────────────────┘
+```
+
+**Implementation:**
+- Backend: `utils/update_checker.py` - async update check with 5s timeout
+- API: `main.py:639-651` - `/api/check-update` endpoint
+- Frontend Hook: `hooks/useUpdateChecker.ts` - checks on mount with 3s delay
+- Frontend Component: `components/UpdateBanner.tsx` - dismissible notification
+- Entry Point: `main.tsx` - UpdateBanner integrated into App
+
+**Update Manifest** (hosted at `roampal.ai/updates/latest.json`):
+```json
+{
+  "version": "0.2.8",
+  "notes": "MCP security hardening, performance improvements",
+  "pub_date": "2025-12-15T00:00:00Z",
+  "download_url": "https://roampal.gumroad.com/l/roampal",
+  "min_version": "0.2.0"
+}
+```
+
+**User Experience:**
+- Non-blocking: Check happens 3s after startup
+- Dismissible: "Later" button for non-critical updates
+- Forced: Critical security updates (`is_critical: true`) cannot be dismissed
+- Maintains sales funnel: Opens Gumroad page, not auto-download
 
 ### MCP (Model Context Protocol) Server
 
@@ -2916,6 +3018,29 @@ Roampal functions as a native MCP server, enabling external LLMs (Claude Desktop
    - Content KG knows which entities are most frequently mentioned
    - Provides truly important user context based on actual data patterns
    - Example: If "roampal" mentioned 10x, "logan" 8x → those facts are prioritized
+
+8. **MCP Security Hardening** (v0.2.8)
+
+   **Parameter Allowlisting** - Blocks MCP signature cloaking attacks:
+   - Research identified attack where malicious MCP servers hide parameters using `InjectedToolArg`
+   - Hidden parameters don't appear in schema but are functional at runtime
+   - **Fix**: Filter arguments to only declared parameters before sending to server
+   - Dropped parameters logged as potential attack indicator
+   - Implementation: `manager.py:397-409`
+
+   **Rate Limiting for MCP Tools**:
+   - Wire existing `RateLimiter` (50 req/60s) to MCP tool execution
+   - Prevents runaway LLM tool loops from overwhelming external servers
+   - Implementation: `manager.py:371-375`
+
+   **Audit Logging** - Append-only JSONL log for all MCP tool executions:
+   - Logs: timestamp, tool, server, args_keys (not values for PII safety), dropped_params, success, duration_ms
+   - Dropped params = attack detection indicator
+   - Location: `{DATA_PATH}/mcp_audit.jsonl`
+   - Implementation: `manager.py:448-480`
+
+   **Trust Model**: Real security boundary is trusting the MCP server you install (like npm packages, VS Code extensions). Parameter allowlisting closes one specific deception vector.
+
 #### Available MCP Tools (7) - Updated 2025-12-02
 
 **Tool Description Philosophy**: Scannable, not verbose. External LLMs (Claude Desktop, Cursor) need to quickly understand tools.
@@ -6373,6 +6498,58 @@ Session files now use a robust write pattern:
 6. Close LLM client connection
 
 **Impact**: System can run for days/weeks without memory leaks. Clean shutdown guarantees no data loss on restart/deployment. All background tasks terminate properly.
+
+---
+
+### Exit Button / App Lifecycle (v0.2.8)
+**Implemented**: Proper app lifecycle management with explicit Exit button
+
+**Problem**: Clicking the X button was supposed to kill the backend Python process, but orphan processes remained. The `CloseRequested` handler in main.rs wasn't reliably terminating the backend.
+
+**Solution**: Instead of fighting the close behavior, embrace it:
+- **X button** = app hides, backend keeps running (fast reopen)
+- **Exit button** = clean shutdown via Settings modal (no orphans)
+
+**Implementation**:
+
+**Rust (main.rs:304-321)**:
+```rust
+#[tauri::command]
+fn exit_app(backend: State<BackendProcess>, app_handle: tauri::AppHandle) {
+    // Kill backend process
+    if let Ok(mut backend) = backend.0.lock() {
+        if let Some(mut child) = backend.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    // Exit app
+    app_handle.exit(0);
+}
+```
+
+**React (SettingsModal.tsx:220-237)**:
+```tsx
+<button
+  onClick={async () => {
+    await invoke('exit_app');
+  }}
+  className="w-full h-10 ... bg-red-600/10 hover:bg-red-600/20 border border-red-600/30"
+>
+  <span className="text-sm font-medium text-red-500">Exit Roampal</span>
+</button>
+```
+
+**User Experience**:
+- X button: App closes but backend stays ready for quick reopen
+- Settings → Exit Roampal: Full shutdown, no orphan processes
+
+**Files Modified**:
+- `main.rs:304-321` - Added `exit_app` Tauri command
+- `main.rs:429-451` - Modified `CloseRequested` to not kill backend on X click
+- `SettingsModal.tsx:220-237` - Added "Exit Roampal" button
+
+**Impact**: No more orphan backend processes. Users have clear control over app lifecycle.
 
 ---
 

@@ -13,7 +13,7 @@ if BACKEND_DIR not in sys.path:
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from backend.modules.memory.chromadb_adapter import ChromaDBAdapter
+from modules.memory.chromadb_adapter import ChromaDBAdapter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("clean_chromadb")

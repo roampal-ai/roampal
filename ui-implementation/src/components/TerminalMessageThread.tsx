@@ -1,10 +1,107 @@
-import React, { useRef, useEffect, useMemo, useState } from 'react';
+import React, { useRef, useEffect, useMemo, useState, memo, useCallback } from 'react';
 import { Terminal, CheckCircle, XCircle, AlertCircle, Loader2, Search, Wrench, MessageSquare, CheckCircle2, ChevronDown, ChevronRight, BookOpen, Database } from 'lucide-react';
 import { MemoryCitation } from './MemoryCitation';
 import { CodeChangePreview } from './CodeChangePreview';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
+
+// v0.2.8: Memoized markdown rendering component to prevent expensive re-parses
+// ReactMarkdown builds AST and creates React elements on every render - memoizing prevents this
+const MemoizedMarkdown = memo(({ content }: { content: string }) => {
+  // Strip thinking tags as safety net
+  const stripThinkingTags = (text: string) => {
+    let cleaned = text.replace(/<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi, '');
+    cleaned = cleaned.replace(/<think(?:ing)?>([\s\S]*?)(?=\n\n|$)/gi, '');
+    return cleaned.trim();
+  };
+
+  const processCallouts = (text: string) => {
+    return text.replace(/:::(\w+)\n([\s\S]*?):::/g, (_, type, calloutContent) => {
+      return `<div class="callout callout-${type}">${calloutContent.trim()}</div>`;
+    });
+  };
+
+  const processedContent = processCallouts(stripThinkingTags(content));
+
+  return (
+    <div className="markdown-content">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRaw]}
+        components={{
+          h1: ({node, ...props}) => <h1 className="text-lg font-bold text-zinc-200 mt-4 mb-2" {...props} />,
+          h2: ({node, ...props}) => <h2 className="text-base font-bold text-zinc-300 mt-3 mb-2" {...props} />,
+          h3: ({node, ...props}) => <h3 className="text-sm font-semibold text-zinc-300 mt-2 mb-1" {...props} />,
+          strong: ({node, ...props}) => <strong className="font-bold text-zinc-100" {...props} />,
+          em: ({node, ...props}) => <em className="italic text-zinc-300" {...props} />,
+          code: ({node, inline, className, children, ...props}: any) => {
+            const match = /language-(\w+)/.exec(className || '');
+            const language = match ? match[1] : '';
+            if (!inline && language) {
+              return (
+                <div className="my-3">
+                  <div className="bg-zinc-900/50 border border-zinc-800 rounded-md overflow-hidden">
+                    <div className="flex justify-between items-center px-3 py-2 border-b border-zinc-800 bg-zinc-900/30">
+                      <span className="text-xs text-zinc-600">{language}</span>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(String(children))}
+                        className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                    <pre className="text-xs overflow-x-auto p-3">
+                      <code className="text-zinc-300">{children}</code>
+                    </pre>
+                  </div>
+                </div>
+              );
+            }
+            return <code className="px-1 py-0.5 bg-zinc-800/50 text-zinc-300 rounded text-xs font-mono" {...props}>{children}</code>;
+          },
+          ul: ({node, ...props}) => <ul className="list-disc list-inside text-zinc-300 space-y-1 my-2" {...props} />,
+          ol: ({node, ...props}) => <ol className="list-decimal list-inside text-zinc-300 space-y-1 my-2" {...props} />,
+          li: ({node, ...props}) => <li className="text-sm" {...props} />,
+          blockquote: ({node, ...props}) => (
+            <div className="my-2 pl-3 py-2 border-l-2 border-blue-500/50 bg-blue-900/10 text-zinc-300 text-sm italic">
+              {props.children}
+            </div>
+          ),
+          a: ({node, ...props}) => (
+            <a className="text-blue-400 hover:text-blue-300 hover:underline" {...props} />
+          ),
+          p: ({node, ...props}) => <p className="text-sm leading-relaxed mb-2" {...props} />,
+          table: ({node, ...props}) => (
+            <div className="overflow-x-auto my-2">
+              <table className="min-w-full border border-zinc-700" {...props} />
+            </div>
+          ),
+          th: ({node, ...props}) => <th className="px-3 py-2 bg-zinc-800 border border-zinc-700 text-xs font-semibold text-left" {...props} />,
+          td: ({node, ...props}) => <td className="px-3 py-2 border border-zinc-700 text-xs" {...props} />,
+          hr: () => <hr className="my-4 border-zinc-700" />,
+          div: ({node, className, ...props}: any) => {
+            if (className?.startsWith('callout')) {
+              const type = className.replace('callout callout-', '');
+              const colors: Record<string, string> = {
+                success: 'border-green-500 bg-green-900/20',
+                warning: 'border-yellow-500 bg-yellow-900/20',
+                info: 'border-blue-500 bg-blue-900/20',
+                error: 'border-red-500 bg-red-900/20'
+              };
+              return (
+                <div className={`my-2 p-3 border-l-2 rounded-r ${colors[type] || colors.info}`} {...props} />
+              );
+            }
+            return <div {...props} />;
+          }
+        }}
+      >
+        {processedContent}
+      </ReactMarkdown>
+    </div>
+  );
+}, (prevProps, nextProps) => prevProps.content === nextProps.content);
 
 // Animated Thinking Dots Component - cycles through "Thinking." -> "Thinking.." -> "Thinking..."
 const ThinkingDots: React.FC = () => {
@@ -172,136 +269,11 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
     }
   };
 
-  const renderContent = (content: string) => {
-    // v0.2.5: Strip thinking tags as safety net (backend should already strip, but defense-in-depth)
-    // FIX: Strip entire thinking BLOCK, not just tags
-    const stripThinkingTags = (text: string) => {
-      // First: Strip complete thinking blocks (closed tags)
-      let cleaned = text.replace(/<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi, '');
-      // Second: Strip unclosed thinking blocks (to end of text or double newline)
-      cleaned = cleaned.replace(/<think(?:ing)?>([\s\S]*?)(?=\n\n|$)/gi, '');
-      return cleaned.trim();
-    };
-
-    // Custom callout syntax parser (:::success, :::warning, :::info)
-    const processCallouts = (text: string) => {
-      return text.replace(/:::(\w+)\n([\s\S]*?):::/g, (_, type, content) => {
-        return `<div class="callout callout-${type}">${content.trim()}</div>`;
-      });
-    };
-
-    const processedContent = processCallouts(stripThinkingTags(content));
-
-    return (
-      <div className="markdown-content">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeRaw]}
-          components={{
-          // Headings
-          h1: ({node, ...props}) => <h1 className="text-lg font-bold text-zinc-200 mt-4 mb-2" {...props} />,
-          h2: ({node, ...props}) => <h2 className="text-base font-bold text-zinc-300 mt-3 mb-2" {...props} />,
-          h3: ({node, ...props}) => <h3 className="text-sm font-semibold text-zinc-300 mt-2 mb-1" {...props} />,
-
-          // Text formatting
-          strong: ({node, ...props}) => <strong className="font-bold text-zinc-100" {...props} />,
-          em: ({node, ...props}) => <em className="italic text-zinc-300" {...props} />,
-
-          // Code
-          code: ({node, inline, className, children, ...props}: any) => {
-            const match = /language-(\w+)/.exec(className || '');
-            const language = match ? match[1] : '';
-
-            if (!inline && language) {
-              return (
-                <div className="my-3">
-                  <div className="bg-zinc-900/50 border border-zinc-800 rounded-md overflow-hidden">
-                    <div className="flex justify-between items-center px-3 py-2 border-b border-zinc-800 bg-zinc-900/30">
-                      <span className="text-xs text-zinc-600">{language}</span>
-                      <button
-                        onClick={() => navigator.clipboard.writeText(String(children))}
-                        className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
-                      >
-                        Copy
-                      </button>
-                    </div>
-                    <pre className="text-xs overflow-x-auto p-3">
-                      <code className="text-zinc-300">{children}</code>
-                    </pre>
-                  </div>
-                </div>
-              );
-            }
-            return <code className="px-1 py-0.5 bg-zinc-800/50 text-zinc-300 rounded text-xs font-mono" {...props}>{children}</code>;
-          },
-
-          // Lists
-          ul: ({node, ...props}) => <ul className="list-disc list-inside text-zinc-300 space-y-1 my-2" {...props} />,
-          ol: ({node, ...props}) => <ol className="list-decimal list-inside text-zinc-300 space-y-1 my-2" {...props} />,
-          li: ({node, ...props}) => <li className="text-sm" {...props} />,
-
-          // Blockquotes (styled as callouts)
-          blockquote: ({node, ...props}) => (
-            <div className="my-2 pl-3 py-2 border-l-2 border-blue-500/50 bg-blue-900/10 text-zinc-300 text-sm italic">
-              {props.children}
-            </div>
-          ),
-
-          // Custom callout divs
-          div: ({node, className, ...props}: any) => {
-            if (className?.includes('callout-success')) {
-              return <div className="my-2 px-3 py-2 bg-green-900/20 border border-green-700/50 rounded text-green-300 text-sm" {...props} />;
-            }
-            if (className?.includes('callout-warning')) {
-              return <div className="my-2 px-3 py-2 bg-yellow-900/20 border border-yellow-700/50 rounded text-yellow-300 text-sm" {...props} />;
-            }
-            if (className?.includes('callout-info')) {
-              return <div className="my-2 px-3 py-2 bg-blue-900/20 border border-blue-700/50 rounded text-blue-300 text-sm" {...props} />;
-            }
-            return <div {...props} />;
-          },
-
-          // Paragraphs
-          p: ({node, ...props}) => <p className="text-zinc-300 text-sm my-1 whitespace-pre-wrap" {...props} />,
-
-          // Tables (v0.2.4)
-          table: ({node, ...props}) => (
-            <div className="my-3 overflow-x-auto">
-              <table className="min-w-full text-sm border-collapse" {...props} />
-            </div>
-          ),
-          thead: ({node, ...props}) => <thead className="border-b border-zinc-700" {...props} />,
-          tbody: ({node, ...props}) => <tbody className="divide-y divide-zinc-800/50" {...props} />,
-          tr: ({node, ...props}) => <tr className="hover:bg-zinc-900/30" {...props} />,
-          th: ({node, ...props}) => (
-            <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider" {...props} />
-          ),
-          td: ({node, ...props}) => (
-            <td className="px-3 py-2 text-zinc-300" {...props} />
-          ),
-
-          // Links (v0.2.4)
-          a: ({node, href, ...props}) => (
-            <a
-              href={href}
-              className="text-blue-400 hover:text-blue-300 underline underline-offset-2"
-              target="_blank"
-              rel="noopener noreferrer"
-              {...props}
-            />
-          ),
-
-          // Horizontal rule (v0.2.4)
-          hr: ({node, ...props}) => (
-            <hr className="my-4 border-t border-zinc-800" {...props} />
-          ),
-        }}
-      >
-        {processedContent}
-      </ReactMarkdown>
-      </div>
-    );
-  };
+  // v0.2.8: Use memoized markdown component for performance
+  // The actual rendering logic is now in MemoizedMarkdown at the top of the file
+  const renderContent = useCallback((content: string) => {
+    return <MemoizedMarkdown content={content} />;
+  }, []);
 
   return (
     <div className="bg-zinc-950 p-6" style={{ fontFamily: 'SF Mono, Monaco, Inconsolata, Fira Code, monospace' }}>

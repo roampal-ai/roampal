@@ -154,9 +154,10 @@ async def test_1_high_volume_stress(harness: TortureTestHarness) -> bool:
             return False
 
     # Check Content KG built
-    if system.content_graph and len(system.content_graph.entities) > 0:
+    kg_entities = await system.get_kg_entities(limit=100)
+    if kg_entities and len(kg_entities) > 0:
         harness.log(f"SUCCESS: 1000 memories stored, all unique, all retrievable")
-        harness.log(f"  Content KG has {len(system.content_graph.entities)} entities")
+        harness.log(f"  Content KG has {len(kg_entities)} entities")
         return True
     else:
         harness.log("WARN: Content KG has no entities", "WARN")
@@ -588,7 +589,8 @@ async def test_9_knowledge_graph_integrity(harness: TortureTestHarness) -> bool:
         await system.search(f"Python programming {i}", limit=5)
 
     # Get Content KG state
-    entities_before = len(system.content_graph.entities) if system.content_graph else 0
+    kg_entities_before = await system.get_kg_entities(limit=100)
+    entities_before = len(kg_entities_before)
     harness.log(f"  Content KG has {entities_before} entities")
 
     harness.log("Recording negative outcomes for 10 memories...")
@@ -599,7 +601,8 @@ async def test_9_knowledge_graph_integrity(harness: TortureTestHarness) -> bool:
         await system.record_outcome(doc_id, "failed")  # Score will drop
 
     # Get KG after
-    entities_after = len(system.content_graph.entities) if system.content_graph else 0
+    kg_entities_after = await system.get_kg_entities(limit=100)
+    entities_after = len(kg_entities_after)
     harness.log(f"  Content KG has {entities_after} entities after failures")
 
     # KG should still function
@@ -682,7 +685,9 @@ async def run_torture_suite():
     print("\nEstimated runtime: 10-15 minutes")
     print("=" * 80)
 
-    input("\nPress Enter to begin torture testing...")
+    # Skip interactive prompt for CI/automated runs
+    # if sys.stdin.isatty():
+    #     input("\nPress Enter to begin torture testing...")
 
     harness = TortureTestHarness()
     harness.start_time = time.time()

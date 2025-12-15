@@ -33,7 +33,13 @@ async def list_sessions(request: Request) -> SessionListResponse:
         sessions = []
 
         if sessions_dir.exists():
-            for session_file in sessions_dir.glob("*.jsonl"):
+            # Include both active and archived sessions
+            session_files = list(sessions_dir.glob("*.jsonl"))
+            archive_dir = sessions_dir / "archive"
+            if archive_dir.exists():
+                session_files.extend(archive_dir.glob("*.jsonl"))
+
+            for session_file in session_files:
                 try:
                     # Read first and last message to get summary
                     with open(session_file, 'r', encoding='utf-8') as f:

@@ -11,11 +11,11 @@ if __name__ == "__main__":
     sys.path.insert(0, str(project_root))
 # -------------------------------------------------------------
 
-from backend.modules.embedding.embedding_service import EmbeddingService
-from backend.modules.memory.chromadb_adapter import ChromaDBAdapter
-from backend.modules.soul_manager.soul_layer_manager import SoulLayerManager
-from backend.app.dependencies_initializers import initialize_fragment_memory_adapter
-from backend.config.settings import settings
+from modules.embedding.embedding_service import EmbeddingService
+from modules.memory.chromadb_adapter import ChromaDBAdapter
+from modules.soul_manager.soul_layer_manager import SoulLayerManager
+from app.dependencies_initializers import initialize_fragment_memory_adapter
+from config.settings import settings
 
 COLLECTION_NAME = "roampal_og_soul_fragments"
 BATCH_SIZE = 64

@@ -1,5 +1,5 @@
 """
-MCP Client Manager - v0.2.5
+MCP Client Manager - v0.2.8
 Connects to external MCP tool servers and makes their tools available to Ollama/LM Studio
 
 Architecture:
@@ -7,6 +7,11 @@ Architecture:
 - Discovers tools via list_tools() on each server
 - Converts MCP tools to OpenAI function format for Ollama
 - Routes tool calls to the correct server
+
+v0.2.8 Security Enhancements:
+- Parameter Allowlisting: Only declared parameters are passed to tools
+- Rate Limiting: Prevents runaway tool loops (50 calls/min per server)
+- Audit Logging: Append-only JSONL log for all tool executions
 """
 import asyncio
 import json
@@ -14,13 +19,42 @@ import logging
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
+from collections import defaultdict
 
 from .config import MCPServerConfig, load_mcp_config, save_mcp_config
 
 logger = logging.getLogger(__name__)
+
+
+# v0.2.8: Simple rate limiter for MCP tool calls
+class MCPRateLimiter:
+    """Rate limiter: max_requests per window_seconds"""
+    def __init__(self, max_requests: int = 50, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests: Dict[str, List[float]] = defaultdict(list)
+
+    def check_rate_limit(self, key: str) -> bool:
+        """Returns True if request is allowed, False if rate limited"""
+        now = time.time()
+        cutoff = now - self.window_seconds
+
+        # Clean old requests
+        self.requests[key] = [t for t in self.requests[key] if t > cutoff]
+
+        if len(self.requests[key]) >= self.max_requests:
+            return False
+
+        self.requests[key].append(now)
+        return True
+
+
+# Global rate limiter for MCP tools (50 calls/minute per server)
+_mcp_rate_limiter = MCPRateLimiter(max_requests=50, window_seconds=60)
 
 
 @dataclass
@@ -319,12 +353,26 @@ class MCPClientManager:
         """
         Execute a tool on the appropriate MCP server.
 
+        v0.2.8 Security:
+        - Rate limiting per server (50 calls/minute)
+        - Parameter allowlisting (only declared params passed)
+        - Audit logging (append-only JSONL)
+
         Returns:
             Tuple of (success: bool, result: Any)
         """
+        start_time = time.time()
+        dropped_params = []
+
         server_name = self.tool_to_server.get(tool_name)
         if not server_name:
             return False, f"Unknown tool: {tool_name}"
+
+        # v0.2.8: Rate limiting
+        if not _mcp_rate_limiter.check_rate_limit(f"mcp_{server_name}"):
+            logger.warning(f"[MCP Security] Rate limit exceeded for server {server_name}")
+            self._log_mcp_audit(tool_name, server_name, list(arguments.keys()), [], False, 0, "rate_limited")
+            return False, f"Rate limit exceeded for server '{server_name}' - too many tool calls (limit: 50/minute)"
 
         conn = self.servers.get(server_name)
         if not conn:
@@ -334,28 +382,50 @@ class MCPClientManager:
             error_detail = conn.last_error or "No connection"
             return False, f"Server '{server_name}' not connected: {error_detail}"
 
-        # Find the original tool name
+        # Find the tool and get its schema
+        tool = None
         original_name = None
-        for tool in conn.tools:
-            if tool.name == tool_name:
-                original_name = tool.original_name
+        for t in conn.tools:
+            if t.name == tool_name:
+                tool = t
+                original_name = t.original_name
                 break
 
-        if not original_name:
+        if not tool or not original_name:
             return False, f"Tool '{tool_name}' not found on server '{server_name}'"
 
-        logger.info(f"[MCP] Executing {tool_name} on {server_name} with args: {list(arguments.keys())}")
+        # v0.2.8: SECURITY - Parameter Allowlisting
+        # Only pass parameters that are declared in the tool's input schema
+        # This prevents hidden parameters (MCP Signature Cloaking attack)
+        schema_properties = tool.input_schema.get("properties", {})
+        filtered_args = {
+            k: v for k, v in arguments.items()
+            if k in schema_properties
+        }
+
+        # Log any dropped parameters (potential attack indicator)
+        dropped_params = list(set(arguments.keys()) - set(filtered_args.keys()))
+        if dropped_params:
+            logger.warning(f"[MCP Security] Dropped undeclared params for {tool_name}: {dropped_params}")
+
+        logger.info(f"[MCP] Executing {tool_name} on {server_name} with args: {list(filtered_args.keys())}")
 
         try:
             result = await self._send_request(server_name, "tools/call", {
                 "name": original_name,
-                "arguments": arguments
+                "arguments": filtered_args  # Use filtered args, not raw
             })
+
+            duration_ms = (time.time() - start_time) * 1000
 
             if result is None:
                 # Get more specific error from connection
                 error_detail = conn.last_error or "No response from server (process may have crashed)"
+                self._log_mcp_audit(tool_name, server_name, list(filtered_args.keys()), dropped_params, False, duration_ms)
                 return False, f"Tool execution failed: {error_detail}"
+
+            # v0.2.8: Audit log successful execution
+            self._log_mcp_audit(tool_name, server_name, list(filtered_args.keys()), dropped_params, True, duration_ms)
 
             # Extract content from MCP response
             content = result.get("content", [])
@@ -370,8 +440,44 @@ class MCPClientManager:
             return True, result
 
         except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self._log_mcp_audit(tool_name, server_name, list(arguments.keys()), dropped_params, False, duration_ms, str(e))
             logger.error(f"[MCP] Tool execution failed: {e}")
             return False, str(e)
+
+    def _log_mcp_audit(
+        self,
+        tool_name: str,
+        server_name: str,
+        args_keys: list,
+        dropped_params: list,
+        success: bool,
+        duration_ms: float,
+        error: str = None
+    ):
+        """
+        v0.2.8: Append to mcp_audit.jsonl - append-only audit trail.
+        Logs keys only (not values) for PII safety.
+        """
+        try:
+            audit_path = self.data_path / "mcp_audit.jsonl"
+            entry = {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "tool": tool_name,
+                "server": server_name,
+                "args_keys": args_keys,
+                "dropped_params": dropped_params,
+                "success": success,
+                "duration_ms": round(duration_ms, 2)
+            }
+            if error:
+                entry["error"] = error[:200]  # Truncate error message
+
+            with open(audit_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            # Audit logging should never break tool execution
+            logger.debug(f"[MCP] Failed to write audit log: {e}")
 
     # === Server Management API ===
 

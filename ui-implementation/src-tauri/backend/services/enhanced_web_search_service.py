@@ -6,11 +6,11 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from backend.modules.web_search.enhanced_web_scraper import EnhancedWebScraper
-from backend.modules.embedding.embedding_service import EmbeddingService
-from backend.modules.memory.chromadb_adapter import ChromaDBAdapter
-from backend.config.enhanced_web_search_config import get_enhanced_web_search_config, get_shard_web_search_config
-from backend.config.settings import settings
+from modules.web_search.enhanced_web_scraper import EnhancedWebScraper
+from modules.embedding.embedding_service import EmbeddingService
+from modules.memory.chromadb_adapter import ChromaDBAdapter
+from config.enhanced_web_search_config import get_enhanced_web_search_config, get_shard_web_search_config
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

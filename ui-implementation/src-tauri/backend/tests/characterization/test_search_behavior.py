@@ -78,7 +78,7 @@ def get_original_wilson_score():
         sys.path.remove(backend_path)
         sys.path.insert(0, backend_path)
 
-    from modules.memory.unified_memory_system import wilson_score_lower
+    from modules.memory.scoring_service import wilson_score_lower
     return wilson_score_lower
 
 

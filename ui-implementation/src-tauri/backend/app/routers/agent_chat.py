@@ -46,7 +46,8 @@ from pydantic import BaseModel, validator
 from filelock import FileLock
 
 
-from modules.memory.unified_memory_system import UnifiedMemorySystem, ActionOutcome
+from modules.memory.unified_memory_system import UnifiedMemorySystem
+from modules.memory.types import ActionOutcome
 
 from modules.llm.ollama_client import OllamaClient
 
@@ -301,8 +302,8 @@ def _format_search_results_as_citations(
             "confidence": confidence,
 
             "collection": r.get("collection", "unknown"),
-
-            "text": r.get("text", "")[:200]
+            # v0.2.8: Full content, no truncation
+            "text": r.get("text", "")
 
         })
 
@@ -479,8 +480,8 @@ class AgentChatService:
         """Format a memory result as a citation"""
 
         # Memory results have 'text' field, not 'content'
-
-        content_text = result.get('text', result.get('content', ''))[:200]
+        # v0.2.8: Full content, no truncation
+        content_text = result.get('text', result.get('content', ''))
 
         return {
 
@@ -620,6 +621,15 @@ class AgentChatService:
                                 'suffix': coll_suffix
                             })
 
+                # v0.2.8: Get memory_bank facts for internal LLM (parity with MCP)
+                matched_concepts = org_context.get('matched_concepts', []) if org_context else []
+                relevant_facts = []
+                if matched_concepts:
+                    try:
+                        relevant_facts = await self.memory.get_facts_for_entities(matched_concepts[:5], limit=2)
+                    except Exception as e:
+                        logger.warning(f"[CONTEXTUAL GUIDANCE] Failed to get facts for entities: {e}")
+
                 # Format and inject combined guidance if any insights exist
                 has_content_insights = (
                     org_context and (
@@ -629,15 +639,25 @@ class AgentChatService:
                     )
                 )
 
-                if has_content_insights or action_stats:
+                if has_content_insights or action_stats or relevant_facts:
                     guidance_msg = f"\n\n═══ CONTEXTUAL GUIDANCE (Context: {context_type}) ═══\n"
+
+                    # v0.2.8: Surface memory_bank facts (parity with MCP get_context_insights)
+                    if relevant_facts:
+                        guidance_msg += "\n💡 YOU ALREADY KNOW THIS (from memory_bank):\n"
+                        for fact in relevant_facts:
+                            content = fact.get('content', '')
+                            eff = fact.get('effectiveness')
+                            eff_str = f" ({int(eff['success_rate']*100)}% helpful)" if eff and eff.get('total_uses', 0) >= 3 else ""
+                            guidance_msg += f"  • \"{content}\"{eff_str}\n"
 
                     # Content KG insights
                     if org_context and org_context.get('relevant_patterns'):
+                        # v0.2.8: Full content, no truncation
                         guidance_msg += "\n📋 Past Experience:\n"
                         for pattern in org_context['relevant_patterns'][:2]:
                             guidance_msg += f"  • {pattern['insight']}\n"
-                            guidance_msg += f"    → {pattern['text'][:100]}...\n"
+                            guidance_msg += f"    → {pattern['text']}\n"
 
                     if org_context and org_context.get('past_outcomes'):
                         guidance_msg += "\n⚠️ Past Failures to Avoid:\n"
@@ -676,7 +696,7 @@ class AgentChatService:
                         "role": "system",
                         "content": guidance_msg
                     })
-                    logger.info(f"[CONTEXTUAL GUIDANCE] Context={context_type}, Content insights={len(org_context.get('relevant_patterns', []))}, Action stats={len(action_stats)}")
+                    logger.info(f"[CONTEXTUAL GUIDANCE] Context={context_type}, Memory facts={len(relevant_facts)}, Content insights={len(org_context.get('relevant_patterns', []))}, Action stats={len(action_stats)}")
 
             except Exception as e:
                 logger.error(f"[CONTEXTUAL GUIDANCE ERROR] {e}", exc_info=True)
@@ -834,10 +854,11 @@ class AgentChatService:
                         # CRITICAL: Multi-turn implementation - feed results back to model
                         if tool_results:
                             # Format tool results for injection into conversation
+                            # v0.2.8: Full content, no truncation
                             tool_result_text = f"\n\n[MEMORY SEARCH RESULTS for '{query_text}']:\n"
                             for idx, result in enumerate(tool_results[:5], start=1):
-                                content = result.get('text', result.get('content', ''))[:200]
-                                tool_result_text += f"{idx}. {content}...\n"
+                                content = result.get('text', result.get('content', ''))
+                                tool_result_text += f"{idx}. {content}\n"
                             tool_result_text += "[END SEARCH RESULTS]\n\n"
 
                             # Build updated conversation with tool results
@@ -2171,8 +2192,8 @@ Respond with ONLY the title, nothing else."""
                 "confidence": result.get("score", 0),
 
                 "collection": result.get("collection", "unknown"),
-
-                "text": result.get("text", "")[:200],
+                # v0.2.8: Full content, no truncation
+                "text": result.get("text", ""),
 
                 "doc_id": result.get("doc_id", "")
 
@@ -2279,10 +2300,11 @@ Respond with ONLY the title, nothing else."""
                     logger.debug(f"[SEARCH_CACHE] Cached {len(doc_ids)} doc_ids for conversation {conversation_id}")
 
             # Format results with metadata (v0.2.5: include book titles for LLM visibility)
+            # v0.2.8: Full content, no truncation
             if tool_results:
                 tool_response_content = "Found relevant memories:\n"
                 for idx, r in enumerate(tool_results[:5], start=1):
-                    content = r.get('text', r.get('content', ''))[:200]
+                    content = r.get('text', r.get('content', ''))
                     collection = r.get('collection', 'unknown')
                     metadata = r.get('metadata', {})
 

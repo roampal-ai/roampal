@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ConnectedChat } from './components/ConnectedChat';
+import { UpdateBanner } from './components/UpdateBanner';
 import { useBackendAutoStart } from './hooks/useBackendAutoStart';
 import './index.css';
 
@@ -44,7 +45,12 @@ const App = () => {
     );
   }
 
-  return <ConnectedChat />;
+  return (
+    <>
+      <ConnectedChat />
+      <UpdateBanner />
+    </>
+  );
 };
 
 // Error boundary

@@ -11,8 +11,8 @@ from datetime import datetime
 from pathlib import Path
 
 from core.interfaces.web_scraper_interface import WebScraperInterface, SearchStrategyInterface
-from backend.modules.memory.chromadb_adapter import ChromaDBAdapter
-from backend.modules.embedding.embedding_service import EmbeddingService
+from modules.memory.chromadb_adapter import ChromaDBAdapter
+from modules.embedding.embedding_service import EmbeddingService
 from config.settings import settings
 
 logger = logging.getLogger(__name__)

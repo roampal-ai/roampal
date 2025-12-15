@@ -301,6 +301,25 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
     }
 }
 
+// v0.2.8: Exit app command - kills backend and exits cleanly
+#[tauri::command]
+fn exit_app(backend_state: State<BackendProcess>, app_handle: tauri::AppHandle) -> Result<String, String> {
+    println!("[exit_app] Exit requested, killing backend process...");
+
+    // Kill backend process
+    if let Ok(mut backend) = backend_state.0.lock() {
+        if let Some(mut child) = backend.take() {
+            let _ = child.kill();
+            let _ = child.wait(); // Wait for process to fully terminate
+            println!("[exit_app] Backend process killed");
+        }
+    }
+
+    // Exit the app
+    app_handle.exit(0);
+    Ok("Exiting...".to_string())
+}
+
 // Check if backend is responding
 #[tauri::command]
 async fn check_backend() -> Result<bool, String> {
@@ -407,14 +426,22 @@ fn main() {
             let backend_state = app.state::<BackendProcess>();
             let backend_clone = Arc::clone(&backend_state.0);
 
+            // v0.2.8: X button no longer kills backend - use Settings > Exit Roampal for clean shutdown
+            // This allows the app to close quickly while backend stays ready for quick reopen
             main_window.on_window_event(move |event| {
                 match event {
-                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
-                        println!("[Cleanup] Window closing, killing backend process...");
+                    tauri::WindowEvent::CloseRequested { .. } => {
+                        println!("[Cleanup] Window close requested - backend will keep running");
+                        println!("[Cleanup] Use Settings > Exit Roampal for full shutdown");
+                        // Don't kill backend here - let exit_app command handle it
+                    }
+                    tauri::WindowEvent::Destroyed => {
+                        // Only kill backend on actual window destruction (app force quit)
+                        println!("[Cleanup] Window destroyed, killing backend process...");
                         if let Ok(mut backend) = backend_clone.lock() {
                             if let Some(mut child) = backend.take() {
                                 let _ = child.kill();
-                                let _ = child.wait(); // Wait for process to fully terminate
+                                let _ = child.wait();
                                 println!("[Cleanup] Backend process killed");
                             }
                         }
@@ -434,7 +461,8 @@ fn main() {
             run_git_command,
             stream_llm_response,
             start_backend,
-            check_backend
+            check_backend,
+            exit_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

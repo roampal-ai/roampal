@@ -21,21 +21,21 @@ from core.interfaces.book_processor_interface import BookProcessorInterface
 # Removed: soul_layer_manager_interface - using enhanced memory collections
 from core.interfaces.ingestion_manager_interface import IngestionManagerInterface
 
-from backend.modules.llm.ollama_client import OllamaClient
-from backend.modules.memory.chromadb_adapter import ChromaDBAdapter
-from backend.modules.memory.file_memory_adapter import FileMemoryAdapter
+from modules.llm.ollama_client import OllamaClient
+from modules.memory.chromadb_adapter import ChromaDBAdapter
+from modules.memory.file_memory_adapter import FileMemoryAdapter
 # Multi-tier memory adapter removed - using simple ChromaDB adapter
-from backend.modules.web_search.playwright_web_scraper import PlaywrightWebScraper
-from backend.modules.prompt.prompt_engine import PromptEngine
-from backend.modules.intent.og_intent_router import OGIntentRouter
+from modules.web_search.playwright_web_scraper import PlaywrightWebScraper
+from modules.prompt.prompt_engine import PromptEngine
+from modules.intent.og_intent_router import OGIntentRouter
 # REMOVED: Dead code - ScoringEngine module doesn't exist
-# from backend.modules.scoring.scoring_engine import ScoringEngine
-from backend.modules.memory.smart_book_processor import SmartBookProcessor
+# from modules.scoring.scoring_engine import ScoringEngine
+from modules.memory.smart_book_processor import SmartBookProcessor
 # Removed: soul_layer_manager - using enhanced memory collections
-from backend.modules.ingestion.ingestion_manager import IngestionManager
-# REMOVED: from backend.modules.scoring.self_debate_engine import SelfDebateEngine  # Overengineered - user feedback validates fragments naturally
+from modules.ingestion.ingestion_manager import IngestionManager
+# REMOVED: from modules.scoring.self_debate_engine import SelfDebateEngine  # Overengineered - user feedback validates fragments naturally
 # Removed: soul_injector - using outcome-based scoring
-from backend.modules.embedding.embedding_service import EmbeddingService
+from modules.embedding.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 

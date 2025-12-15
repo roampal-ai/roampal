@@ -450,6 +450,22 @@ class KnowledgeGraphService:
         # Save KG with proper await (debounced)
         await self._debounced_save_kg()
 
+
+    def add_problem_category(self, problem_key: str, doc_id: str):
+        """Add a document to a problem category."""
+        if "problem_categories" not in self.knowledge_graph:
+            self.knowledge_graph["problem_categories"] = {}
+
+        if problem_key not in self.knowledge_graph["problem_categories"]:
+            self.knowledge_graph["problem_categories"][problem_key] = []
+
+        if doc_id not in self.knowledge_graph["problem_categories"][problem_key]:
+            self.knowledge_graph["problem_categories"][problem_key].append(doc_id)
+
+    def get_problem_categories(self) -> Dict[str, List[str]]:
+        """Get all problem categories."""
+        return self.knowledge_graph.get("problem_categories", {})
+
     # =========================================================================
     # Problem-Solution Tracking
     # =========================================================================
@@ -558,7 +574,7 @@ class KnowledgeGraphService:
 
             solution_entry = {
                 "doc_id": doc_id,
-                "solution": solution_text[:500],  # Store abbreviated solution
+                "solution": solution_text,  # Store abbreviated solution
                 "success_count": 1,
                 "last_used": datetime.now().isoformat(),
                 "contexts": [context] if context else []
@@ -585,8 +601,8 @@ class KnowledgeGraphService:
             pattern_hash = f"{problem_signature}::{doc_id}"
             if pattern_hash not in self.knowledge_graph["solution_patterns"]:
                 self.knowledge_graph["solution_patterns"][pattern_hash] = {
-                    "problem": problem_text[:200],
-                    "solution": solution_text[:200],
+                    "problem": problem_text,
+                    "solution": solution_text,
                     "success_count": 0,
                     "failure_count": 0,
                     "contexts": []
@@ -904,6 +920,97 @@ class KnowledgeGraphService:
     # =========================================================================
     # Content Graph Integration
     # =========================================================================
+
+    def add_failure_pattern(self, failure_reason: str, doc_id: str, problem_text: str):
+        """Track a failure pattern for learning."""
+        if "failure_patterns" not in self.knowledge_graph:
+            self.knowledge_graph["failure_patterns"] = {}
+
+        if failure_reason not in self.knowledge_graph["failure_patterns"]:
+            self.knowledge_graph["failure_patterns"][failure_reason] = []
+
+        self.knowledge_graph["failure_patterns"][failure_reason].append({
+            "doc_id": doc_id,
+            "problem_text": problem_text
+        })
+
+    def get_failure_patterns(self) -> Dict[str, List[Dict[str, str]]]:
+        """Get all tracked failure patterns."""
+        return self.knowledge_graph.get("failure_patterns", {})
+
+    def add_problem_solution(
+        self,
+        problem_signature: str,
+        doc_id: str,
+        solution_text: str,
+        context: Optional[Dict[str, Any]] = None
+    ):
+        """Track a successful problem->solution mapping."""
+        if "problem_solutions" not in self.knowledge_graph:
+            self.knowledge_graph["problem_solutions"] = {}
+
+        if problem_signature not in self.knowledge_graph["problem_solutions"]:
+            self.knowledge_graph["problem_solutions"][problem_signature] = []
+
+        # Add if not already present
+        existing = self.knowledge_graph["problem_solutions"][problem_signature]
+        if doc_id not in existing:
+            existing.append(doc_id)
+
+    def add_solution_pattern(
+        self,
+        doc_id: str,
+        solution_text: str,
+        score: float,
+        problem_keys: List[str],
+        solution_concepts: List[str]
+    ):
+        """Track a solution pattern for reuse."""
+        if "solution_patterns" not in self.knowledge_graph:
+            self.knowledge_graph["solution_patterns"] = {}
+
+        pattern_key = f"{doc_id}::{'_'.join(problem_keys[:3])}"
+
+        self.knowledge_graph["solution_patterns"][pattern_key] = {
+            "doc_id": doc_id,
+            "solution_text": solution_text[:500],
+            "score": score,
+            "problem_keys": problem_keys,
+            "solution_concepts": solution_concepts,
+            "uses": 1
+        }
+
+    def add_solution_pattern_entry(
+        self,
+        pattern_hash: str,
+        problem_text: str,
+        solution_text: str,
+        outcome: str
+    ):
+        """Add or update a solution pattern entry."""
+        if "solution_patterns" not in self.knowledge_graph:
+            self.knowledge_graph["solution_patterns"] = {}
+
+        if pattern_hash not in self.knowledge_graph["solution_patterns"]:
+            self.knowledge_graph["solution_patterns"][pattern_hash] = {
+                "problem_text": problem_text[:200],
+                "solution_text": solution_text[:500],
+                "successes": 0,
+                "failures": 0,
+                "success_rate": 0.5
+            }
+
+        entry = self.knowledge_graph["solution_patterns"][pattern_hash]
+
+        if outcome == "worked":
+            entry["successes"] = entry.get("successes", 0) + 1
+        elif outcome == "failed":
+            entry["failures"] = entry.get("failures", 0) + 1
+
+        total = entry.get("successes", 0) + entry.get("failures", 0)
+        if total > 0:
+            entry["success_rate"] = entry.get("successes", 0) / total
+
 
     def add_entities_from_text(
         self,

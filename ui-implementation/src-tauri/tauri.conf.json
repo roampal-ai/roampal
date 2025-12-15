@@ -2,13 +2,13 @@
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build:dev",
+    "beforeBuildCommand": "npm run build:prod",
     "devPath": "http://localhost:5174",
     "distDir": "../dist"
   },
   "package": {
-    "productName": "Roampal DEV",
-    "version": "0.2.5"
+    "productName": "Roampal",
+    "version": "0.2.8"
   },
   "tauri": {
     "allowlist": {
@@ -36,14 +36,14 @@
       "http": {
         "all": true,
         "scope": [
-          "http://localhost:8766/**"
+          "http://localhost:8765/**"
         ]
       }
     },
     "bundle": {
       "active": true,
       "targets": [],
-      "identifier": "com.roampal.dev",
+      "identifier": "com.roampal.app",
       "windows": {
         "nsis": {
           "compression": "zlib"
@@ -70,13 +70,13 @@
       "copyright": "© 2024 Roampal"
     },
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:8766 http://127.0.0.1:8766 ws://localhost:8766 ws://127.0.0.1:8766; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:8765 http://127.0.0.1:8765 ws://localhost:8765 ws://127.0.0.1:8765; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
     },
     "windows": [
       {
         "fullscreen": false,
         "resizable": true,
-        "title": "Roampal DEV - Your Private Intelligence",
+        "title": "Roampal - Your Private Intelligence",
         "width": 1400,
         "height": 900,
         "minWidth": 900,

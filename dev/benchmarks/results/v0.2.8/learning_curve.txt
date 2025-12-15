@@ -1,0 +1,142 @@
+============================= test session starts =============================
+platform win32 -- Python 3.10.11, pytest-9.0.0, pluggy-1.6.0 -- C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\python.exe
+cachedir: .pytest_cache
+rootdir: C:\ROAMPAL\dev\benchmarks
+configfile: pytest.ini
+plugins: anyio-4.11.0, langsmith-0.4.36, asyncio-1.3.0
+asyncio: mode=auto, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+test_learning_curve.py::test_at_maturity_level ERROR                     [100%]
+
+=================================== ERRORS ====================================
+__________________ ERROR at setup of test_at_maturity_level ___________________
+file C:\ROAMPAL\dev\benchmarks\test_learning_curve.py, line 159
+  async def test_at_maturity_level(
+      scenario: Dict,
+      maturity: Dict,
+      data_dir: str,
+      embedding_service
+  ) -> Dict:
+      """Test a single scenario at a specific maturity level."""
+
+      # Clean data directory
+      if os.path.exists(data_dir):
+          shutil.rmtree(data_dir)
+      os.makedirs(data_dir)
+
+      system = UnifiedMemorySystem(
+          data_dir=data_dir,
+          use_server=False,
+          llm_service=MockLLMService()
+      )
+      await system.initialize()
+      system.embedding_service = embedding_service
+
+      # Store good advice
+      good_id = await system.store(
+          text=scenario["good_advice"],
+          collection="working",
+          metadata={"type": "good", "scenario": scenario["id"]}
+      )
+
+      # Store bad advice
+      bad_id = await system.store(
+          text=scenario["bad_advice"],
+          collection="working",
+          metadata={"type": "bad", "scenario": scenario["id"]}
+      )
+
+      # Apply maturity level outcomes by directly setting metadata
+      # System reads: outcome_history (JSON array), score, uses (see unified_memory_system.py:1494-1519)
+      adapter = system.collections.get("working")
+
+      if adapter and maturity["uses"] > 0:
+          # Build outcome_history for good advice (high success rate)
+          good_outcome_history = []
+          for i in range(maturity["worked"]):
+              good_outcome_history.append({"outcome": "worked", "timestamp": f"2025-01-{i+1:02d}"})
+          for i in range(maturity["failed"]):
+              good_outcome_history.append({"outcome": "failed", "timestamp": f"2025-01-{20+i:02d}"})
+
+          # Calculate raw score (simple success rate)
+          good_success_rate = maturity["worked"] / maturity["uses"]
+
+          # Update good advice metadata with fields system reads
+          try:
+              result = adapter.collection.get(ids=[good_id], include=["metadatas"])
+              if result and result.get("metadatas"):
+                  meta = result["metadatas"][0]
+                  meta["uses"] = maturity["uses"]
+                  meta["score"] = good_success_rate
+                  meta["outcome_history"] = json.dumps(good_outcome_history)
+                  meta["last_outcome"] = "worked"
+                  adapter.collection.update(ids=[good_id], metadatas=[meta])
+          except Exception as e:
+              print(f"Error updating good advice: {e}")
+
+          # Bad advice gets worse outcomes (1/3 success rate)
+          bad_worked = max(0, maturity["worked"] // 3)
+          bad_failed = maturity["uses"] - bad_worked
+          bad_success_rate = bad_worked / maturity["uses"]
+
+          # Build outcome_history for bad advice
+          bad_outcome_history = []
+          for i in range(bad_worked):
+              bad_outcome_history.append({"outcome": "worked", "timestamp": f"2025-01-{i+1:02d}"})
+          for i in range(bad_failed):
+              bad_outcome_history.append({"outcome": "failed", "timestamp": f"2025-01-{20+i:02d}"})
+
+          # Update bad advice metadata
+          try:
+              result = adapter.collection.get(ids=[bad_id], include=["metadatas"])
+              if result and result.get("metadatas"):
+                  meta = result["metadatas"][0]
+                  meta["uses"] = maturity["uses"]
+                  meta["score"] = bad_success_rate
+                  meta["outcome_history"] = json.dumps(bad_outcome_history)
+                  meta["last_outcome"] = "failed"
+                  adapter.collection.update(ids=[bad_id], metadatas=[meta])
+          except Exception as e:
+              print(f"Error updating bad advice: {e}")
+
+      # Search all relevant collections (working, history, patterns)
+      results = await system.search(
+          scenario["query"],
+          collections=["working", "history", "patterns"],
+          limit=10
+      )
+
+      # Determine ranking using bidirectional matching (like three-way comparison)
+      good_rank = 0
+      bad_rank = 0
+      good_advice_lower = scenario["good_advice"].lower()
+      bad_advice_lower = scenario["bad_advice"].lower()
+
+      for i, r in enumerate(results):
+          text = r.get("text", "").lower()
+          # Bidirectional match: advice in text OR text in advice
+          if good_rank == 0:
+              if good_advice_lower[:50] in text or text[:50] in good_advice_lower:
+                  good_rank = i + 1
+          if bad_rank == 0:
+              if bad_advice_lower[:50] in text or text[:50] in bad_advice_lower:
+                  bad_rank = i + 1
+
+      return {
+          "scenario_id": scenario["id"],
+          "domain": scenario["domain"],
+          "maturity": maturity["name"],
+          "uses": maturity["uses"],
+          "good_rank": good_rank,
+          "bad_rank": bad_rank,
+          "top1_correct": good_rank == 1,
+      }
+E       fixture 'scenario' not found
+>       available fixtures: _class_scoped_runner, _function_scoped_runner, _module_scoped_runner, _package_scoped_runner, _session_scoped_runner, ab_test_data_dir, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark_data_dir, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, capteesys, doctest_namespace, event_loop_policy, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, monkeypatch, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, subtests, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+C:\ROAMPAL\dev\benchmarks\test_learning_curve.py:159
+=========================== short test summary info ===========================
+ERROR test_learning_curve.py::test_at_maturity_level
+============================== 1 error in 5.76s ===============================

@@ -6,7 +6,7 @@ import logging
 from typing import List, Optional
 import aiohttp
 import asyncio
-from backend.modules.embedding.embedding_service import EmbeddingService
+from modules.embedding.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 

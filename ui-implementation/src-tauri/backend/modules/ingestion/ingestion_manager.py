@@ -12,9 +12,9 @@ from config.settings import Settings
 from core.interfaces.llm_client_interface import LLMClientInterface # For type hinting __init__
 from core.interfaces.memory_adapter_interface import MemoryAdapterInterface
 from core.interfaces.ingestion_manager_interface import IngestionManagerInterface
-from backend.modules.memory.chromadb_adapter import ChromaDBAdapter  # <-- REPLACE FileMemoryAdapter
-# from backend.utils.book_processor import BookProcessor  # REMOVED: Old processor no longer exists
-from backend.modules.memory.smart_book_processor import SmartBookProcessor
+from modules.memory.chromadb_adapter import ChromaDBAdapter  # <-- REPLACE FileMemoryAdapter
+# from utils.book_processor import BookProcessor  # REMOVED: Old processor no longer exists
+from modules.memory.smart_book_processor import SmartBookProcessor
 from .models import IngestionJob, IngestionJobCreateRequest, IngestionJobForceFlags
 
 logger = logging.getLogger(__name__)

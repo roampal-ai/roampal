@@ -1,6 +1,6 @@
 [package]
 name = "roampal"
-version = "0.2.6"
+version = "0.2.8"
 description = "Roampal - Your AI that actually remembers"
 authors = ["Roampal Team"]
 license = "Apache-2.0"

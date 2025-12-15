@@ -842,7 +842,7 @@ async def main():
         n = b + c
         if n == 0:
             return 1.0  # No difference
-        p_value = stats.binom_test(b, n, 0.5, alternative='two-sided') if n > 0 else 1.0
+        p_value = stats.binomtest(b, n, 0.5, alternative='two-sided').pvalue if n > 0 else 1.0
         return p_value
 
     # Paired t-test for MRR (continuous metric)

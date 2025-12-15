@@ -36,8 +36,8 @@ interface MemoryBankModalProps {
 }
 
 // Fixed height for virtualized list items (approximate)
-const ITEM_HEIGHT = 120;
-const ITEM_WITH_TAGS_HEIGHT = 148;
+const ITEM_HEIGHT = 90;
+const ITEM_WITH_TAGS_HEIGHT = 110;
 
 export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClose }) => {
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -187,7 +187,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
     if (!memory) return null;
 
     return (
-      <div style={{ ...style, paddingBottom: 12 }}>
+      <div style={{ ...style, paddingBottom: 4 }}>
         <div className="p-4 bg-zinc-800 border border-zinc-700 rounded-lg hover:border-zinc-600 transition-colors mx-1">
           <div className="flex justify-between items-start mb-3">
             <div className="flex-1">
@@ -236,7 +236,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
     if (!memory) return null;
 
     return (
-      <div style={{ ...style, paddingBottom: 12 }}>
+      <div style={{ ...style, paddingBottom: 4 }}>
         <div className="p-4 bg-zinc-800/50 border border-zinc-700/50 rounded-lg mx-1">
           <div className="flex justify-between items-start mb-3">
             <div className="flex-1">
@@ -293,10 +293,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
       >
         {/* Header */}
         <div className="flex justify-between items-center p-3 border-b border-zinc-800 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <SparklesIcon className="w-5 h-5 text-cyan-400" />
-            <h2 className="text-lg font-bold">Memory Bank</h2>
-          </div>
+          <h2 className="text-lg font-bold">Memory Bank</h2>
           <button
             onClick={onClose}
             className="p-2 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg transition-colors"

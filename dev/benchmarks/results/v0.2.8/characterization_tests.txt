@@ -1,0 +1,57 @@
+============================= test session starts =============================
+platform win32 -- Python 3.10.11, pytest-9.0.0, pluggy-1.6.0 -- C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\python.exe
+cachedir: .pytest_cache
+rootdir: C:\ROAMPAL\ui-implementation\src-tauri\backend
+plugins: anyio-4.11.0, langsmith-0.4.36, asyncio-1.3.0
+asyncio: mode=strict, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 23 items
+
+tests/characterization/test_outcome_behavior.py::TestOutcomeBehavior::test_record_outcome_valid_outcomes PASSED [  4%]
+tests/characterization/test_outcome_behavior.py::TestOutcomeBehavior::test_outcome_scoring_logic PASSED [  8%]
+tests/characterization/test_outcome_behavior.py::TestOutcomeBehavior::test_threshold_values PASSED [ 13%]
+tests/characterization/test_outcome_behavior.py::TestPromotionBehavior::test_promotion_methods_exist PASSED [ 17%]
+tests/characterization/test_outcome_behavior.py::TestPromotionBehavior::test_promotion_is_async PASSED [ 21%]
+tests/characterization/test_outcome_behavior.py::TestActionOutcome::test_action_outcome_import PASSED [ 26%]
+tests/characterization/test_outcome_behavior.py::TestActionOutcome::test_action_outcome_fields PASSED [ 30%]
+tests/characterization/test_outcome_behavior.py::TestActionOutcome::test_action_outcome_to_dict PASSED [ 34%]
+tests/characterization/test_outcome_behavior.py::TestActionOutcome::test_action_outcome_from_dict PASSED [ 39%]
+tests/characterization/test_search_behavior.py::TestSearchBehavior::test_search_returns_list PASSED [ 43%]
+tests/characterization/test_search_behavior.py::TestSearchBehavior::test_search_respects_limit PASSED [ 47%]
+tests/characterization/test_search_behavior.py::TestSearchBehavior::test_search_result_structure PASSED [ 52%]
+tests/characterization/test_search_behavior.py::TestSearchBehavior::test_search_empty_query PASSED [ 56%]
+tests/characterization/test_search_behavior.py::TestSearchBehavior::test_search_with_collection_filter PASSED [ 60%]
+tests/characterization/test_search_behavior.py::TestSearchBehavior::test_search_with_metadata PASSED [ 65%]
+tests/characterization/test_search_behavior.py::TestSearchBehavior::test_search_ranking_consistency PASSED [ 69%]
+tests/characterization/test_search_behavior.py::TestWilsonScore::test_wilson_score_import PASSED [ 73%]
+tests/characterization/test_search_behavior.py::TestWilsonScore::test_wilson_score_zero_uses PASSED [ 78%]
+tests/characterization/test_search_behavior.py::TestWilsonScore::test_wilson_score_perfect_record PASSED [ 82%]
+tests/characterization/test_search_behavior.py::TestWilsonScore::test_wilson_score_range PASSED [ 86%]
+tests/characterization/test_search_behavior.py::TestMCPToolShapes::test_search_memory_shape PASSED [ 91%]
+tests/characterization/test_search_behavior.py::TestMCPToolShapes::test_get_context_insights_shape PASSED [ 95%]
+tests/characterization/test_search_behavior.py::TestMCPToolShapes::test_store_memory_bank_shape PASSED [100%]
+
+============================== warnings summary ===============================
+tests/characterization/test_outcome_behavior.py::TestPromotionBehavior::test_promotion_methods_exist
+  C:\ROAMPAL/ui-implementation/src-tauri/backend\config\settings.py:106: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class FragmentFileMemorySettings(BaseModel):
+
+tests/characterization/test_outcome_behavior.py::TestPromotionBehavior::test_promotion_methods_exist
+  C:\ROAMPAL/ui-implementation/src-tauri/backend\config\settings.py:145: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class PromptConfigBase(BaseModel):
+
+tests/characterization/test_search_behavior.py::TestSearchBehavior::test_search_returns_list
+tests/characterization/test_search_behavior.py::TestMCPToolShapes::test_search_memory_shape
+  C:\ROAMPAL/ui-implementation/src-tauri/backend\modules\memory\chromadb_adapter.py:604: RuntimeWarning: coroutine 'ChromaDBAdapter.cleanup' was never awaited
+    pass  # Ignore errors in destructor
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/characterization/test_search_behavior.py::TestSearchBehavior::test_search_returns_list
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tests/characterization/test_search_behavior.py::TestSearchBehavior::test_search_returns_list
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 23 passed, 6 warnings in 13.69s =======================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

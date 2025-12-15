@@ -1,0 +1,46 @@
+============================= test session starts =============================
+platform win32 -- Python 3.10.11, pytest-9.0.0, pluggy-1.6.0 -- C:\ROAMPAL\ui-implementation\src-tauri\binaries\python\python.exe
+cachedir: .pytest_cache
+rootdir: C:\ROAMPAL\dev\benchmarks
+configfile: pytest.ini
+plugins: anyio-4.11.0, langsmith-0.4.36, asyncio-1.3.0
+asyncio: mode=auto, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test_search_quality.py::test_synonym_understanding PASSED                [ 14%]
+test_search_quality.py::test_typo_tolerance PASSED                       [ 28%]
+test_search_quality.py::test_acronym_expansion PASSED                    [ 42%]
+test_search_quality.py::test_result_diversity PASSED                     [ 57%]
+test_search_quality.py::test_recency_vs_relevance PASSED                 [ 71%]
+test_search_quality.py::test_partial_match_quality PASSED                [ 85%]
+test_search_quality.py::test_search_quality PASSED                       [100%]
+
+============================== warnings summary ===============================
+test_search_quality.py::test_synonym_understanding
+  C:\ROAMPAL\ui-implementation\src-tauri\backend\config\settings.py:106: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class FragmentFileMemorySettings(BaseModel):
+
+test_search_quality.py::test_synonym_understanding
+  C:\ROAMPAL\ui-implementation\src-tauri\backend\config\settings.py:145: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class PromptConfigBase(BaseModel):
+
+test_search_quality.py::test_synonym_understanding
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+test_search_quality.py::test_synonym_understanding
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+test_search_quality.py::test_typo_tolerance
+test_search_quality.py::test_acronym_expansion
+test_search_quality.py::test_result_diversity
+test_search_quality.py::test_recency_vs_relevance
+test_search_quality.py::test_partial_match_quality
+test_search_quality.py::test_search_quality
+  C:\ROAMPAL\ui-implementation\src-tauri\backend\modules\memory\chromadb_adapter.py:604: RuntimeWarning: coroutine 'ChromaDBAdapter.cleanup' was never awaited
+    pass  # Ignore errors in destructor
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 7 passed, 10 warnings in 53.68s =======================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

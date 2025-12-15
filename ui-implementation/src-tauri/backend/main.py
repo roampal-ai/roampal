@@ -38,8 +38,8 @@ from typing import Dict, Any, Optional
 
 # Core services
 from modules.embedding.embedding_service import EmbeddingService
-from modules.memory.unified_memory_system import UnifiedMemorySystem, ActionOutcome
-from modules.memory.session_cleanup import SessionCleanupManager
+from modules.memory.unified_memory_system import UnifiedMemorySystem
+from modules.memory.types import ActionOutcome
 from modules.llm.ollama_client import OllamaClient
 from services.unified_image_service import UnifiedImageService
 from config.feature_flag_validator import FeatureFlagValidator
@@ -266,9 +266,6 @@ async def lifespan(app: FastAPI):
                 # Initialize session cleanup manager
                 sessions_dir = Path(DATA_PATH) / "sessions"
                 sessions_dir.mkdir(parents=True, exist_ok=True)
-                app.state.session_cleanup = SessionCleanupManager(sessions_dir)
-                await app.state.session_cleanup.initialize()
-                logger.info(f"✓ Session cleanup manager initialized (max sessions: {app.state.session_cleanup.max_sessions})")
 
                 # Embedding service from memory system
                 app.state.embedding_service = app.state.memory.embedding_service
@@ -409,7 +406,7 @@ async def lifespan(app: FastAPI):
 
         # Inject LLM service into memory system for outcome detection
         if app.state.memory and app.state.llm_client:
-            app.state.memory.set_llm_service(app.state.llm_client)
+            app.state.memory.llm_service = app.state.llm_client
             logger.info("✓ LLM service connected to memory system")
 
         # Initialize book processor for document uploads (after LLM client)
@@ -634,6 +631,21 @@ async def health():
         "safe_mode": os.getenv('ROAMPAL_SAFE_MODE', os.getenv('ROAMPAL_SAFE_MODE', 'not set')),
         "safe_mode_enabled": os.getenv('ROAMPAL_SAFE_MODE', os.getenv('ROAMPAL_SAFE_MODE', 'false')).lower() == 'true'
     }
+
+
+# v0.2.8: Update Notification System
+@app.get("/api/check-update")
+async def check_update():
+    """Check for available updates (called on app startup)"""
+    try:
+        from utils.update_checker import check_for_updates, get_current_version
+        update_info = await check_for_updates()
+        if update_info:
+            return {"available": True, "current_version": get_current_version(), **update_info}
+        return {"available": False, "current_version": get_current_version()}
+    except Exception as e:
+        logger.debug(f"[UPDATE] Check failed: {e}")
+        return {"available": False, "error": str(e)}
 
 @app.get("/api/stats")
 async def get_stats():
@@ -1109,8 +1121,8 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                     for i, r in enumerate(results[:5], 1):
                         # Try both 'content' and 'text' fields (different adapters use different names)
                         content = r.get('content') or r.get('text', '')
-                        # Truncate but don't add ... if content is empty
-                        content_preview = content[:300] if content else '[No content]'
+                        # v0.2.8: Return full content (was truncated to 300 chars)
+                        content_preview = content if content else '[No content]'
                         # Get collection from metadata or root level
                         metadata = r.get('metadata', {})
                         collection = r.get('collection') or metadata.get('collection', 'unknown')
@@ -1377,13 +1389,14 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                         response += "  • record_response(outcome=...) after reply - required for learning\n\n"
 
                         # v0.2.6: Surface relevant memory_bank facts
+                        # v0.2.8: Full content, no truncation
                         if relevant_facts:
                             response += "💡 YOU ALREADY KNOW THIS (from memory_bank):\n"
                             for fact in relevant_facts:
-                                content = fact.get('content', '')[:100]
+                                content = fact.get('content', '')
                                 eff = fact.get('effectiveness')
                                 eff_str = f" ({int(eff['success_rate']*100)}% helpful)" if eff and eff.get('total_uses', 0) >= 3 else ""
-                                response += f"  • \"{content}...\"{eff_str}\n"
+                                response += f"  • \"{content}\"{eff_str}\n"
                             response += "\n"
 
                         if org_context and org_context.get('relevant_patterns'):
@@ -1391,7 +1404,7 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                             for pattern in org_context['relevant_patterns'][:3]:
                                 response += f"  • {pattern['insight']}\n"
                                 response += f"    Collection: {pattern['collection']}, Score: {pattern['score']:.2f}, Uses: {pattern['uses']}\n"
-                                response += f"    → {pattern['text'][:150]}...\n\n"
+                                response += f"    → {pattern['text']}\n\n"
 
                         if org_context and org_context.get('past_outcomes'):
                             response += "⚠️ PAST FAILURES TO AVOID:\n"

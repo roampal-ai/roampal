@@ -23,7 +23,8 @@ from typing import List, Dict, Any, Optional
 
 # Add paths
 sys.path.insert(0, os.path.dirname(__file__))  # Add current dir for local imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../../ui-implementation/src-tauri/backend'))
+backend_path = str(Path(__file__).parent.parent.parent / "ui-implementation" / "src-tauri" / "backend")
+sys.path.insert(0, backend_path)
 
 from modules.memory.unified_memory_system import UnifiedMemorySystem
 from modules.memory.content_graph import ContentGraph

@@ -14,7 +14,7 @@ from typing import Dict, Any
 # Add the backend directory to the path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from backend.config.settings import settings
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@ import json
 import logging
 from typing import List, Dict, Any
 from pathlib import Path
-from backend.config.settings import settings  # Import settings for corrections_jsonl_path
+from config.settings import settings  # Import settings for corrections_jsonl_path
 
 logger = logging.getLogger(__name__)
 

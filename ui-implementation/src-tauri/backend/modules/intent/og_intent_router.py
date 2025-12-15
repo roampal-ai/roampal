@@ -157,7 +157,7 @@ class OGIntentRouter(IntentRouterInterface):
 
         inp = user_input.strip()
         # Sanitize input for safe logging
-        from backend.utils.safe_logger import sanitize_for_logging
+        from utils.safe_logger import sanitize_for_logging
         safe_inp = sanitize_for_logging(inp)
         logger.info(f"OGIntentRouter: Input received: '{safe_inp}'")
 

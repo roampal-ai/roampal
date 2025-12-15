@@ -150,16 +150,17 @@ class TestPromotionBehavior:
 
     @pytest.mark.asyncio
     async def test_promotion_methods_exist(self, memory_system):
-        """Verify promotion methods exist."""
-        assert hasattr(memory_system, '_handle_promotion')
-        assert hasattr(memory_system, '_promote_item')
-        assert hasattr(memory_system, '_promote_valuable_working_memory')
+        """Verify promotion methods exist on UMS (delegates to promotion_service)."""
+        # Public API on UMS
+        assert hasattr(memory_system, 'promote_valuable_working_memory')
+        # After initialization, promotion_service should exist
+        await memory_system.initialize()
+        assert memory_system._promotion_service is not None
 
     def test_promotion_is_async(self, memory_system):
         """Promotion methods should be async."""
         import asyncio
-        assert asyncio.iscoroutinefunction(memory_system._handle_promotion)
-        assert asyncio.iscoroutinefunction(memory_system._promote_item)
+        assert asyncio.iscoroutinefunction(memory_system.promote_valuable_working_memory)
 
 
 class TestActionOutcome:

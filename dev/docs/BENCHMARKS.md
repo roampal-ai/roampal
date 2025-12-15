@@ -1,7 +1,7 @@
 # Roampal Benchmarks
 
-**Last Updated**: 2025-12-09
-**Test Suite Location**: `benchmarks/comprehensive_test/`
+****Last Updated**: 2025-12-15
+**Test Suite Location**: `dev/benchmarks/`
 
 ---
 
@@ -25,7 +25,7 @@ Roampal's memory system has been validated through **comprehensive testing** pro
 
 ### 1. Comprehensive Test Suite (30 tests)
 
-**Location**: `benchmarks/comprehensive_test/test_comprehensive.py`
+**Location**: `dev/benchmarks/test_comprehensive.py`
 **Runtime**: ~5 seconds
 **Purpose**: Validate all core features work correctly
 
@@ -41,7 +41,7 @@ Roampal's memory system has been validated through **comprehensive testing** pro
 
 **How to Run**:
 ```bash
-cd benchmarks/comprehensive_test
+cd dev/benchmarks
 python test_comprehensive.py
 ```
 
@@ -55,7 +55,7 @@ Runtime: 5.4s
 
 ### 2. Torture Test Suite (10 tests)
 
-**Location**: `benchmarks/comprehensive_test/test_torture_suite.py`
+**Location**: `dev/benchmarks/test_torture_suite.py`
 **Runtime**: ~93 seconds
 **Purpose**: Stress test with extreme scenarios
 
@@ -83,17 +83,16 @@ Runtime: 5.4s
 
 **How to Run**:
 ```bash
-cd benchmarks/comprehensive_test
+cd dev/benchmarks
 python test_torture_suite.py
 ```
 
-**Documentation**: See `benchmarks/comprehensive_test/README.md`
+**Documentation**: See `dev/benchmarks/README.md`
 
 ---
 
 ### 3. Statistical Significance Test
 
-**Location**: `benchmarks/comprehensive_test/learning_curve_test/`
 **Purpose**: Prove the system actually learns over time
 
 **Methodology**:
@@ -114,15 +113,13 @@ python test_torture_suite.py
 
 **What This Proves**: As Roampal accumulates more memories, question-answering accuracy improves significantly. This is statistically significant learning, not random variation.
 
-**Documentation**: See `benchmarks/comprehensive_test/learning_curve_test/STATISTICAL_SIGNIFICANCE_EXPLAINED.md`
 
-**Visual Dashboard**: `benchmarks/comprehensive_test/learning_curve_test/dashboard_statistical_significance.html`
 
 ---
 
 ### 4. Roampal vs Plain Vector Database (THE KEY TEST)
 
-**Location**: `benchmarks/comprehensive_test/test_roampal_vs_vector_db.py`
+**Location**: `dev/benchmarks/test_roampal_vs_vector_db.py`
 **Purpose**: Prove outcome-based learning beats pure semantic similarity
 
 This is the definitive test. It answers: **"Does learning from outcomes actually help, or is vector search good enough?"**
@@ -173,7 +170,7 @@ Plain vector search returned the bad advice 30/30 times. Roampal returned good a
 
 **How to Run**:
 ```bash
-cd benchmarks/comprehensive_test
+cd dev/benchmarks
 python test_roampal_vs_vector_db.py
 ```
 
@@ -181,7 +178,7 @@ python test_roampal_vs_vector_db.py
 
 ### 5. Dynamic Weight Shift Test
 
-**Location**: `benchmarks/comprehensive_test/test_dynamic_weight_shift.py`
+**Location**: `dev/benchmarks/test_dynamic_weight_shift.py`
 **Purpose**: Validate the weight shifting mechanism works
 
 **The Mechanism**:
@@ -206,7 +203,7 @@ This test proves that "proven" memories (uses≥5, score≥0.8) rank well even w
 
 **How to Run**:
 ```bash
-cd benchmarks/comprehensive_test
+cd dev/benchmarks
 python test_dynamic_weight_shift.py
 ```
 
@@ -214,7 +211,7 @@ python test_dynamic_weight_shift.py
 
 ### 6. Token Efficiency Benchmark (Personal Finance)
 
-**Location**: `benchmarks/comprehensive_test/test_token_efficiency.py`
+**Location**: `dev/benchmarks/test_token_efficiency.py`
 **Purpose**: Prove outcome learning works across domains (not just programming)
 
 **Test Design**:
@@ -243,7 +240,7 @@ This makes it a perfect adversarial test domain.
 
 **How to Run**:
 ```bash
-cd benchmarks/comprehensive_test
+cd dev/benchmarks
 python test_token_efficiency.py
 ```
 
@@ -251,7 +248,7 @@ python test_token_efficiency.py
 
 ### 7. Comprehensive 4-Way Benchmark (v0.2.5)
 
-**Location**: `benchmarks/comprehensive_test/test_comprehensive_benchmark.py`
+**Location**: `dev/benchmarks/test_comprehensive_benchmark.py`
 **Runtime**: ~5 minutes
 **Status**: PASS (p=0.005, highly significant)
 
@@ -302,7 +299,7 @@ python test_token_efficiency.py
 
 **How to Run**:
 ```bash
-cd benchmarks/comprehensive_test
+cd dev/benchmarks
 python test_comprehensive_benchmark.py
 ```
 
@@ -375,7 +372,7 @@ python test_comprehensive_benchmark.py
 
 ```bash
 # Navigate to test directory
-cd benchmarks/comprehensive_test
+cd dev/benchmarks
 
 # Run comprehensive test (30 tests, ~5s)
 python test_comprehensive.py
@@ -384,11 +381,10 @@ python test_comprehensive.py
 python test_torture_suite.py
 
 # Run statistical significance test
-cd learning_curve_test
-python test_statistical_significance_synthetic.py
+# Run learning curve test
+python test_learning_curve.py
 
 # Run token efficiency benchmark
-cd ../
 python test_token_efficiency.py
 ```
 
@@ -462,12 +458,11 @@ Beyond synthetic tests, Roampal has demonstrated real learning in production:
 
 ## Dashboards & Visualizations
 
-**Torture Test Dashboard**: `benchmarks/comprehensive_test/dashboard_torture_suite.html`
+**Torture Test Dashboard**: `dev/benchmarks/dashboard_torture_suite.html`
 - Interactive visualization of all 10 stress tests
 - Runtime breakdowns
 - Infrastructure validation results
 
-**Statistical Significance Dashboard**: `benchmarks/comprehensive_test/learning_curve_test/dashboard_statistical_significance.html`
 - Learning curves for all 12 stories
 - Paired t-test visualization
 - Accuracy improvement over time
@@ -477,16 +472,14 @@ Beyond synthetic tests, Roampal has demonstrated real learning in production:
 ## Files & Documentation
 
 **Test Scripts**:
-- `benchmarks/comprehensive_test/test_comprehensive.py` - 30-test suite
-- `benchmarks/comprehensive_test/test_torture_suite.py` - 10-test stress suite
-- `benchmarks/comprehensive_test/learning_curve_test/test_statistical_significance_synthetic.py` - Statistical proof
+- `dev/benchmarks/test_comprehensive.py` - 30-test suite
+- `dev/benchmarks/test_torture_suite.py` - 10-test stress suite
 
 **Documentation**:
-- `benchmarks/comprehensive_test/README.md` - Test suite overview
-- `benchmarks/comprehensive_test/learning_curve_test/STATISTICAL_SIGNIFICANCE_EXPLAINED.md` - Statistical methodology
+- `dev/benchmarks/README.md` - Test suite overview
 
 **Mock Infrastructure**:
-- `benchmarks/comprehensive_test/mock_utilities.py` - Mock LLM/embeddings for deterministic testing
+- `dev/benchmarks/mock_utilities.py` - Mock LLM/embeddings for deterministic testing
 
 ---
 
