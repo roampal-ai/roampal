@@ -6,7 +6,7 @@ Roampal is an intelligent chatbot with persistent memory and learning capabiliti
 
 ## Architecture Refactor (v0.2.7)
 
-**IMPORTANT**: In v0.2.7, the monolithic `UnifiedMemorySystem` (4,746 lines) was refactored into a **facade pattern** with **8 extracted services**. v0.2.8 completed API compatibility and stabilized the architecture. Line number references throughout this document may point to the pre-refactor monolith.
+**IMPORTANT**: In v0.2.7, the monolithic `UnifiedMemorySystem` (4,746 lines) was refactored into a **facade pattern** with **8 extracted services**. v0.2.8 completed API compatibility and stabilized the architecture. v0.2.9 added Ghost Registry for book deletion, `sort_by`/`related` MCP parameters, and critical bug fixes. Line number references throughout this document may point to the pre-refactor monolith.
 
 ### New Architecture
 
@@ -195,7 +195,7 @@ The system learns that "what worked before" matters more than "what sounds relat
 #### Memory Bank Collection (NEW - 2025-10-01)
 - **Purpose**: Persistent context for both user AND LLM (identity, preferences, learned knowledge, shared projects)
 - **Retention**: Permanent (never decays)
-- **Capacity**: 500 items maximum (prevents unbounded growth)
+- **Capacity**: 1000 items maximum (prevents unbounded growth)
 - **Ranking**: Results boosted by `importance × confidence` score
   - High-quality memories (importance=0.9, confidence=0.9 → quality=0.81) rank significantly higher
   - Low-quality memories (importance=0.3, confidence=0.4 → quality=0.12) rank lower
@@ -690,6 +690,13 @@ Preprocessed: "User uses API? application programming interface"
 - Cross-encoder rerank: +200ms for top-30 (only if >10 results)
 - Overall search latency: Still <100ms p95 (BM25 index cached)
 
+**BM25 Cache Invalidation (v0.2.9):**
+- Problem: MCP server caches BM25 index, doesn't see UI changes until restart
+- Fix: Compare `collection.count()` on each query ([chromadb_adapter.py:211-220](modules/memory/chromadb_adapter.py#L211-L220))
+- If count changed → mark `_bm25_needs_rebuild = True`
+- If count same → use cached index (zero overhead)
+- Result: MCP searches immediately reflect UI changes without restart
+
 #### Why Not Other 2025 Techniques?
 
 ❌ **ColBERT Late Interaction**: 6-10× storage cost, complex indexing
@@ -1169,24 +1176,24 @@ Return JSON: {outcome, confidence, indicators, reasoning}
 - **2025-10-06**: Was too lenient - any positive word → "worked"
 - **2025-10-06**: Now requires ENTHUSIASTIC satisfaction, not just polarity
 **Additional Safety Improvements (2025-10-04):**
-1. **Book & Memory Bank Safeguards** ([unified_memory_system.py:861-907](modules/memory/unified_memory_system.py#L861-L907))
+1. **Book & Memory Bank Safeguards** ([outcome_service.py:90-104](modules/memory/outcome_service.py#L90-L104))
    - **KG routing updates FIRST** - Books/memory_bank searches update Routing KG patterns (learning which queries → those collections)
    - **Then safeguard blocks outcome-based scoring** - Books and memory_bank are never outcome-scored
    - **Why:** Routing KG learns from all collections, but books/memory_bank shouldn't be promoted/demoted based on conversation outcomes
    ```python
    # UPDATE KG ROUTING FIRST - even for books/memory_bank
-   if problem_text and collection_name:
-       await self._update_kg_routing(problem_text, collection_name, outcome)
+   if problem_text:
+       await self.kg_service.update_kg_routing(problem_text, collection_name, outcome)
 
    # SAFEGUARD: Books are reference material, not scorable memories
    if doc_id.startswith("books_"):
        logger.info("[KG] Learned routing pattern for books, but skipping score update")
-       return
+       return None
 
    # SAFEGUARD: Memory bank is user identity/facts, not scorable patterns
    if doc_id.startswith("memory_bank_"):
        logger.info("[KG] Learned routing pattern for memory_bank, but skipping score update")
-       return
+       return None
    ```
 
 2. **Knowledge Graph Exposure** ([unified_memory_system.py:605-621](modules/memory/unified_memory_system.py#L605-L621))
@@ -3073,30 +3080,38 @@ MCP and Internal prompts use different approaches based on system differences:
 - MCP tools: [main.py:807-948](../ui-implementation/src-tauri/backend/main.py#L807-L948)
 - Internal prompt: [agent_chat.py:1370-1380](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py#L1370-L1380)
 
-#### Available MCP Tools (7)
+#### Available MCP Tools (6)
 
-**1. record_response** (v0.2.3 - Enhanced Return Value)
+**1. record_response** (v0.2.9 - Selective Scoring with `related` parameter)
 ```json
 {
   "name": "record_response",
   "description": "Store semantic learning summary with initial score based on explicit outcome",
   "parameters": {
     "key_takeaway": "string (required) - 1-2 sentence summary of current exchange",
-    "outcome": "enum (optional, default: 'unknown') - worked|failed|partial|unknown - explicit outcome for THIS response"
+    "outcome": "enum (optional, default: 'unknown') - worked|failed|partial|unknown - explicit outcome for THIS response",
+    "related": "array (optional) - v0.2.9: Which search results to score. Accepts positions (1, 2, 3) or doc_ids. Omit to score all."
   },
   "behavior": [
     "1. Receives key_takeaway (semantic summary) and outcome from external LLM",
     "2. Stores CURRENT key_takeaway to working memory with initial score based on outcome (worked=0.7, failed=0.2, partial=0.55, unknown=0.5)",
-    "3. Scores previously SEARCHED memories (from last search_memory call) with the same outcome",
-    "4. Updates KG routing patterns with query → collection → outcome",
-    "5. Clears search cache",
-    "6. Records to session file for tracking"
+    "3. v0.2.9: If `related` specified, only scores those memories (resolves positions 1→doc_id using cached position map)",
+    "4. If `related` omitted, scores ALL previously SEARCHED memories (backwards compatible)",
+    "5. Updates KG routing patterns with query → collection → outcome",
+    "6. Clears search cache",
+    "7. Records to session file for tracking"
   ],
-  "returns_v0.2.3": "Enriched summary explaining: what was stored, score meaning, promotion path, cached memories affected"
+  "returns_v0.2.9": "Enriched summary including selective scoring stats (scored N, skipped M unrelated)",
+  "selective_scoring_v0.2.9": {
+    "why": "Prevents learning pollution when LLM retrieves 5 memories but only uses 2",
+    "positional_indexing": "related=[1, 3] - Uses position numbers shown in search results (small-LLM friendly)",
+    "doc_id_indexing": "related=['history_abc123'] - Uses doc_ids for smart models",
+    "fallback": "Invalid positions/ids → falls back to score all (safe default)"
+  }
 }
 ```
 
-**2. search_memory** (v0.2.3 - Enriched Result Metadata)
+**2. search_memory** (v0.2.9 - sort_by parameter)
 ```json
 {
   "name": "search_memory",
@@ -3105,7 +3120,14 @@ MCP and Internal prompts use different approaches based on system differences:
     "query": "string (required) - Semantic search query for content matching",
     "collections": ["books", "working", "history", "patterns", "memory_bank", "all"],
     "limit": "integer (1-20, default: 5)",
+    "sort_by": "enum (optional) - v0.2.9: relevance|recency|score. Auto-detects 'recency' for temporal queries ('last', 'recent', 'yesterday')",
     "metadata": "object (optional) - Exact metadata filters (ChromaDB where syntax)"
+  },
+  "sort_by_v0.2.9": {
+    "relevance": "Default - Vector similarity order (semantic match)",
+    "recency": "Newest first by timestamp (for 'what did we do yesterday?')",
+    "score": "Highest outcome score first (for 'best approach for X')",
+    "auto_detection": "Temporal keywords trigger recency sort automatically: last, recent, yesterday, today, earlier, previous, before, when did, how long ago, last time, previously, lately, just now"
   },
   "metadata_examples": {
     "books": {
@@ -4709,6 +4731,127 @@ recall_test|search_memory|memory_bank:
 ```
 
 **System learns**: In memory_test context, `create_memory()` is catastrophically bad. After 3 uses, system injects warnings into prompts automatically.
+
+## Test Suite (v0.2.9)
+
+### Directory Structure
+
+```
+ui-implementation/src-tauri/backend/tests/
+├── unit/                              # Service unit tests
+│   ├── test_unified_memory_system.py  # Facade tests
+│   ├── test_search_service.py         # Vector search, hybrid retrieval
+│   ├── test_scoring_service.py        # Wilson score, outcome mapping
+│   ├── test_promotion_service.py      # Score thresholds, lifecycle
+│   ├── test_routing_service.py        # KG routing decisions
+│   ├── test_memory_bank_service.py    # Fact storage, tags
+│   ├── test_context_service.py        # Cold-start context
+│   ├── test_outcome_service.py        # Outcome recording
+│   ├── test_knowledge_graph_service.py# Triple KG system
+│   └── test_sensitive_data_filter.py  # v0.2.9: PII Guard tests
+├── mcp/                               # MCP tool layer tests
+│   ├── mcp_tool_harness.py            # Test harness simulating MCP calls
+│   ├── test_mcp_tools.py              # Tool behavior tests
+│   └── test_mcp_benchmarks.py         # Performance benchmarks
+└── characterization/                  # Behavior characterization tests
+    ├── test_search_behavior.py        # Search return types, ranking
+    └── test_outcome_behavior.py       # Wilson score calculations
+```
+
+### Running Tests
+
+```bash
+cd ui-implementation/src-tauri/backend
+
+# Run all tests
+python -m pytest tests/ -v
+
+# Run specific category
+python -m pytest tests/unit/ -v
+python -m pytest tests/mcp/ -v
+python -m pytest tests/characterization/ -v
+
+# Run with coverage
+python -m pytest tests/ --cov=modules --cov-report=html
+```
+
+### Unit Tests
+
+| Test File | Service | Key Tests |
+|-----------|---------|-----------|
+| `test_unified_memory_system.py` | Facade | Init, config, conversation ID |
+| `test_search_service.py` | SearchService | Vector search, hybrid retrieval |
+| `test_scoring_service.py` | ScoringService | Wilson score, outcome mapping |
+| `test_promotion_service.py` | PromotionService | Score thresholds, lifecycle |
+| `test_routing_service.py` | RoutingService | KG routing decisions |
+| `test_memory_bank_service.py` | MemoryBankService | Fact storage, tags |
+| `test_context_service.py` | ContextService | Cold-start context |
+| `test_outcome_service.py` | OutcomeService | Outcome recording |
+| `test_knowledge_graph_service.py` | KnowledgeGraphService | Triple KG |
+| `test_sensitive_data_filter.py` | PII Guard | API keys, tokens, passwords, SSN, credit cards |
+
+### MCP Tool Tests
+
+**Tool Harness** (`mcp_tool_harness.py`): Simulates MCP tool calls without starting the full server.
+
+| Test Class | Coverage |
+|------------|----------|
+| `TestSearchMemory` | Basic search, collections, limits |
+| `TestSearchMemorySortBy` | v0.2.9: `sort_by` parameter (recency, score, relevance) |
+| `TestTemporalAutoDetection` | v0.2.9: Auto-detection of temporal keywords |
+| `TestSelectiveScoring` | v0.2.9: `related` parameter (positional scoring) |
+| `TestRecordResponse` | Outcome recording, cache scoring |
+| `TestToolSchemaCompliance` | Schema validation |
+| `TestContextInsights` | Cold-start context |
+| `TestMemoryBank` | Fact storage |
+
+### PII Guard Tests (`test_sensitive_data_filter.py`)
+
+v0.2.9 added comprehensive tests for `SensitiveDataFilter`:
+
+| Test Class | Coverage |
+|------------|----------|
+| `TestSensitiveDataFilterText` | API keys, Bearer tokens, passwords, AWS keys, private keys, credit cards, SSN, JWT, DB URLs |
+| `TestSensitiveDataFilterDict` | Sensitive key detection, nested dicts, lists |
+| `TestSensitiveDataFilterIntegration` | Mixed data, case-insensitive keys |
+| `TestSensitiveDataFilterEdgeCases` | Short numbers, non-SSN patterns, code snippets |
+
+**Test Data Safety**: All PII in tests is fake/example data:
+- AWS key: `AKIAIOSFODNN7EXAMPLE` (official AWS example)
+- Credit cards: `4111111111111111` (standard test card)
+- SSN: `123-45-6789` (common fake example)
+
+### v0.2.9 Feature Tests
+
+**1. `sort_by` Parameter:**
+- `test_sort_by_recency` - Newest first by timestamp
+- `test_sort_by_score` - Highest outcome score first
+- `test_sort_by_relevance_default` - Original order preserved
+
+**2. Temporal Auto-Detection:**
+```python
+temporal_keywords = [
+    "last", "recent", "yesterday", "today", "earlier",
+    "previous", "before", "when did", "how long ago",
+    "last time", "previously", "lately", "just now"
+]
+```
+
+**3. `related` Parameter (Selective Scoring):**
+- `test_position_cache_built` - Position mapping in cache
+- `test_related_positional_scoring` - `related=[1, 3]` scores positions 1 and 3
+- `test_related_doc_id_scoring` - `related=["history_abc123"]` scores by doc_id
+- `test_invalid_positions_fallback_to_all` - Invalid positions fall back to score all
+- `test_no_related_scores_all` - Backwards compatibility (no related = score all)
+
+### Test Coverage Summary
+
+| Category | Files | Tests | Coverage |
+|----------|-------|-------|----------|
+| Unit | 10 | 259 | Service layer |
+| MCP | 3 | 39 | Tool handlers, v0.2.9 features |
+| Characterization | 2 | 23 | Regression safety |
+| **Total** | **15** | **321** | **Full backend** |
 
 ## Future Enhancements
 
@@ -6363,6 +6506,64 @@ if deleted_count != chunks_deleted:
 **Files Modified**:
 - `ui-implementation/src/components/BookProcessorModal.tsx` - All frontend fixes (D1-D5)
 - `backend/api/book_upload_api.py` - ChromaDB delete verification (D6)
+
+#### D7: Ghost Registry (v0.2.9)
+**Problem**: D6's deletion approach removes records from SQLite but leaves "ghost" vectors in ChromaDB's HNSW index. Searches still match these ghosts but content retrieval fails, returning `[No content]` results.
+
+**Root Cause**:
+- ChromaDB's `delete()` removes records from SQLite metadata store
+- HNSW binary index (`data_level0.bin`) retains the deleted vectors
+- Similarity search still finds ghost vectors by embedding match
+- When ChromaDB fetches document/metadata → gone from SQLite → empty content
+
+**Fix**: Two-pronged approach
+
+1. **Ghost Registry** ([ghost_registry.py](modules/memory/ghost_registry.py)) - Track deleted chunk IDs in a JSON blacklist file. Filter them out at query time before returning results.
+   ```python
+   # On book deletion - book_upload_api.py:705-714
+   ghost_registry = get_ghost_registry(settings.paths.data_dir)  # v0.2.9: Fixed data_path → data_dir
+   ghost_registry.add(all_deleted_ids)
+
+   # On book search - search_service.py:643-646
+   filtered_results = ghost_registry.filter_ghosts(formatted_results)
+   ```
+
+2. **Collection Nuke** ("Clear Books" button) - Replace chunk-by-chunk deletion with `delete_collection()` + `create_collection()`. This rebuilds the HNSW index from scratch - no ghosts possible.
+   ```python
+   # On "Clear Books" - data_management.py:301-311
+   client.delete_collection(name=collection_name)
+   adapter.collection = client.get_or_create_collection(
+       name=collection_name,
+       embedding_function=None,
+       metadata={"hnsw:space": "l2"}
+   )
+   ghost_registry.clear()  # Clean blacklist since fresh index
+   ```
+
+**Files**:
+- `modules/memory/ghost_registry.py` (NEW) - Ghost tracking class
+- `backend/api/book_upload_api.py` - Add deleted IDs to registry
+- `modules/memory/search_service.py` - Filter ghosts from search results
+- `app/routers/data_management.py` - Nuke/recreate + clear registry
+
+**Impact**: Users no longer see `[No content]` results after deleting books
+
+#### D8: v0.2.9 Bug Fixes
+
+**PathSettings Fix**: Fixed `settings.paths.data_path` → `settings.paths.data_dir` in 3 locations:
+- `book_upload_api.py:711` - Ghost registry initialization
+- `data_management.py:318` - Clear books ghost registry
+- `search_service.py:645` - Search ghost filtering
+
+**UMS Facade Fixes**:
+- Added `cleanup_action_kg_for_doc_ids()` passthrough method to `unified_memory_system.py:585-597`
+- Added `transparency_context` parameter to `search()` facade method (line 417)
+- Fixes TypeError when agent_chat.py passes transparency context to UMS
+
+**Timeout Protection**:
+- `embedding_service.py:33-90` - Model loading runs in daemon thread with 120s timeout
+- `chromadb_adapter.py:175-203` - Upsert runs in daemon thread with 60s timeout
+- Prevents indefinite hangs on model loading failures or SQLite locks
 
 ---
 

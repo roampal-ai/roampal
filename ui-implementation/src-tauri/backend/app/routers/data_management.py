@@ -11,6 +11,9 @@ from typing import Dict
 from fastapi import APIRouter, Request, HTTPException
 import json
 
+# Ghost registry for clearing ghost IDs after collection nuke (v0.2.9)
+from modules.memory.ghost_registry import get_ghost_registry
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data", tags=["data-management"])
 
@@ -288,21 +291,37 @@ async def clear_books(request: Request):
         adapter = memory.collections["books"]
         count_before = await adapter.get_collection_count()
 
-        # Step 1: Clear ChromaDB embeddings
+        # Step 1: Nuke and recreate ChromaDB collection (v0.2.9)
+        # This fully rebuilds the HNSW index, eliminating ghost vectors
+        # that remain after regular delete() operations
         if count_before > 0:
-            all_docs = adapter.collection.get(include=[])
-            if all_docs.get("ids"):
-                # Delete in batches to avoid ChromaDB batch size limits (max 166)
-                batch_size = 100
-                all_ids = all_docs["ids"]
-                for i in range(0, len(all_ids), batch_size):
-                    batch = all_ids[i:i + batch_size]
-                    adapter.collection.delete(ids=batch)
-                    logger.info(f"Deleted batch {i // batch_size + 1}: {len(batch)} items")
+            collection_name = adapter.collection_name
+            client = adapter.client
+
+            # Delete the entire collection (removes HNSW index completely)
+            client.delete_collection(name=collection_name)
+            logger.info(f"Nuked books collection '{collection_name}'")
+
+            # Recreate with same settings
+            adapter.collection = client.get_or_create_collection(
+                name=collection_name,
+                embedding_function=None,  # We provide our own embeddings
+                metadata={"hnsw:space": "l2"}
+            )
+            logger.info(f"Recreated books collection '{collection_name}'")
 
         logger.info(f"Cleared books ChromaDB collection ({count_before} entries deleted)")
 
+        # Step 1b: Clear ghost registry (v0.2.9)
+        # Since we nuked the collection, no ghosts remain - clear the blacklist
+        from config.settings import settings
+        ghost_registry = get_ghost_registry(settings.paths.data_dir)
+        ghosts_cleared = ghost_registry.clear()
+        if ghosts_cleared > 0:
+            logger.info(f"Cleared {ghosts_cleared} ghost IDs from registry")
+
         # Step 2: Clear SQLite database (book metadata and chunks)
+        # Note: ghosts_cleared used in return value below
         sqlite_deleted = 0
         metadata_deleted = 0
         if book_processor:
@@ -350,6 +369,7 @@ async def clear_books(request: Request):
             "sqlite_deleted": sqlite_deleted,
             "metadata_deleted": metadata_deleted,
             "uploads_deleted": uploads_deleted,
+            "ghosts_cleared": ghosts_cleared,  # v0.2.9
             "deleted_count": count_before  # For UI backward compatibility
         }
 

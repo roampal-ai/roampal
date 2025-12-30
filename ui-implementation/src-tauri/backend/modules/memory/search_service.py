@@ -21,6 +21,7 @@ from .config import MemoryConfig
 from .scoring_service import ScoringService, wilson_score_lower
 from .routing_service import RoutingService, ALL_COLLECTIONS
 from .knowledge_graph_service import KnowledgeGraphService
+from .ghost_registry import get_ghost_registry
 
 logger = logging.getLogger(__name__)
 
@@ -639,7 +640,12 @@ class SearchService:
                 }
                 formatted_results.append(result)
 
-            return formatted_results
+            # v0.2.9: Filter out ghost results (deleted chunks still in HNSW index)
+            from config.settings import settings
+            ghost_registry = get_ghost_registry(settings.paths.data_dir)
+            filtered_results = ghost_registry.filter_ghosts(formatted_results)
+
+            return filtered_results
 
         except Exception as e:
             logger.error(f"Book search failed: {e}")

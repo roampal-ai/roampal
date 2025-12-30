@@ -58,6 +58,8 @@ export const BookProcessorModal: React.FC<BookProcessorModalProps> = ({
   const [showExisting, setShowExisting] = useState(false);
   const [loadingBooks, setLoadingBooks] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{bookId: string, bookTitle: string} | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const wsConnections = useRef<Map<string, WebSocket>>(new Map());
   const processingTimeouts = useRef<Map<string, number>>(new Map());
@@ -97,18 +99,28 @@ export const BookProcessorModal: React.FC<BookProcessorModalProps> = ({
   };
 
   const deleteExistingBook = async () => {
-    if (!deleteConfirm) return;
+    if (!deleteConfirm || isDeleting) return;
     const { bookId, bookTitle } = deleteConfirm;
+
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    // 30 second timeout to prevent infinite hang
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/book-upload/books/${bookId}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
       if (response.ok) {
         // Remove from list
         setExistingBooks(prev => prev.filter(b => b.book_id !== bookId));
         setDeleteConfirm(null);
+        setDeleteError(null);
         console.log(`Successfully deleted book ${bookTitle}`);
 
         // Notify memory panel to refresh (book removed from books collection)
@@ -116,13 +128,34 @@ export const BookProcessorModal: React.FC<BookProcessorModalProps> = ({
           detail: { source: 'book_delete', timestamp: new Date().toISOString() }
         }));
       } else {
-        const error = await response.text();
-        throw new Error(error);
+        const errorText = await response.text();
+        let errorMessage = `Delete failed (${response.status})`;
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorMessage = errorJson.detail || errorJson.message || errorMessage;
+        } catch {
+          if (errorText) errorMessage = errorText;
+        }
+        setDeleteError(errorMessage);
       }
     } catch (error) {
+      clearTimeout(timeoutId);
       console.error('Error deleting book:', error);
-      setDeleteConfirm(null);
+      if (error instanceof Error && error.name === 'AbortError') {
+        // Timeout - book likely deleted but response never arrived
+        setDeleteError('Request timed out. The book may have been deleted - try refreshing.');
+      } else {
+        setDeleteError(error instanceof Error ? error.message : 'Network error - could not reach server');
+      }
+    } finally {
+      setIsDeleting(false);
     }
+  };
+
+  const closeDeleteModal = () => {
+    setDeleteConfirm(null);
+    setDeleteError(null);
+    setIsDeleting(false);
   };
 
   const connectWebSocket = (taskId: string, fileId: string, retryCount = 0) => {
@@ -923,18 +956,37 @@ export const BookProcessorModal: React.FC<BookProcessorModalProps> = ({
                 </p>
               </div>
             </div>
+            {/* Error message */}
+            {deleteError && (
+              <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                <p className="text-sm text-red-400">{deleteError}</p>
+              </div>
+            )}
             <div className="flex gap-3 justify-end">
               <button
-                onClick={() => setDeleteConfirm(null)}
-                className="px-4 py-2 text-zinc-300 hover:text-zinc-100 transition-colors"
+                onClick={closeDeleteModal}
+                disabled={isDeleting}
+                className="px-4 py-2 text-zinc-300 hover:text-zinc-100 transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={deleteExistingBook}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                disabled={isDeleting}
+                className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+                  isDeleting
+                    ? 'bg-red-500/50 text-white/70 cursor-not-allowed'
+                    : 'bg-red-500 text-white hover:bg-red-600'
+                }`}
               >
-                Delete Book
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete Book'
+                )}
               </button>
             </div>
           </div>

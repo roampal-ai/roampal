@@ -68,6 +68,9 @@ interface ChatState {
   memories: any[];
   lastMemoryUpdate?: number;
 
+  // v0.2.9: Race condition guard
+  _currentSwitchId: number;
+
   // Mode system removed - RoamPal always uses memory
 
   // Actions
@@ -155,6 +158,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   activeMemories: [],
   memories: [],
   lastMemoryUpdate: undefined,
+  _currentSwitchId: 0,  // v0.2.9: Guard against stale conversation switches
 
   // Create new conversation (server-generated ID)
   createConversation: async () => {
@@ -205,6 +209,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
     // Don't switch to same conversation
     if (oldConversationId === newConversationId) return;
+
+    // v0.2.9: Generate unique switch ID to guard against race conditions
+    const switchId = Date.now();
+    set({ _currentSwitchId: switchId });
 
     try {
       // Cancel any active streaming before switch
@@ -310,6 +318,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         // Continue with empty messages if loading fails
       }
 
+      // v0.2.9: Guard against stale switch - another switch may have started
+      if (get()._currentSwitchId !== switchId) {
+        console.log('[switchConversation] Stale switch detected, discarding results');
+        return;  // Another switch happened, don't overwrite with old data
+      }
+
       // Update local state with loaded messages
       set({
         conversationId: newConversationId,
@@ -328,6 +342,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
     } catch (error) {
       console.error('[switchConversation] Error switching conversation:', error);
+      // v0.2.9: Also check for stale switch in error case
+      if (get()._currentSwitchId !== switchId) {
+        console.log('[switchConversation] Stale switch detected in error handler');
+        return;
+      }
       // Still update local state even if backend fails
       set({
         conversationId: newConversationId,

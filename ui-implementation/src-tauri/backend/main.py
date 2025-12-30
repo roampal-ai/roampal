@@ -836,7 +836,7 @@ WHEN NOT TO SEARCH:
 • General knowledge questions (use your training)
 • get_context_insights already gave you the answer
 
-Collections: memory_bank (user facts), books (docs), patterns (proven solutions), history (past), working (recent)
+Collections: working (24h then auto-promotes), history (30d scored), patterns (permanent scored), memory_bank (permanent), books (permanent docs)
 Omit 'collections' parameter for auto-routing (recommended).""",
                 inputSchema={
                     "type": "object",
@@ -857,6 +857,12 @@ Omit 'collections' parameter for auto-routing (recommended).""",
                             "default": 5,
                             "minimum": 1,
                             "maximum": 20
+                        },
+                        "sort_by": {
+                            "type": "string",
+                            "enum": ["relevance", "recency", "score"],
+                            "description": "Sort order. 'recency' for temporal queries like 'last thing we did'. Auto-detected if omitted.",
+                            "default": None
                         },
                         "metadata": {
                             "type": "object",
@@ -949,6 +955,7 @@ WORKFLOW:
 Parameters:
 • key_takeaway: 1-2 sentence summary of what happened
 • outcome: "worked" | "failed" | "partial" | "unknown"
+• related: (Optional) Which search results were actually helpful (positions 1, 2, 3 or doc_ids)
 
 OUTCOME DETECTION (read user's reaction):
 ✓ worked = user satisfied, says thanks, moves on
@@ -965,6 +972,10 @@ OUTCOME DETECTION (read user's reaction):
 Failed outcomes are how bad memories get deleted. Without them, wrong info persists forever.
 Don't default to "worked" just to be optimistic. Wrong memories MUST be demoted.
 
+SELECTIVE SCORING (optional):
+If you retrieved 5 memories but only used 2, specify which with related=[1, 3].
+Unrelated memories get 0 (neutral) - they're not penalized, just skipped.
+
 This closes the loop. Without it, the system can't learn what worked OR what didn't.""",
                 inputSchema={
                     "type": "object",
@@ -978,6 +989,12 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                             "enum": ["worked", "failed", "partial", "unknown"],
                             "description": "How helpful was your response based on user's reaction",
                             "default": "unknown"
+                        },
+                        "related": {
+                            "type": "array",
+                            "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
+                            "description": "Which results were helpful. Use positions (1, 2, 3) or doc_ids. Omit to score all.",
+                            "default": None
                         }
                     },
                     "required": ["key_takeaway"]
@@ -1053,6 +1070,21 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                 # Extract metadata filters
                 metadata = arguments.get("metadata", None)
 
+                # v0.2.9: sort_by parameter with auto-detection
+                sort_by = arguments.get("sort_by", None)
+
+                # Auto-detect temporal queries if sort_by not specified
+                if sort_by is None:
+                    temporal_keywords = [
+                        "last", "recent", "yesterday", "today", "earlier",
+                        "previous", "before", "when did", "how long ago",
+                        "last time", "previously", "lately", "just now"
+                    ]
+                    query_lower = query.lower()
+                    if any(kw in query_lower for kw in temporal_keywords):
+                        sort_by = "recency"
+                        logger.info(f"[MCP] search_memory: Auto-detected temporal query, using recency sort")
+
                 # Quick check: if memory system isn't initialized, return early (avoids slow embedding model loading)
                 if not memory.initialized:
                     return types.CallToolResult(
@@ -1087,6 +1119,25 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                         isError=True
                     )
 
+                # v0.2.9: Apply sort_by if specified
+                if results and sort_by:
+                    if sort_by == "recency":
+                        # Sort by timestamp (newest first)
+                        def get_timestamp(r):
+                            meta = r.get('metadata', {})
+                            ts = meta.get('timestamp') or meta.get('created_at') or ''
+                            return ts if ts else ''
+                        results = sorted(results, key=get_timestamp, reverse=True)
+                        logger.info(f"[MCP] search_memory: Sorted {len(results)} results by recency")
+                    elif sort_by == "score":
+                        # Sort by outcome score (highest first)
+                        def get_score(r):
+                            meta = r.get('metadata', {})
+                            return float(meta.get('score', 0.5))
+                        results = sorted(results, key=get_score, reverse=True)
+                        logger.info(f"[MCP] search_memory: Sorted {len(results)} results by score")
+                    # sort_by == "relevance" is default (no re-sorting needed, vector similarity order)
+
                 # Cache doc_ids from scorable collections for outcome-based scoring
                 # Per architecture.md line 572-573: Cache doc_ids + query + collections for record_response scoring
                 cached_doc_ids = []
@@ -1105,13 +1156,19 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                         if doc_id:
                             cached_doc_ids.append(doc_id)
 
+                # v0.2.9: Build position mapping for selective scoring (related=[1, 3] support)
+                positions = {}
+                for idx, doc_id in enumerate(cached_doc_ids, 1):
+                    positions[idx] = doc_id
+
                 _mcp_search_cache[session_id] = {
                     "doc_ids": cached_doc_ids,
+                    "positions": positions,  # v0.2.9: Position -> doc_id mapping for related param
                     "query": query,
                     "collections": list(result_collections),  # Cache ACTUAL collections that returned results
                     "timestamp": datetime.now()
                 }
-                logger.info(f"[MCP] Cached {len(cached_doc_ids)} doc_ids from query '{query[:50]}' (result collections: {result_collections})")
+                logger.info(f"[MCP] Cached {len(cached_doc_ids)} doc_ids from query '{query[:50]}' (result collections: {result_collections}, positions: 1-{len(cached_doc_ids)})")
 
                 if not results:
                     collection_str = ", ".join(collections) if collections != ["all"] else "all collections"
@@ -1457,9 +1514,10 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                 # Per architecture.md line 574-586: Store semantic summary, score CURRENT learning
                 key_takeaway = arguments.get("key_takeaway")
                 outcome = arguments.get("outcome", "unknown")  # Default to "unknown"
+                related = arguments.get("related", None)  # v0.2.9: Selective scoring
                 session_id = detect_mcp_client()
 
-                logger.info(f"[MCP] record_response: session={session_id}, outcome={outcome}")
+                logger.info(f"[MCP] record_response: session={session_id}, outcome={outcome}, related={related}")
                 logger.info(f"[MCP] Takeaway: {key_takeaway[:100]}...")
 
                 # Get cached query from last search (for KG routing updates)
@@ -1491,17 +1549,51 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                 logger.info(f"[MCP] Stored learning with doc_id={doc_id}, initial_score={initial_score}")
 
                 # Score cached memories from last search (architecture.md line 578)
+                # v0.2.9: Support selective scoring via `related` parameter
                 cached_memories_scored = 0
+                skipped_memories = 0
                 if outcome in ["worked", "failed", "partial"] and session_id in _mcp_search_cache:
                     cached = _mcp_search_cache[session_id]
                     cached_doc_ids = cached.get("doc_ids", [])
+                    positions = cached.get("positions", {})  # v0.2.9: Position -> doc_id mapping
 
-                    logger.info(f"[MCP] Scoring {len(cached_doc_ids)} cached memories with outcome={outcome}")
+                    # v0.2.9: Resolve `related` to doc_ids (supports positions and doc_ids)
+                    doc_ids_to_score = None  # None = score all (default)
+                    if related is not None and len(related) > 0:
+                        doc_ids_to_score = set()
+                        for item in related:
+                            if isinstance(item, int):
+                                # Position-based (e.g., 1, 2, 3)
+                                doc_id_from_pos = positions.get(item)
+                                if doc_id_from_pos:
+                                    doc_ids_to_score.add(doc_id_from_pos)
+                                    logger.info(f"[MCP] Resolved position {item} → {doc_id_from_pos}")
+                                else:
+                                    logger.warning(f"[MCP] Position {item} not found in cache (valid: 1-{len(cached_doc_ids)})")
+                            elif isinstance(item, str):
+                                # Doc ID-based (e.g., "history_abc123")
+                                if item in cached_doc_ids:
+                                    doc_ids_to_score.add(item)
+                                    logger.info(f"[MCP] Using doc_id: {item}")
+                                else:
+                                    logger.warning(f"[MCP] Doc ID {item} not found in cache")
+
+                        if not doc_ids_to_score:
+                            # All specified items were invalid - fall back to scoring all
+                            logger.warning(f"[MCP] No valid doc_ids resolved from related={related}, falling back to score all")
+                            doc_ids_to_score = None
+
+                    logger.info(f"[MCP] Scoring strategy: {'selective' if doc_ids_to_score else 'all'} ({len(doc_ids_to_score) if doc_ids_to_score else len(cached_doc_ids)} memories)")
 
                     # Get collections that were searched
                     cached_collections = cached.get("collections", ["all"])
 
                     for cached_doc_id in cached_doc_ids:
+                        # v0.2.9: Only score if in related list (or related not specified)
+                        if doc_ids_to_score is not None and cached_doc_id not in doc_ids_to_score:
+                            skipped_memories += 1
+                            continue
+
                         try:
                             await memory.record_outcome(doc_id=cached_doc_id, outcome=outcome)
                             cached_memories_scored += 1
@@ -1560,8 +1652,12 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                 response_text += f"Doc ID: {doc_id}\n"
                 response_text += f"Initial score: {initial_score} (outcome={outcome})\n"
 
-                if cached_memories_scored > 0:
-                    response_text += f"Scored {cached_memories_scored} cached memories\n"
+                # v0.2.9: Enhanced reporting for selective scoring
+                if cached_memories_scored > 0 or skipped_memories > 0:
+                    if skipped_memories > 0:
+                        response_text += f"Scored {cached_memories_scored} memories (skipped {skipped_memories} unrelated)\n"
+                    else:
+                        response_text += f"Scored {cached_memories_scored} cached memories\n"
 
                 if actions_scored > 0:
                     response_text += f"Updated {actions_scored} tool effectiveness stats\n"
@@ -1579,7 +1675,10 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                     response_text += "Outcome 'unknown': Neutral score (0.5) - will adjust based on future use\n"
 
                 if cached_memories_scored > 0:
-                    response_text += f"The {cached_memories_scored} memories from your last search were also scored with '{outcome}'\n"
+                    if skipped_memories > 0:
+                        response_text += f"Selective scoring: {cached_memories_scored} memories scored with '{outcome}', {skipped_memories} skipped (neutral)\n"
+                    else:
+                        response_text += f"The {cached_memories_scored} memories from your last search were also scored with '{outcome}'\n"
 
                 logger.info(f"[MCP] {client_name} recorded learning: {doc_id}")
 

@@ -31,13 +31,14 @@ class EmbeddingService(EmbeddingServiceInterface):
         logger.info(f"EmbeddingService initialized (model will load on first use): {self._model_name}")
 
     def _load_bundled_model(self):
-        """Load the bundled paraphrase-multilingual-mpnet-base-v2 model."""
+        """Load the bundled paraphrase-multilingual-mpnet-base-v2 model with timeout protection."""
         try:
             from sentence_transformers import SentenceTransformer
 
             # Path from embedding_service.py: embedding/ -> modules/ -> backend/ -> release/ -> binaries/
             bundled_cache = Path(__file__).parent.parent.parent.parent / "binaries" / "models" / "paraphrase-multilingual-mpnet-base-v2"
 
+            model_path = None
             if bundled_cache.exists():
                 # Read the snapshot ID from refs/main
                 ref_file = bundled_cache / "refs" / "main"
@@ -47,12 +48,39 @@ class EmbeddingService(EmbeddingServiceInterface):
 
                     if snapshot_path.exists():
                         logger.info(f"Loading bundled embedding model from snapshot: {snapshot_path}")
-                        self.model = SentenceTransformer(str(snapshot_path))
-                        return
+                        model_path = str(snapshot_path)
+                    else:
+                        logger.warning(f"Snapshot path not found: {snapshot_path}")
 
-            # Fallback to download (development mode only)
-            logger.warning("Bundled model not found, downloading from HuggingFace (dev mode)")
-            self.model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
+            if model_path is None:
+                # Fallback to download (development mode only)
+                logger.warning("Bundled model not found, downloading from HuggingFace (dev mode)")
+                model_path = 'paraphrase-multilingual-mpnet-base-v2'
+
+            # Load model with timeout protection to prevent deadlocks
+            result = [None]
+            error = [None]
+
+            def load_model():
+                try:
+                    result[0] = SentenceTransformer(model_path)
+                except Exception as e:
+                    error[0] = e
+
+            thread = threading.Thread(target=load_model)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=120)  # 2 minute timeout for model loading
+
+            if thread.is_alive():
+                logger.error("Model loading timed out after 120 seconds")
+                raise RuntimeError("Embedding model loading timed out")
+
+            if error[0]:
+                raise error[0]
+
+            self.model = result[0]
+            logger.info(f"Embedding model loaded successfully: {self._model_name}")
 
         except ImportError as e:
             logger.error(f"Cannot import sentence_transformers: {e}")

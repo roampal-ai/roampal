@@ -18,6 +18,9 @@ from backend.api.websocket_progress import initialize_task, update_progress, man
 # Format extraction for multi-format support (v0.2.3)
 from modules.memory.format_extractor import FormatDetector, detect_and_extract, ExtractionError
 
+# Ghost registry for tracking deleted chunk IDs (v0.2.9)
+from modules.memory.ghost_registry import get_ghost_registry
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/book-upload", tags=["book-upload"])
@@ -668,6 +671,7 @@ async def delete_book(book_id: str, request: Request):
                         if books_adapter:
                             # Delete chunks by book_id pattern (for new chunk ID format)
                             # Also try to delete by chunk_ids from DB (for old format)
+                            book_chunk_ids = []  # Initialize before try block (v0.2.9 fix)
                             try:
                                 # First try to delete by book_id pattern (new format)
                                 # Get all items and filter by book_id prefix
@@ -698,6 +702,16 @@ async def delete_book(book_id: str, request: Request):
                                     logger.warning(f"ChromaDB deletion mismatch: deleted {deleted_count} embeddings but expected {chunks_deleted}")
                             except Exception as e:
                                 logger.warning(f"Error deleting chunks: {e}")
+
+                            # v0.2.9: Add deleted chunk IDs to ghost registry
+                            # This filters them from future searches since HNSW retains deleted vectors
+                            all_deleted_ids = list(set(book_chunk_ids + chunk_ids))
+                            if all_deleted_ids:
+                                from config.settings import settings
+                                ghost_registry = get_ghost_registry(settings.paths.data_dir)
+                                added = ghost_registry.add(all_deleted_ids)
+                                if added > 0:
+                                    logger.info(f"Added {added} chunk IDs to ghost registry for book '{title}'")
                     except Exception as chroma_err:
                         logger.warning(f"Failed to delete ChromaDB embeddings for book '{title}': {chroma_err}")
                         # Don't fail the whole deletion if ChromaDB cleanup fails

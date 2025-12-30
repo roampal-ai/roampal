@@ -412,7 +412,9 @@ Prefix (one sentence, max 20 words):"""
         limit: int = 10,
         offset: int = 0,
         return_metadata: bool = False,
-        use_hybrid: bool = True
+        use_hybrid: bool = True,
+        metadata_filters: Optional[Dict[str, Any]] = None,  # v0.2.9: Expose metadata filtering
+        transparency_context: Optional[Any] = None  # v0.2.9: Transparency tracking
     ) -> List[Dict[str, Any]]:
         """
         Search across collections.
@@ -423,6 +425,8 @@ Prefix (one sentence, max 20 words):"""
             limit: Maximum results
             return_metadata: Include search metadata
             use_hybrid: Use hybrid scoring
+            metadata_filters: ChromaDB where filters (v0.2.9)
+            transparency_context: Optional context for tracking (v0.2.9)
 
         Returns:
             List of results
@@ -434,8 +438,48 @@ Prefix (one sentence, max 20 words):"""
             query=query,
             collections=collections,
             limit=limit,
-            return_metadata=return_metadata
+            return_metadata=return_metadata,
+            metadata_filters=metadata_filters,
+            transparency_context=transparency_context
         )
+
+    async def detect_conversation_outcome(
+        self,
+        conversation: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Detect outcome from a conversation exchange.
+
+        Uses LLM to analyze if the assistant's response was helpful based on user feedback.
+
+        Args:
+            conversation: List of turns [{role, content}, ...] - typically [assistant, user]
+
+        Returns:
+            {
+                "outcome": "worked|failed|partial|unknown",
+                "confidence": 0.0-1.0,
+                "indicators": ["signals"],
+                "reasoning": "brief explanation"
+            }
+        """
+        if not self.llm_service:
+            logger.debug("No LLM service for outcome detection")
+            return {
+                "outcome": "unknown",
+                "confidence": 0.0,
+                "indicators": [],
+                "reasoning": "No LLM service available"
+            }
+
+        # Lazy import to avoid circular dependency
+        from modules.advanced.outcome_detector import OutcomeDetector
+
+        # Use cached detector or create new one
+        if not hasattr(self, '_outcome_detector') or self._outcome_detector is None:
+            self._outcome_detector = OutcomeDetector(self.llm_service)
+
+        return await self._outcome_detector.analyze(conversation)
 
     async def record_outcome(
         self,
@@ -578,6 +622,20 @@ Prefix (one sentence, max 20 words):"""
             await self.initialize()
 
         return await self._promotion_service.cleanup_old_working_memory()
+
+    async def cleanup_action_kg_for_doc_ids(self, doc_ids: List[str]) -> int:
+        """
+        Clean up Action KG examples referencing deleted documents.
+
+        Args:
+            doc_ids: List of document IDs to clean up
+
+        Returns:
+            Number of examples cleaned
+        """
+        if not self._kg_service:
+            return 0
+        return await self._kg_service.cleanup_action_kg_for_doc_ids(doc_ids)
 
     # ==================== Session Management ====================
 

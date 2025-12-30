@@ -171,13 +171,36 @@ class ChromaDBAdapter:
                 # Use the content or text field as the document
                 doc = metadata.get('content', metadata.get('text', metadata.get('original_text', '')))
                 documents.append(str(doc))
-            
-            self.collection.upsert(
-                ids=ids,
-                embeddings=vectors,
-                metadatas=metadatas,
-                documents=documents  # ChromaDB needs documents to persist properly
-            )
+
+            # v0.2.9: Add timeout protection to prevent hanging on SQLite locks or HNSW issues
+            # ChromaDB upsert is synchronous and can hang indefinitely on corrupted indexes
+            import threading
+            result = [None]
+            error = [None]
+
+            def do_upsert():
+                try:
+                    self.collection.upsert(
+                        ids=ids,
+                        embeddings=vectors,
+                        metadatas=metadatas,
+                        documents=documents  # ChromaDB needs documents to persist properly
+                    )
+                    result[0] = True
+                except Exception as e:
+                    error[0] = e
+
+            thread = threading.Thread(target=do_upsert)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=60)  # 60 second timeout for upsert
+
+            if thread.is_alive():
+                logger.error(f"ChromaDB upsert timed out after 60 seconds for {len(ids)} vectors")
+                raise RuntimeError("ChromaDB upsert operation timed out - possible database lock or corruption")
+
+            if error[0]:
+                raise error[0]
 
             # Mark BM25 index as needing rebuild (v2.1 hybrid search)
             self._bm25_needs_rebuild = True
@@ -199,11 +222,25 @@ class ChromaDBAdapter:
 
             # v0.2.4: Refresh collection to see changes from other processes (e.g., UI uploads)
             # ChromaDB's PersistentClient caches collection state; re-fetching syncs with disk
+            # v0.2.9: CRITICAL - Must include embedding_function=None to prevent dimension mismatch
+            # Roampal uses 768d embeddings (all-mpnet-base-v2), ChromaDB default is 384d
             if self.client and self.collection_name:
                 self.collection = self.client.get_or_create_collection(
                     name=self.collection_name,
+                    embedding_function=None,  # Must match initialize() - prevents 384d/768d mismatch
                     metadata={"hnsw:space": "l2"}
                 )
+
+                # v0.2.9: Invalidate BM25 cache if collection size changed (external add/delete)
+                # This fixes MCP stale cache issue where UI changes weren't reflected in searches
+                # count() is O(1) metadata lookup - zero overhead on normal queries
+                current_count = self.collection.count()
+                had_previous_count = hasattr(self, '_last_count')
+                if not had_previous_count or self._last_count != current_count:
+                    self._bm25_needs_rebuild = True
+                    if had_previous_count:
+                        logger.debug(f"[ChromaDB] Collection count changed ({self._last_count} → {current_count}), marking BM25 for rebuild")
+                    self._last_count = current_count
 
             if self.collection and self.collection.count() == 0:
                 logger.debug(f"[ChromaDB] Collection '{self.collection_name}' is empty, returning empty results")

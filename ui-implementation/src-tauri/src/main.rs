@@ -188,6 +188,12 @@ fn read_data_dir_from_env(backend_dir: &std::path::Path) -> String {
     "Roampal".to_string() // Default to PROD data dir
 }
 
+// v0.2.9: Check if port is already in use (backend survived refresh)
+fn is_port_in_use(port: u16) -> bool {
+    use std::net::TcpListener;
+    TcpListener::bind(("127.0.0.1", port)).is_err()
+}
+
 // Start the Python backend
 #[tauri::command]
 fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProcess>) -> Result<String, String> {
@@ -233,6 +239,13 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
     // Read API port and data dir from .env file
     let api_port = read_api_port_from_env(&backend_dir);
     let data_dir = read_data_dir_from_env(&backend_dir);
+
+    // v0.2.9: Check if port is already in use (backend survived window refresh)
+    // This fixes the 120-second timeout when user presses Ctrl+R
+    if is_port_in_use(api_port) {
+        println!("[start_backend] Port {} already in use - backend survived refresh, reconnecting", api_port);
+        return Ok(format!("Backend already running on port {}", api_port));
+    }
 
     println!("[start_backend] Python exe: {:?}", python_exe);
     println!("[start_backend] Main.py: {:?}", main_py);

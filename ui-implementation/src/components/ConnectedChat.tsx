@@ -84,7 +84,7 @@ export const ConnectedChat: React.FC = () => {
   const [showCancelDownloadConfirm, setShowCancelDownloadConfirm] = useState(false);
   const [modelSwitchPending, setModelSwitchPending] = useState<string | null>(null);
   const [providerSwitchPending, setProviderSwitchPending] = useState<'ollama' | 'lmstudio' | null>(null);
-  const hasLoadedModels = useRef(false);
+  const [isLoadingModels, setIsLoadingModels] = useState(true);  // v0.2.9: Convert ref to state for loading UI
   const [showOllamaRequired, setShowOllamaRequired] = useState(false);
 
   // GPU/VRAM and quantization selection state
@@ -187,8 +187,13 @@ export const ConnectedChat: React.FC = () => {
   // Detect available providers (only show if they have chat models)
   const fetchProviders = async () => {
     try {
-      // Fetch available models first to know which providers have chat models
-      const modelsRes = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/available`);
+      // v0.2.9: Parallelize ALL provider checks (was sequential: models → then status)
+      const [modelsRes, ollamaRes, lmstudioRes] = await Promise.all([
+        apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/available`).catch(() => null),
+        apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/ollama/status`).catch(() => null),
+        apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/lmstudio/status`).catch(() => null)
+      ]);
+
       let ollamaHasModels = false;
       let lmstudioHasModels = false;
 
@@ -198,11 +203,6 @@ export const ConnectedChat: React.FC = () => {
         ollamaHasModels = models.some((m: any) => m.provider === 'ollama');
         lmstudioHasModels = models.some((m: any) => m.provider === 'lmstudio');
       }
-
-      const [ollamaRes, lmstudioRes] = await Promise.all([
-        apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/ollama/status`).catch(() => null),
-        apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/lmstudio/status`).catch(() => null)
-      ]);
 
       // Build providers array - includes ALL providers regardless of models (for detection banners)
       const providers = [];
@@ -252,7 +252,7 @@ export const ConnectedChat: React.FC = () => {
           lmstudio_id: m.lmstudio_id // Keep LM Studio actual model ID for switching
         })) : [];
         setAvailableModels(modelsWithProvider);
-        hasLoadedModels.current = true;
+        setIsLoadingModels(false);  // v0.2.9: Use state for re-render
 
         // Auto-select provider with chat models if current provider has none
         const nonLLMs = ['llava', 'nomic-embed', 'bge-', 'all-minilm', 'mxbai-embed'];
@@ -289,7 +289,7 @@ export const ConnectedChat: React.FC = () => {
     } catch (error) {
       console.error('[Models] Error fetching models:', error);
       // Don't check Ollama status on every error - it's already checked at startup
-      hasLoadedModels.current = true;
+      setIsLoadingModels(false);  // v0.2.9: Use state for re-render
     }
   };
 
@@ -320,10 +320,11 @@ export const ConnectedChat: React.FC = () => {
 
   // Auto-open Model Manager only on true first run (after models are loaded and still empty)
   useEffect(() => {
-    if (hasLoadedModels.current && availableModels.length === 0) {
+    // v0.2.9: Use state instead of ref for proper dependency tracking
+    if (!isLoadingModels && availableModels.length === 0) {
       setShowModelInstallModal(true);
     }
-  }, [availableModels]);
+  }, [availableModels, isLoadingModels]);
 
   // Function to get current model from backend
   const fetchCurrentModel = async () => {
@@ -1219,6 +1220,7 @@ export const ConnectedChat: React.FC = () => {
   const [isRefreshingMemories, setIsRefreshingMemories] = useState(false);
   const [lastMemoryRefresh, setLastMemoryRefresh] = useState<Date | null>(null);
   const [knowledgeGraphData, setKnowledgeGraphData] = useState<any>({ concepts: 0, relationships: 0 });
+  const [kgHasLoaded, setKgHasLoaded] = useState(false);  // v0.2.9: Lazy load KG only when panel opens
   const activeMemories = localMemories.length > 0 ? localMemories : (currentState?.memories || []);
   
   // Ref to track if title regeneration has been triggered (to prevent duplicates)
@@ -1472,7 +1474,7 @@ export const ConnectedChat: React.FC = () => {
         mounted: !conversationId
       });
       fetchMemories();
-      fetchKnowledgeGraph();
+      // v0.2.9: KG now loads lazily when panel opens (see below)
     }, 300); // Debounce for 300ms
 
     return () => clearTimeout(timeoutId);
@@ -1562,7 +1564,9 @@ export const ConnectedChat: React.FC = () => {
       const collections = ['working', 'history', 'patterns'];
       const allFragments: any[] = [];
 
-      for (const collectionType of collections) {
+      // v0.2.9: Parallelize collection fetches (was sequential for-loop)
+      // Per DDIA: "It takes just one slow call to make the entire end-user request slow"
+      const fetchPromises = collections.map(async (collectionType) => {
         try {
           const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory/enhanced/collections/${collectionType}`);
           if (response.ok) {
@@ -1572,12 +1576,17 @@ export const ConnectedChat: React.FC = () => {
             items.forEach((item: any) => {
               item.collection_type = collectionType;
             });
-            allFragments.push(...items);
+            return items;
           }
+          return [];
         } catch (err) {
           console.error(`[Fetching memories] Error fetching ${collectionType}:`, err);
+          return [];
         }
-      }
+      });
+
+      const results = await Promise.all(fetchPromises);
+      results.forEach(items => allFragments.push(...items));
 
       console.log(`[API Response] Retrieved ${allFragments.length} fragments from ${collections.length} collections`);
       const fragments = allFragments;
@@ -1673,6 +1682,15 @@ export const ConnectedChat: React.FC = () => {
       console.error('[Knowledge Graph] Error stack:', error.stack);
     }
   }, []);
+
+  // v0.2.9: Lazy load KG only when panel first opens
+  useEffect(() => {
+    if (!rightPane.isCollapsed && !kgHasLoaded) {
+      console.log('[ConnectedChat] Panel opened - loading KG lazily');
+      fetchKnowledgeGraph();
+      setKgHasLoaded(true);
+    }
+  }, [rightPane.isCollapsed, kgHasLoaded, fetchKnowledgeGraph]);
 
   // Listen for real-time memory updates from SSE complete event
   useEffect(() => {
@@ -2126,7 +2144,23 @@ export const ConnectedChat: React.FC = () => {
               className="h-full overflow-y-auto overflow-x-hidden"
               onScroll={handleScroll}
             >
-              {!hasChatModel ? (
+              {/* v0.2.9: Three-way conditional - loading → no models → chat */}
+              {isLoadingModels ? (
+                <div className="h-full flex items-center justify-center px-6">
+                  <div className="max-w-md text-center space-y-4">
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-zinc-900 flex items-center justify-center">
+                      <svg className="w-8 h-8 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-medium text-zinc-200">Discovering Models</h3>
+                      <p className="text-sm text-zinc-400 mt-1">Checking Ollama and LM Studio...</p>
+                    </div>
+                  </div>
+                </div>
+              ) : !hasChatModel ? (
                 <div className="h-full flex items-center justify-center px-6">
                   <div className="max-w-md text-center space-y-6">
                     <div className="w-20 h-20 mx-auto bg-zinc-900 rounded-2xl flex items-center justify-center">
@@ -2234,6 +2268,7 @@ export const ConnectedChat: React.FC = () => {
                 onRefresh={() => {
                   fetchMemories(true);
                   fetchKnowledgeGraph();
+                  setKgHasLoaded(true);  // v0.2.9: Track that KG has loaded
                 }}
                 isRefreshing={isRefreshingMemories}
                 lastRefresh={lastMemoryRefresh}
