@@ -6,7 +6,7 @@ Roampal is an intelligent chatbot with persistent memory and learning capabiliti
 
 ## Architecture Refactor (v0.2.7)
 
-**IMPORTANT**: In v0.2.7, the monolithic `UnifiedMemorySystem` (4,746 lines) was refactored into a **facade pattern** with **8 extracted services**. v0.2.8 completed API compatibility and stabilized the architecture. v0.2.9 added Ghost Registry for book deletion, `sort_by`/`related` MCP parameters, and critical bug fixes. Line number references throughout this document may point to the pre-refactor monolith.
+**IMPORTANT**: In v0.2.7, the monolithic `UnifiedMemorySystem` (4,746 lines) was refactored into a **facade pattern** with **8 extracted services**. v0.2.8 completed API compatibility and stabilized the architecture. v0.2.9 added Ghost Registry for book deletion, `sort_by`/`related` MCP parameters, and critical bug fixes. v0.2.10 added ChromaDB error handling (ghost entries), schema migration for older data, and fixed memory promotion to run on startup. Line number references throughout this document may point to the pre-refactor monolith.
 
 ### New Architecture
 
@@ -6563,7 +6563,9 @@ if deleted_count != chunks_deleted:
 **Timeout Protection**:
 - `embedding_service.py:33-90` - Model loading runs in daemon thread with 120s timeout
 - `chromadb_adapter.py:175-203` - Upsert runs in daemon thread with 60s timeout
-- Prevents indefinite hangs on model loading failures or SQLite locks
+- `chromadb_adapter.py:268-290` - Query runs in ThreadPoolExecutor with 10s timeout (prevents UI freeze)
+- `search_service.py:272-287` - Search wrapper with 15s timeout (graceful fallback to empty results)
+- Prevents indefinite hangs on model loading failures, SQLite locks, or HNSW corruption
 
 ---
 

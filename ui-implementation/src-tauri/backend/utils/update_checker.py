@@ -1,5 +1,5 @@
 """
-Update Checker - v0.2.8
+Update Checker - v0.2.10
 Checks for available updates from roampal.ai and notifies users.
 
 Architecture:
@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 UPDATE_CHECK_URL = "https://roampal.ai/updates/latest.json"
-CURRENT_VERSION = "0.2.8"
+CURRENT_VERSION = "0.2.10"
 
 
 def parse_version(version_str: str) -> tuple:

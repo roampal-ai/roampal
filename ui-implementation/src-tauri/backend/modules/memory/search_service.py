@@ -11,6 +11,7 @@ Responsibilities:
 - Document effectiveness tracking
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -258,7 +259,7 @@ class SearchService:
         limit: int,
         metadata_filters: Optional[Dict[str, Any]]
     ) -> List[Dict]:
-        """Search a single collection."""
+        """Search a single collection with timeout protection."""
         adapter = self.collections[coll_name]
         multiplier = self.config.search_multiplier
 
@@ -269,13 +270,22 @@ class SearchService:
             if "status" not in filters:
                 filters["status"] = {"$ne": "archived"}
 
-        # Hybrid query (vector + BM25)
-        results = await adapter.hybrid_query(
-            query_vector=query_embedding,
-            query_text=processed_query,
-            top_k=limit * multiplier,
-            filters=filters
-        )
+        # v0.2.10: Timeout protection for ChromaDB queries
+        # Prevents UI freeze if ChromaDB hangs (e.g., first-use model loading)
+        QUERY_TIMEOUT = 15.0  # 15 seconds - enough for first-use model load
+        try:
+            results = await asyncio.wait_for(
+                adapter.hybrid_query(
+                    query_vector=query_embedding,
+                    query_text=processed_query,
+                    top_k=limit * multiplier,
+                    filters=filters
+                ),
+                timeout=QUERY_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"[SearchService] Query timeout after {QUERY_TIMEOUT}s for collection {coll_name}")
+            return []  # Return empty results rather than hanging forever
 
         # Add recency metadata for working memory
         if coll_name == "working":

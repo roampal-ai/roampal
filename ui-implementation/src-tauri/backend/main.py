@@ -204,16 +204,11 @@ async def memory_promotion_task(memory: UnifiedMemorySystem):
     """Background task to promote valuable working memory to history"""
     while True:
         try:
-            # Wait 30 minutes between promotion checks
-            await asyncio.sleep(1800)  # 30 minutes in seconds
-
+            # Run promotion immediately on startup, then every 30 minutes
             logger.info("Running scheduled memory promotion...")
 
-            # Promote valuable working memory
-            await memory._promote_valuable_working_memory()
-
-            # Clean old working memory (older than 24 hours)
-            await memory.clear_old_working_memory(hours=24)
+            # Promote valuable working memory (also cleans up items > 24h old)
+            await memory.promote_valuable_working_memory()
 
             # Clean dead references from knowledge graph
             cleaned_refs = await memory._cleanup_kg_dead_references()
@@ -228,6 +223,9 @@ async def memory_promotion_task(memory: UnifiedMemorySystem):
             logger.info(f"Memory promotion complete - Working: {stats['collections']['working']}, "
                        f"History: {stats['collections']['history']}, "
                        f"Patterns: {stats['collections']['patterns']}")
+
+            # Wait 30 minutes before next check
+            await asyncio.sleep(1800)  # 30 minutes in seconds
 
         except asyncio.CancelledError:
             logger.info("Memory promotion task cancelled")

@@ -171,6 +171,10 @@ class UnifiedMemorySystem:
         self._file_adapter = FileMemoryAdapter()
         await self._file_adapter.initialize({"base_data_path": str(self.data_dir)})
 
+        # v0.2.10: Migrate ChromaDB schema before initialization
+        # Handles upgrades from ChromaDB 0.4.x to 1.x
+        self._migrate_chromadb_schema()
+
         # Initialize collections
         await self._initialize_collections()
 
@@ -198,6 +202,62 @@ class UnifiedMemorySystem:
                     use_server=self.use_server
                 )
                 await self.collections[name].initialize(collection_name=f"roampal_{name}")
+
+    def _migrate_chromadb_schema(self):
+        """
+        Migrate ChromaDB schema for compatibility across versions.
+
+        v0.2.10: ChromaDB 1.x added 'topic' column to collections table.
+        Users upgrading from ChromaDB 0.4.x/0.5.x will have old schema.
+        This safely adds missing columns without affecting existing data.
+        """
+        import sqlite3
+
+        chromadb_path = self.data_dir / "chromadb"
+        sqlite_path = chromadb_path / "chroma.sqlite3"
+
+        if not sqlite_path.exists():
+            logger.debug("No existing ChromaDB - skipping migration")
+            return
+
+        try:
+            conn = sqlite3.connect(str(sqlite_path))
+            cursor = conn.cursor()
+
+            # Columns added in ChromaDB 1.x that may be missing
+            migrations_needed = []
+
+            # Check collections table
+            cursor.execute("PRAGMA table_info(collections)")
+            collections_columns = {col[1] for col in cursor.fetchall()}
+            if 'topic' not in collections_columns:
+                migrations_needed.append(('collections', 'topic', 'TEXT'))
+
+            # Check segments table (also needs 'topic' in ChromaDB 1.x)
+            cursor.execute("PRAGMA table_info(segments)")
+            segments_columns = {col[1] for col in cursor.fetchall()}
+            if 'topic' not in segments_columns:
+                migrations_needed.append(('segments', 'topic', 'TEXT'))
+
+            # Apply migrations
+            for table, column, col_type in migrations_needed:
+                try:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                    logger.info(f"ChromaDB migration: Added {column} to {table}")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" in str(e).lower():
+                        pass  # Column already exists, safe to ignore
+                    else:
+                        raise
+
+            conn.commit()
+            conn.close()
+            logger.debug("ChromaDB schema migration completed")
+
+        except Exception as e:
+            logger.warning(f"ChromaDB schema migration failed (non-fatal): {e}")
+            # Non-fatal: if migration fails, ChromaDB may still work
+            # or will fail with a more specific error later
 
     def _init_services(self):
         """Initialize all extracted services."""
