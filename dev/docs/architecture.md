@@ -6,7 +6,7 @@ Roampal is an intelligent chatbot with persistent memory and learning capabiliti
 
 ## Architecture Refactor (v0.2.7)
 
-**IMPORTANT**: In v0.2.7, the monolithic `UnifiedMemorySystem` (4,746 lines) was refactored into a **facade pattern** with **8 extracted services**. v0.2.8 completed API compatibility and stabilized the architecture. v0.2.9 added Ghost Registry for book deletion, `sort_by`/`related` MCP parameters, and critical bug fixes. v0.2.10 added ChromaDB error handling (ghost entries), schema migration for older data, and fixed memory promotion to run on startup. Line number references throughout this document may point to the pre-refactor monolith.
+**IMPORTANT**: In v0.2.7, the monolithic `UnifiedMemorySystem` (4,746 lines) was refactored into a **facade pattern** with **8 extracted services**. v0.2.8 completed API compatibility and stabilized the architecture. v0.2.9 added Ghost Registry for book deletion, `sort_by`/`related` MCP parameters, and critical bug fixes. v0.2.10 added ChromaDB error handling (ghost entries), schema migration for older data, and fixed memory promotion to run on startup. v0.2.11 fixed critical KG performance (O(n×m) → O(n+m), 25x faster), added message virtualization, and optimized store subscriptions. Line number references throughout this document may point to the pre-refactor monolith.
 
 ### New Architecture
 
@@ -6327,7 +6327,7 @@ ConnectedChat.tsx (main container)
 
 | Component | File Location | Key Sections | Purpose |
 |-----------|--------------|--------------|---------|
-| **TerminalMessageThread** | ui-implementation/src/components/TerminalMessageThread.tsx | 10-25: ThinkingDots component (animated)<br>28-72: CitationsBlock component (inline)<br>341-389: Chronological event timeline rendering<br>391-458: Fallback static rendering<br>500-535: Processing indicator with ThinkingDots | Main message list renderer with chronological timeline support and inline components |
+| **TerminalMessageThread** | ui-implementation/src/components/TerminalMessageThread.tsx | 3: react-window VariableSizeList import<br>10-25: ThinkingDots component (animated)<br>28-72: CitationsBlock component (inline)<br>209-230: MessageRow virtualized renderer<br>341-389: Chronological event timeline rendering<br>391-458: Fallback static rendering<br>500-535: Processing indicator with ThinkingDots | Main message list renderer with react-window virtualization for smooth scrolling in long conversations (v0.2.11), chronological timeline support and inline components |
 | **ThinkingDots** | (inline in TerminalMessageThread.tsx:10-25) | Blue animated "Thinking." → "Thinking.." → "Thinking..." (400ms cycle) | Processing status indicator during LLM thinking phase (v0.2.5) |
 | **ToolExecutionDisplay** | ui-implementation/src/components/ToolExecutionDisplay.tsx | 4-10: TypeScript interfaces<br>16-66: Component implementation<br>28-63: Status icon rendering | Tool execution status badges with running/completed/failed states |
 | **EnhancedChatMessage** | ui-implementation/src/components/EnhancedChatMessage.tsx | 7-34: Message interface<br>56-80: Assistant name fetching<br>134-139: Thinking block integration<br>142-148: Tool execution integration | Legacy message wrapper (being replaced by direct rendering in TerminalMessageThread) |
@@ -6339,6 +6339,15 @@ ConnectedChat.tsx (main container)
 | Store | File Location | Key Sections | Purpose |
 |-------|--------------|--------------|---------|
 | **useChatStore** | ui-implementation/src/stores/useChatStore.ts | 44, 145: processingStatus state<br>550-710: JSON response handler<br><br><br> | Main chat state and JSON response handling (migrated from SSE 2025-10-08) |
+
+**Performance Note (v0.2.11)**: ConnectedChat.tsx uses granular Zustand selectors (lines 46-59) instead of destructuring the entire store. This prevents unnecessary re-renders when unrelated state changes:
+```tsx
+// Before: const { messages, ... } = useChatStore() - re-renders on ANY state change
+// After: Granular selectors - only re-renders when specific value changes
+const conversationId = useChatStore(state => state.conversationId);
+const connectionStatus = useChatStore(state => state.connectionStatus);
+const messages = useChatStore(state => state.messages);
+```
 
 ---
 
