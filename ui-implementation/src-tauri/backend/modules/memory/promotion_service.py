@@ -444,10 +444,12 @@ class PromotionService:
         try:
             working_adapter = self.collections.get("working")
             if not working_adapter:
+                logger.warning("Working memory cleanup: no working adapter found")
                 return 0
 
             cleaned_count = 0
             all_ids = working_adapter.list_all_ids()
+            logger.info(f"Working memory cleanup: checking {len(all_ids)} items (max_age={max_age_hours}h)")
 
             for doc_id in all_ids:
                 doc = working_adapter.get_fragment(doc_id)
@@ -461,13 +463,13 @@ class PromotionService:
                 if age_hours > max_age_hours:
                     working_adapter.delete_vectors([doc_id])
                     cleaned_count += 1
-                    logger.debug(f"Cleaned up old working memory {doc_id} (age: {age_hours:.1f}h)")
+                    logger.info(f"Cleaned up old working memory {doc_id} (age: {age_hours:.1f}h)")
+                else:
+                    logger.debug(f"Keeping working memory {doc_id} (age: {age_hours:.1f}h < {max_age_hours}h)")
 
-            if cleaned_count > 0:
-                logger.info(f"Working memory cleanup: removed {cleaned_count} old items")
-
+            logger.info(f"Working memory cleanup complete: removed {cleaned_count} of {len(all_ids)} items")
             return cleaned_count
 
         except Exception as e:
-            logger.error(f"Error in working memory cleanup: {e}")
+            logger.error(f"Error in working memory cleanup: {e}", exc_info=True)
             return 0
