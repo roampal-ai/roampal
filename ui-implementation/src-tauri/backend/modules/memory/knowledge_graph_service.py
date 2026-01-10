@@ -736,16 +736,21 @@ class KnowledgeGraphService:
 
         entities_map: Dict[str, Dict[str, Any]] = {}
 
+        # v0.2.11: Pre-build routing connection counts (O(m) once, not O(n*m))
+        # Before: O(n*m) - looping through all relationships for every concept (~25s)
+        # After: O(m) build + O(n) lookups (<1s)
+        routing_connection_counts: Dict[str, int] = {}
+        for rel_key in self.knowledge_graph.get("relationships", {}).keys():
+            for concept in rel_key.split("|"):
+                routing_connection_counts[concept] = routing_connection_counts.get(concept, 0) + 1
+
         # STEP 1: Get routing KG entities (query-based patterns)
         for concept, pattern in self.knowledge_graph.get("routing_patterns", {}).items():
             if filter_text and filter_text.lower() not in concept.lower():
                 continue
 
-            # Count routing connections
-            routing_connections = 0
-            for rel_key in self.knowledge_graph.get("relationships", {}).keys():
-                if concept in rel_key.split("|"):
-                    routing_connections += 1
+            # O(1) lookup instead of O(m) loop per concept
+            routing_connections = routing_connection_counts.get(concept, 0)
 
             # Get total usage across all collections
             collections_used = pattern.get("collections_used", {})

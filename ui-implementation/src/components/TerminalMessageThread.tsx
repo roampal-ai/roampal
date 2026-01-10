@@ -1,5 +1,6 @@
-import React, { useRef, useEffect, useMemo, useState, memo, useCallback } from 'react';
+import React, { useRef, useEffect, useMemo, useState, memo, useCallback, useLayoutEffect } from 'react';
 import { Terminal, CheckCircle, XCircle, AlertCircle, Loader2, Search, Wrench, MessageSquare, CheckCircle2, ChevronDown, ChevronRight, BookOpen, Database } from 'lucide-react';
+import { VariableSizeList as List } from 'react-window';
 import { MemoryCitation } from './MemoryCitation';
 import { CodeChangePreview } from './CodeChangePreview';
 import ReactMarkdown from 'react-markdown';
@@ -30,12 +31,12 @@ const MemoizedMarkdown = memo(({ content }: { content: string }) => {
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeRaw]}
         components={{
-          h1: ({node, ...props}) => <h1 className="text-lg font-bold text-zinc-200 mt-4 mb-2" {...props} />,
-          h2: ({node, ...props}) => <h2 className="text-base font-bold text-zinc-300 mt-3 mb-2" {...props} />,
-          h3: ({node, ...props}) => <h3 className="text-sm font-semibold text-zinc-300 mt-2 mb-1" {...props} />,
-          strong: ({node, ...props}) => <strong className="font-bold text-zinc-100" {...props} />,
-          em: ({node, ...props}) => <em className="italic text-zinc-300" {...props} />,
-          code: ({node, inline, className, children, ...props}: any) => {
+          h1: ({ node, ...props }) => <h1 className="text-lg font-bold text-zinc-200 mt-4 mb-2" {...props} />,
+          h2: ({ node, ...props }) => <h2 className="text-base font-bold text-zinc-300 mt-3 mb-2" {...props} />,
+          h3: ({ node, ...props }) => <h3 className="text-sm font-semibold text-zinc-300 mt-2 mb-1" {...props} />,
+          strong: ({ node, ...props }) => <strong className="font-bold text-zinc-100" {...props} />,
+          em: ({ node, ...props }) => <em className="italic text-zinc-300" {...props} />,
+          code: ({ node, inline, className, children, ...props }: any) => {
             const match = /language-(\w+)/.exec(className || '');
             const language = match ? match[1] : '';
             if (!inline && language) {
@@ -60,27 +61,27 @@ const MemoizedMarkdown = memo(({ content }: { content: string }) => {
             }
             return <code className="px-1 py-0.5 bg-zinc-800/50 text-zinc-300 rounded text-xs font-mono" {...props}>{children}</code>;
           },
-          ul: ({node, ...props}) => <ul className="list-disc list-inside text-zinc-300 space-y-1 my-2" {...props} />,
-          ol: ({node, ...props}) => <ol className="list-decimal list-inside text-zinc-300 space-y-1 my-2" {...props} />,
-          li: ({node, ...props}) => <li className="text-sm" {...props} />,
-          blockquote: ({node, ...props}) => (
+          ul: ({ node, ...props }) => <ul className="list-disc list-inside text-zinc-300 space-y-1 my-2" {...props} />,
+          ol: ({ node, ...props }) => <ol className="list-decimal list-inside text-zinc-300 space-y-1 my-2" {...props} />,
+          li: ({ node, ...props }) => <li className="text-sm" {...props} />,
+          blockquote: ({ node, ...props }) => (
             <div className="my-2 pl-3 py-2 border-l-2 border-blue-500/50 bg-blue-900/10 text-zinc-300 text-sm italic">
               {props.children}
             </div>
           ),
-          a: ({node, ...props}) => (
+          a: ({ node, ...props }) => (
             <a className="text-blue-400 hover:text-blue-300 hover:underline" {...props} />
           ),
-          p: ({node, ...props}) => <p className="text-sm leading-relaxed mb-2" {...props} />,
-          table: ({node, ...props}) => (
+          p: ({ node, ...props }) => <p className="text-sm leading-relaxed mb-2" {...props} />,
+          table: ({ node, ...props }) => (
             <div className="overflow-x-auto my-2">
               <table className="min-w-full border border-zinc-700" {...props} />
             </div>
           ),
-          th: ({node, ...props}) => <th className="px-3 py-2 bg-zinc-800 border border-zinc-700 text-xs font-semibold text-left" {...props} />,
-          td: ({node, ...props}) => <td className="px-3 py-2 border border-zinc-700 text-xs" {...props} />,
+          th: ({ node, ...props }) => <th className="px-3 py-2 bg-zinc-800 border border-zinc-700 text-xs font-semibold text-left" {...props} />,
+          td: ({ node, ...props }) => <td className="px-3 py-2 border border-zinc-700 text-xs" {...props} />,
           hr: () => <hr className="my-4 border-zinc-700" />,
-          div: ({node, className, ...props}: any) => {
+          div: ({ node, className, ...props }: any) => {
             if (className?.startsWith('callout')) {
               const type = className.replace('callout callout-', '');
               const colors: Record<string, string> = {
@@ -205,6 +206,198 @@ interface Message {
   _lastTextEndIndex?: number; // v0.2.5: Internal tracking for text segment boundaries
 }
 
+const MessageRow = memo(({
+  message,
+  style,
+  index,
+  setSize,
+  renderContent,
+  isProcessing
+}: {
+  message: Message | 'loading-indicator',
+  style: React.CSSProperties,
+  index: number,
+  setSize: (index: number, size: number) => void,
+  renderContent: (content: string) => React.ReactNode,
+  isProcessing: boolean
+}) => {
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (rowRef.current) {
+      setSize(index, rowRef.current.getBoundingClientRect().height);
+    }
+  }, [setSize, index, message]); // Re-measure if message content changes
+
+  if (message === 'loading-indicator') {
+    return (
+      <div style={style}>
+        <div ref={rowRef} className="pb-4">
+          {isProcessing && (
+            <div className="flex items-start gap-3">
+              <div className="flex-1">
+                <div className="text-sm text-zinc-500 flex items-center gap-2">
+                  <ThinkingDots />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={style}>
+      <div ref={rowRef} className="pb-4 pr-2">
+        <div className="group">
+          {message.sender === 'user' && (
+            <div className="flex items-start gap-3">
+              <span className="text-zinc-600 text-sm mt-0.5">&gt;</span>
+              <div className="flex-1">
+                <div className="text-zinc-400 text-sm leading-relaxed">{message.content}</div>
+                {message.attachments && message.attachments.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {message.attachments.map((att: any, idx: number) => (
+                      <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 bg-zinc-800 rounded text-xs text-zinc-400">
+                        📎 {att.name} {att.size ? `(${Math.ceil(att.size / 1024)}KB)` : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {message.sender === 'assistant' && (
+            <div className="flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                {message.events && message.events.length > 0 ? (
+                  <>
+                    {(() => {
+                      const hasTextSegments = message.events.some((e: any) => e.type === 'text_segment');
+                      const hasTools = message.events.some((e: any) => e.type === 'tool_execution');
+                      let liveStreamingText = '';
+                      if (message.streaming && hasTools && message.content) {
+                        const lastEndIndex = message._lastTextEndIndex || 0;
+                        liveStreamingText = message.content.slice(lastEndIndex);
+                      }
+
+                      return (
+                        <>
+                          {message.events.map((event: any, idx: number) => {
+                            if (event.type === 'tool_execution') {
+                              const tool = event.data;
+                              const isRunning = message.streaming && tool.status === 'running';
+                              const resultCount = tool.metadata?.result_count || tool.metadata?.fragmentCount;
+                              return (
+                                <div key={idx} className="text-xs font-mono mb-3">
+                                  <div className={`text-zinc-500 ${isRunning ? 'animate-pulse-subtle' : ''}`}>
+                                    {isRunning ? '⋯ ' : '✓ '}
+                                    {tool.description || (tool.tool === 'search_memory' ? 'Searching memory' : tool.tool)}
+                                    {!isRunning && resultCount !== undefined && (
+                                      <>
+                                        {` · ${resultCount} results`}
+                                        {tool.resultPreview && (
+                                          <span className="text-zinc-600"> · {tool.resultPreview}</span>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            } else if (event.type === 'text_segment') {
+                              return (
+                                <div key={idx} className="text-zinc-100 text-sm leading-relaxed mb-2">
+                                  {renderContent(event.data.content)}
+                                </div>
+                              );
+                            }
+                            return null;
+                          })}
+                          {liveStreamingText && (
+                            <div className="text-zinc-100 text-sm leading-relaxed mb-2">
+                              {renderContent(liveStreamingText)}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </>
+                ) : (
+                  <>
+                    {/* Legacy Rendering */}
+                    {message.toolExecutions && message.toolExecutions.length > 0 && (
+                      <div className="text-xs font-mono mb-3">
+                        {message.toolExecutions.map((tool, idx) => {
+                          const isRunning = message.streaming && tool.status === 'running';
+                          const resultCount = tool.resultCount ?? tool.metadata?.result_count ?? tool.metadata?.fragmentCount;
+                          const query = tool.arguments?.query || tool.metadata?.query;
+                          let description = tool.description;
+                          if (!description && tool.tool === 'search_memory' && query) {
+                            description = `searching "${query.length > 40 ? query.substring(0, 40) + '...' : query}"`;
+                          } else if (!description) {
+                            description = tool.tool;
+                          }
+
+                          return (
+                            <div key={idx} className={`text-zinc-500 ${isRunning ? 'animate-pulse-subtle' : ''}`}>
+                              {isRunning ? '⋯ ' : '✓ '}
+                              {description}
+                              {!isRunning && resultCount !== undefined && (
+                                <>
+                                  {` · ${resultCount} results`}
+                                  {tool.resultPreview && (
+                                    <span className="text-zinc-600"> · {tool.resultPreview}</span>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {message.content && (
+                      <div className={`text-zinc-100 text-sm leading-relaxed ${message.citations && message.citations.length > 0 ? 'mb-0' : 'mb-2'}`}>
+                        {renderContent(message.content)}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {!message.streaming && message.citations && message.citations.length > 0 && (
+                  <CitationsBlock citations={message.citations} />
+                )}
+
+                {message.code_changes && message.code_changes.length > 0 && (
+                  <CodeChangePreview changes={message.code_changes} onApply={() => { }} onSkip={() => { }} onApplyAll={() => { }} />
+                )}
+
+                {message.memories && message.memories.length > 0 && !message.citations && (
+                  <div className="mt-2 text-xs text-zinc-600">
+                    Using {message.memories.length} relevant memories
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {message.sender === 'system' && (
+            <div className="flex items-start gap-3">
+              <span className="text-amber-600 text-sm mt-0.5">!</span>
+              <span className="text-amber-500 text-sm">{message.content}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}, (prev, next) => {
+  // Only re-render if message, dimensions, or processing state changes
+  // Be careful with object equality on message
+  return prev.message === next.message && prev.index === next.index && prev.style === next.style && prev.isProcessing === next.isProcessing;
+});
+
 interface TerminalMessageThreadProps {
   messages: Message[];
   activeShard: string;
@@ -224,62 +417,61 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
   processingStage,
   processingStatus
 }) => {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<List>(null);
+  const sizeMap = useRef<Record<number, number>>({});
+  const [size, setSize] = useState<{ width: number, height: number }>({ width: 0, height: 0 });
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  // Handle auto-scroll
+  const prevMessagesLength = useRef(messages.length);
+  const isScrolledToBottom = useRef(true);
 
-  // v0.2.5: Only show real status from backend, no fallback "Thinking..." text
-  const getProcessingMessage = useMemo(() => () => {
-    return processingStatus?.trim() || '';
-  }, [processingStatus]);
-
-  // Only scroll when messages length changes (new message added)
-  const prevMessageCount = useRef(messages.length);
+  // Measure container size
   useEffect(() => {
-    if (messages.length > prevMessageCount.current) {
-      scrollToBottom();
-    }
-    prevMessageCount.current = messages.length;
-  }, [messages.length]);
-
-  const formatTime = (date: Date) => {
-    if (!(date instanceof Date)) {
-      date = new Date(date);
-    }
-    return date.toLocaleTimeString('en-US', {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
+    if (!containerRef.current) return;
+    const resizeObserver = new ResizeObserver(entries => {
+      for (let entry of entries) {
+        setSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+      }
     });
-  };
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, []);
 
-  const getStatusIcon = (status?: string) => {
-    switch (status) {
-      case 'sending':
-        return <Loader2 className="w-4 h-4 animate-spin text-blue-500" />;
-      case 'sent':
-        return <CheckCircle className="w-4 h-4 text-green-500" />;
-      case 'error':
-        return <XCircle className="w-4 h-4 text-red-500" />;
-      default:
-        return null;
+  // Update item size
+  const setSizeCallback = useCallback((index: number, size: number) => {
+    if (sizeMap.current[index] !== size) {
+      sizeMap.current[index] = size;
+      listRef.current?.resetAfterIndex(index);
     }
-  };
+  }, []);
 
-  // v0.2.8: Use memoized markdown component for performance
-  // The actual rendering logic is now in MemoizedMarkdown at the top of the file
+  const getSize = (index: number) => sizeMap.current[index] || 60; // Default estimate
+
+  // Auto-scroll logic
+  useEffect(() => {
+    const len = messages.length;
+    // Check if we should render a helper "loading" row
+    const actualLen = isProcessing ? len + 1 : len;
+
+    if (len > prevMessagesLength.current) {
+      // New message added - strict auto scroll
+      listRef.current?.scrollToItem(actualLen - 1, 'end');
+    }
+    prevMessagesLength.current = len;
+  }, [messages.length, isProcessing]);
+
   const renderContent = useCallback((content: string) => {
     return <MemoizedMarkdown content={content} />;
   }, []);
 
+  // Determine list items: messages + optional processing indicator
+  const itemCount = isProcessing ? messages.length + 1 : messages.length;
+
   return (
-    <div className="bg-zinc-950 p-6" style={{ fontFamily: 'SF Mono, Monaco, Inconsolata, Fira Code, monospace' }}>
-      {/* Welcome message when no messages */}
-      {messages.length === 0 && (
-        <div className="mb-8 text-zinc-400 text-sm">
+    <div ref={containerRef} className="h-full w-full bg-zinc-950 pl-6 pt-6 pb-6 pr-2 overflow-hidden" style={{ fontFamily: 'SF Mono, Monaco, Inconsolata, Fira Code, monospace' }}>
+      {messages.length === 0 && !isProcessing && (
+        <div className="text-zinc-400 text-sm">
           <div className="flex items-center gap-2 mb-1">
             <Terminal className="w-4 h-4" />
             <span>Welcome to the Roampal Terminal</span>
@@ -287,214 +479,34 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
         </div>
       )}
 
-      {/* Messages */}
-      <div className="space-y-4">
-        {messages.map((message) => (
-          <div key={message.id} className="group">
-            {message.sender === 'user' && (
-              <div className="flex items-start gap-3">
-                <span className="text-zinc-600 text-sm mt-0.5">&gt;</span>
-                <div className="flex-1">
-                  <div className="text-zinc-400 text-sm leading-relaxed">{message.content}</div>
-                  {message.attachments && message.attachments.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {message.attachments.map((att: any, idx: number) => (
-                        <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 bg-zinc-800 rounded text-xs text-zinc-400">
-                          📎 {att.name} {att.size ? `(${Math.ceil(att.size / 1024)}KB)` : ''}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {message.sender === 'assistant' && (
-              <div className="flex items-start gap-3">
-                <div className="flex-1 min-w-0">
-                  {/* Render events in chronological order if timeline exists */}
-                  {message.events && message.events.length > 0 ? (
-                    <>
-                      {/* v0.2.5: Check if we have text_segment events for true interleaving */}
-                      {(() => {
-                        const hasTextSegments = message.events.some((e: any) => e.type === 'text_segment');
-                        const hasTools = message.events.some((e: any) => e.type === 'tool_execution');
-
-                        // Calculate live streaming text (after last segment boundary)
-                        let liveStreamingText = '';
-                        if (message.streaming && hasTools && message.content) {
-                          const lastEndIndex = message._lastTextEndIndex || 0;
-                          liveStreamingText = message.content.slice(lastEndIndex);
-                        }
-
-                        return (
-                          <>
-                            {message.events.map((event: any, idx: number) => {
-                              if (event.type === 'tool_execution') {
-                                const tool = event.data;
-                                // v0.2.5: If message is no longer streaming, tool must be completed
-                                const isRunning = message.streaming && tool.status === 'running';
-                                const resultCount = tool.metadata?.result_count || tool.metadata?.fragmentCount;
-                                return (
-                                  <div key={idx} className="text-xs font-mono mb-3">
-                                    <div className={`text-zinc-500 ${isRunning ? 'animate-pulse-subtle' : ''}`}>
-                                      {isRunning ? '⋯ ' : '✓ '}
-                                      {tool.description || (tool.tool === 'search_memory' ? 'Searching memory' : tool.tool)}
-                                      {!isRunning && resultCount !== undefined && (
-                                        <>
-                                          {` · ${resultCount} results`}
-                                          {tool.resultPreview && (
-                                            <span className="text-zinc-600"> · {tool.resultPreview}</span>
-                                          )}
-                                        </>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              } else if (event.type === 'text_segment') {
-                                // v0.2.5: Render this specific text segment (true chronological interleaving)
-                                return (
-                                  <div key={idx} className="text-zinc-100 text-sm leading-relaxed mb-2">
-                                    {renderContent(event.data.content)}
-                                  </div>
-                                );
-                              } else if (event.type === 'text' && event.data.firstChunk && message.content && !hasTextSegments && !hasTools) {
-                                // DEPRECATED: Fallback for old messages without text_segment events AND no tools
-                                // Only render full content if no segments exist (backwards compat)
-                                return (
-                                  <div key={idx} className="text-zinc-100 text-sm leading-relaxed mb-6">
-                                    {renderContent(message.content)}
-                                  </div>
-                                );
-                              }
-                              return null;
-                            })}
-                            {/* v0.2.5: Show live streaming text (accumulating after last tool) */}
-                            {liveStreamingText && (
-                              <div className="text-zinc-100 text-sm leading-relaxed mb-2">
-                                {renderContent(liveStreamingText)}
-                              </div>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </>
-                  ) : (
-                    /* Fallback to old static order if no timeline */
-                    <>
-                      {/* 1. TOOL EXECUTION */}
-                      {message.toolExecutions && message.toolExecutions.length > 0 && (
-                        <div className="text-xs font-mono mb-3">
-                          {message.toolExecutions.map((tool, idx) => {
-                            // v0.2.5: If message is no longer streaming, tool must be completed
-                            const isRunning = message.streaming && tool.status === 'running';
-                            // v0.2.4: Fix - store saves resultCount directly, not in metadata
-                            const resultCount = tool.resultCount ?? tool.metadata?.result_count ?? tool.metadata?.fragmentCount;
-                            const query = tool.arguments?.query || tool.metadata?.query;
-
-                            // Build description with query if available (v0.2.4)
-                            let description = tool.description;
-                            if (!description) {
-                              if (tool.tool === 'search_memory' && query) {
-                                description = `searching "${query.length > 40 ? query.substring(0, 40) + '...' : query}"`;
-                              } else {
-                                description = tool.tool;
-                              }
-                            }
-
-                            return (
-                              <div key={idx} className={`text-zinc-500 ${isRunning ? 'animate-pulse-subtle' : ''}`}>
-                                {isRunning ? '⋯ ' : '✓ '}
-                                {description}
-                                {!isRunning && resultCount !== undefined && (
-                                  <>
-                                    {` · ${resultCount} results`}
-                                    {tool.resultPreview && (
-                                      <span className="text-zinc-600"> · {tool.resultPreview}</span>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* 2. RESPONSE CONTENT */}
-                      {message.content && (
-                        <div className={`text-zinc-100 text-sm leading-relaxed ${message.citations && message.citations.length > 0 ? 'mb-0' : 'mb-2'}`}>
-                          {renderContent(message.content)}
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {/* 4. CITATIONS - Source references (only when complete) */}
-                  {!message.streaming && message.citations && message.citations.length > 0 && (
-                    <CitationsBlock citations={message.citations} />
-                  )}
-
-                  {/* Show code changes if present - keeping for future use */}
-                  {message.code_changes && message.code_changes.length > 0 && (
-                    <CodeChangePreview
-                      changes={message.code_changes}
-                      onApply={(changeId) => {
-                        // TODO: Implement code change application
-                      }}
-                      onSkip={(changeId) => {
-                        // TODO: Implement code change skipping
-                      }}
-                      onApplyAll={() => {
-                        // TODO: Implement apply all
-                      }}
-                    />
-                  )}
-
-                  {/* Show memories if present (legacy) */}
-                  {message.memories && message.memories.length > 0 && !message.citations && (
-                    <div className="mt-2 text-xs text-zinc-600">
-                      Using {message.memories.length} relevant memories
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {message.sender === 'system' && (
-              <div className="flex items-start gap-3">
-                <span className="text-amber-600 text-sm mt-0.5">!</span>
-                <span className="text-amber-500 text-sm">{message.content}</span>
-              </div>
-            )}
-          </div>
-        ))}
-
-        {/* Global processing indicator - "Thinking..." while processing */}
-        {/* Hide when tools are actively running (those show inline ⋯ indicators) */}
-        {(() => {
-          // Check if any tool is currently running in any message
-          const hasRunningTool = messages.some(msg =>
-            msg.toolExecutions?.some(tool => tool.status === 'running') ||
-            msg.events?.some(e => e.type === 'tool_execution' && e.data?.status === 'running')
-          );
-
-          // Only show "Thinking..." if processing AND no tools are running
-          return isProcessing && !hasRunningTool && (
-            <div className="flex items-start gap-3">
-              <div className="flex-1">
-                <div className="text-sm text-zinc-500 flex items-center gap-2">
-                  <ThinkingDots />
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-      </div>
-
-      <div ref={messagesEndRef} />
+      {size.height > 0 && (
+        <List
+          ref={listRef}
+          height={size.height}
+          width={size.width}
+          itemCount={itemCount}
+          itemSize={getSize}
+          itemData={messages}
+          overscanCount={5}
+        >
+          {({ index, style }) => {
+            const isLoader = index === messages.length;
+            const message = isLoader ? 'loading-indicator' : messages[index];
+            return (
+              <MessageRow
+                index={index}
+                style={style}
+                message={message}
+                setSize={setSizeCallback}
+                renderContent={renderContent}
+                isProcessing={!!isProcessing}
+              />
+            );
+          }}
+        </List>
+      )}
     </div>
   );
 };
 
-// Export memoized version to prevent unnecessary re-renders
 export const TerminalMessageThread = React.memo(TerminalMessageThreadComponent);

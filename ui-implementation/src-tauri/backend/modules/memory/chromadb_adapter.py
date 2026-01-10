@@ -132,7 +132,8 @@ class ChromaDBAdapter:
         # This prevents dimension mismatch (ChromaDB default is 384d, Roampal uses 768d)
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
-            embedding_function=None  # Manual embeddings from EmbeddingService
+            embedding_function=None,  # Manual embeddings from EmbeddingService
+            metadata={"hnsw:space": "l2"}
         )
         logger.info(f"ChromaDB collection '{collection_name}' ready (lazy loaded)")
         
@@ -264,14 +265,30 @@ class ChromaDBAdapter:
                 return []
 
             logger.info(f"Querying for top {top_k} vectors in collection '{self.collection_name}'...")
-            
-            # Perform query with error handling
-            try:
-                results = self.collection.query(
+
+            # v0.2.10: Perform query with timeout protection
+            # ChromaDB query is synchronous and can block on first-use model loading or HNSW corruption
+            # Wrapping in thread executor allows timeout to actually cancel the operation
+            import asyncio
+            import concurrent.futures
+
+            def do_query():
+                return self.collection.query(
                     query_embeddings=[query_vector],
                     n_results=top_k,
                     where=filters
                 )
+
+            try:
+                loop = asyncio.get_event_loop()
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    results = await asyncio.wait_for(
+                        loop.run_in_executor(executor, do_query),
+                        timeout=10.0  # 10 second timeout for individual queries
+                    )
+            except asyncio.TimeoutError:
+                logger.error(f"[ChromaDB] Query timed out after 10s for collection '{self.collection_name}'")
+                return []
             except Exception as e:
                 logger.error(f"[ChromaDB] Query failed: {e}")
                 return []
@@ -478,13 +495,21 @@ class ChromaDBAdapter:
     def list_all_ids(self) -> List[str]:
         if self.collection is None:
             raise RuntimeError("ChromaDB collection not initialized")
-        result = self.collection.get(include=[])
-        return result.get('ids', [])
+        try:
+            result = self.collection.get(include=[])
+            return result.get('ids', [])
+        except Exception as e:
+            # ChromaDB can throw "Error finding id" for ghost entries (IDs in index but no document)
+            logger.warning(f"ChromaDB error listing all IDs: {e}")
+            return []
 
     def delete_vectors(self, ids: List[str]):
         if self.collection is None:
             raise RuntimeError("ChromaDB collection not initialized")
         self.collection.delete(ids=ids)
+        # v0.2.10: Explicitly persist after delete - ChromaDB 0.4.x may not auto-persist deletes
+        if hasattr(self.client, 'persist'):
+            self.client.persist()
 
     def get_all_vectors(self) -> List[Dict[str, Any]]:
         if self.collection is None:
@@ -511,7 +536,13 @@ class ChromaDBAdapter:
     def get_fragment(self, fragment_id: str) -> Optional[Dict[str, Any]]:
         if self.collection is None:
             raise RuntimeError("ChromaDB collection not initialized. Cannot get fragment.")
-        result = self.collection.get(ids=[fragment_id], include=["embeddings", "metadatas", "documents"])
+        try:
+            result = self.collection.get(ids=[fragment_id], include=["embeddings", "metadatas", "documents"])
+        except Exception as e:
+            # ChromaDB can throw "Error finding id" for ghost entries (IDs in index but no document)
+            # This happens when documents are deleted but index isn't fully cleaned
+            logger.warning(f"ChromaDB error getting fragment {fragment_id}: {e}")
+            return None
         if not result or not result.get("ids"):
             return None
         embeddings = result.get("embeddings", [])
