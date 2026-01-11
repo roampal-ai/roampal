@@ -21,7 +21,7 @@ import re
 import json
 import uuid
 import asyncio
-from typing import List, Dict, Any, Optional, Literal
+from typing import List, Dict, Any, Optional, Literal, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
@@ -505,7 +505,9 @@ Prefix (one sentence, max 20 words):"""
 
     async def detect_conversation_outcome(
         self,
-        conversation: List[Dict[str, Any]]
+        conversation: List[Dict[str, Any]],
+        surfaced_memories: Optional[Dict[int, str]] = None,
+        llm_marks: Optional[Dict[int, str]] = None  # v0.2.12 Fix #7
     ) -> Dict[str, Any]:
         """
         Detect outcome from a conversation exchange.
@@ -514,13 +516,18 @@ Prefix (one sentence, max 20 words):"""
 
         Args:
             conversation: List of turns [{role, content}, ...] - typically [assistant, user]
+            surfaced_memories: v0.2.12 - Optional {position: content} for selective scoring
+            llm_marks: v0.2.12 Fix #7 - Main LLM's attribution {pos: '👍'/'👎'/'➖'}
 
         Returns:
             {
                 "outcome": "worked|failed|partial|unknown",
                 "confidence": 0.0-1.0,
                 "indicators": ["signals"],
-                "reasoning": "brief explanation"
+                "reasoning": "brief explanation",
+                "used_positions": [1, 3],  # v0.2.12: which memories were actually used
+                "upvote": [1],              # v0.2.12 Fix #7: positions to upvote
+                "downvote": [2]             # v0.2.12 Fix #7: positions to downvote
             }
         """
         if not self.llm_service:
@@ -529,7 +536,10 @@ Prefix (one sentence, max 20 words):"""
                 "outcome": "unknown",
                 "confidence": 0.0,
                 "indicators": [],
-                "reasoning": "No LLM service available"
+                "reasoning": "No LLM service available",
+                "used_positions": [],
+                "upvote": [],
+                "downvote": []
             }
 
         # Lazy import to avoid circular dependency
@@ -539,7 +549,8 @@ Prefix (one sentence, max 20 words):"""
         if not hasattr(self, '_outcome_detector') or self._outcome_detector is None:
             self._outcome_detector = OutcomeDetector(self.llm_service)
 
-        return await self._outcome_detector.analyze(conversation)
+        # v0.2.12 Fix #7: Pass surfaced memories and llm_marks for causal scoring
+        return await self._outcome_detector.analyze(conversation, surfaced_memories, llm_marks)
 
     async def record_outcome(
         self,
@@ -861,8 +872,13 @@ Session type (1-2 words only):"""
 
     # ==================== Cold Start & Backup API ====================
 
-    async def get_cold_start_context(self, limit: int = 5) -> Optional[str]:
-        """Generate cold-start context from memory_bank, patterns, and history."""
+    async def get_cold_start_context(self, limit: int = 5) -> Tuple[Optional[str], List[str], List[Dict]]:
+        """Generate cold-start context from memory_bank, patterns, and history.
+
+        Returns:
+            Tuple of (formatted_context, doc_ids, raw_context) for outcome scoring.
+            v0.2.12: Now returns doc_ids and raw context for selective outcome scoring.
+        """
         all_context = []
         memory_bank_limit = max(3, limit - 2)
 
@@ -915,9 +931,12 @@ Session type (1-2 words only):"""
             logger.debug(f"[COLD-START] history search failed: {e}")
 
         if not all_context:
-            return None
+            return None, [], []
 
-        return self._format_cold_start_results(all_context)
+        # v0.2.12: Extract doc_ids for outcome scoring
+        doc_ids = [r.get("id") for r in all_context if r.get("id")]
+        formatted = self._format_cold_start_results(all_context)
+        return formatted, doc_ids, all_context
 
     def _format_cold_start_results(self, results: List[Dict]) -> Optional[str]:
         """Format cold-start context with injection protection."""

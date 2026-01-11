@@ -1,10 +1,13 @@
 /**
- * Update Checker Hook - v0.2.8
+ * Update Checker Hook - v0.2.12
  * Checks for available updates on app startup and provides update notification state.
+ * v0.2.12: Persist dismiss state to localStorage so it survives app restarts.
  */
 import { useEffect, useState } from 'react';
 import { open } from '@tauri-apps/api/shell';
 import { ROAMPAL_CONFIG } from '../config/roampal';
+
+const DISMISS_KEY = 'roampal_update_dismissed_version';
 
 interface UpdateInfo {
   available: boolean;
@@ -19,6 +22,16 @@ export function useUpdateChecker() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [checking, setChecking] = useState(false);
+
+  // v0.2.12: Check if this version was previously dismissed
+  useEffect(() => {
+    if (updateInfo?.version) {
+      const dismissedVersion = localStorage.getItem(DISMISS_KEY);
+      if (dismissedVersion === updateInfo.version) {
+        setDismissed(true);
+      }
+    }
+  }, [updateInfo?.version]);
 
   useEffect(() => {
     // Check on mount, with 5s delay to not block startup
@@ -41,7 +54,13 @@ export function useUpdateChecker() {
     return () => clearTimeout(timer);
   }, []);
 
-  const dismiss = () => setDismissed(true);
+  // v0.2.12: Persist dismiss to localStorage
+  const dismiss = () => {
+    if (updateInfo?.version) {
+      localStorage.setItem(DISMISS_KEY, updateInfo.version);
+    }
+    setDismissed(true);
+  };
 
   const openDownload = async () => {
     if (updateInfo?.download_url) {

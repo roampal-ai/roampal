@@ -135,7 +135,89 @@ _task_lock = threading.Lock()
 
 # Search cache for retrieved memory scoring (architecture.md line 565)
 # Tracks which memories were retrieved during search to score them when outcome is detected
-_search_cache: Dict[str, List[str]] = {}  # {conversation_id: [doc_ids]}
+# v0.2.12: Changed to position_map/content_map structure for selective scoring
+_search_cache: Dict[str, Dict[str, Any]] = {}  # {conversation_id: {position_map: {pos: doc_id}, content_map: {pos: content}}}
+
+# v0.2.12 Fix #7: Memory marks cache for causal scoring
+# Stores main LLM's attribution marks (helpful/unhelpful/unused) for each memory position
+_memory_marks_cache: Dict[str, Dict[int, str]] = {}  # {conversation_id: {pos: emoji}}
+
+
+def _cache_memories_for_scoring(
+    conversation_id: str,
+    doc_ids: List[str],
+    contents: List[str],
+    source: str = "search"
+) -> None:
+    """v0.2.12: Cache memories with positional indexing for selective scoring.
+
+    Args:
+        conversation_id: The conversation to cache for
+        doc_ids: List of document IDs to cache
+        contents: List of content strings (parallel to doc_ids)
+        source: Source label for logging (search, organic, cold_start)
+    """
+    if not doc_ids:
+        return
+
+    existing = _search_cache.get(conversation_id, {"position_map": {}, "content_map": {}})
+    position_map = existing.get("position_map", {})
+    content_map = existing.get("content_map", {})
+
+    # Find next available position (1-indexed for LLM friendliness)
+    next_pos = max(position_map.keys(), default=0) + 1
+
+    for doc_id, content in zip(doc_ids, contents):
+        if doc_id:  # Only cache if we have a doc_id
+            position_map[next_pos] = doc_id
+            content_map[next_pos] = content[:200] if content else ""  # Truncate for prompt size
+            next_pos += 1
+
+    _search_cache[conversation_id] = {"position_map": position_map, "content_map": content_map}
+    logger.debug(f"[SEARCH_CACHE] [{source}] Cached {len(doc_ids)} memories, total positions: {len(position_map)}")
+
+
+def parse_memory_marks(response: str) -> tuple[str, Dict[int, str]]:
+    """v0.2.12 Fix #7: Extract and strip memory attribution from LLM response.
+
+    Parses annotations like: <!-- MEM: 1👍 2👎 3➖ -->
+
+    Args:
+        response: The LLM response text
+
+    Returns:
+        Tuple of (clean_response, marks_dict)
+        - clean_response: Response with annotation stripped
+        - marks_dict: {position: emoji} e.g. {1: '👍', 2: '👎', 3: '➖'}
+    """
+    import re
+
+    # Look for memory attribution annotation
+    match = re.search(r'<!--\s*MEM:\s*(.*?)\s*-->', response)
+    if not match:
+        return response, {}
+
+    marks_str = match.group(1)
+    marks = {}
+
+    # Parse "1👍 2👎 3➖" format
+    for item in marks_str.split():
+        try:
+            # Extract position number and emoji
+            pos = int(''.join(c for c in item if c.isdigit()))
+            emoji = ''.join(c for c in item if not c.isdigit())
+            if pos and emoji:
+                marks[pos] = emoji
+        except ValueError:
+            continue  # Skip malformed entries
+
+    # Strip annotation from response
+    clean_response = re.sub(r'<!--\s*MEM:.*?-->', '', response).strip()
+
+    if marks:
+        logger.debug(f"[MEMORY_MARKS] Parsed attribution: up={[p for p,e in marks.items() if e=='👍']}, down={[p for p,e in marks.items() if e=='👎']}, skip={[p for p,e in marks.items() if e=='➖']}")
+
+    return clean_response, marks
 
 
 def use_dynamic_limits() -> bool:
@@ -552,10 +634,12 @@ class AgentChatService:
                 logger.info(f"[COLD-START] Auto-injecting user profile from Content KG on message 1...")
                 try:
                     # Get cold-start context from Content KG (or fallback to vector search)
-                    context_summary = await asyncio.wait_for(
+                    # v0.2.12: Now returns tuple (formatted_context, doc_ids, raw_context)
+                    cold_start_result = await asyncio.wait_for(
                         self.memory.get_cold_start_context(limit=5),
                         timeout=25.0
                     )
+                    context_summary, cold_start_doc_ids, cold_start_raw = cold_start_result
 
                     if context_summary:
                         logger.info(f"[COLD-START] Injecting user profile: {context_summary[:100]}...")
@@ -563,6 +647,17 @@ class AgentChatService:
                             "role": "system",
                             "content": context_summary
                         })
+
+                        # v0.2.12: Cache cold start doc_ids for selective scoring
+                        if cold_start_doc_ids:
+                            contents = [r.get("content", "") for r in cold_start_raw]
+                            _cache_memories_for_scoring(
+                                conversation_id,
+                                cold_start_doc_ids,
+                                contents,
+                                source="cold_start"
+                            )
+                            logger.info(f"[COLD-START] Cached {len(cold_start_doc_ids)} doc_ids for scoring")
                     else:
                         logger.info(f"[COLD-START] No user profile context available yet")
 
@@ -697,6 +792,39 @@ class AgentChatService:
                         "content": guidance_msg
                     })
                     logger.info(f"[CONTEXTUAL GUIDANCE] Context={context_type}, Memory facts={len(relevant_facts)}, Content insights={len(org_context.get('relevant_patterns', []))}, Action stats={len(action_stats)}")
+
+                    # v0.2.12: Cache organic recall doc_ids for selective scoring
+                    organic_doc_ids = []
+                    organic_contents = []
+
+                    # From memory_bank facts
+                    for fact in relevant_facts:
+                        doc_id = fact.get('id') or fact.get('doc_id')
+                        if doc_id:
+                            organic_doc_ids.append(doc_id)
+                            organic_contents.append(fact.get('content', ''))
+
+                    # From content KG patterns
+                    if org_context:
+                        for pattern in org_context.get('relevant_patterns', []):
+                            doc_id = pattern.get('doc_id')
+                            if doc_id:
+                                organic_doc_ids.append(doc_id)
+                                organic_contents.append(pattern.get('text', pattern.get('insight', '')))
+                        for outcome in org_context.get('past_outcomes', []):
+                            doc_id = outcome.get('doc_id')
+                            if doc_id:
+                                organic_doc_ids.append(doc_id)
+                                organic_contents.append(outcome.get('insight', ''))
+
+                    if organic_doc_ids:
+                        _cache_memories_for_scoring(
+                            conversation_id,
+                            organic_doc_ids,
+                            organic_contents,
+                            source="organic"
+                        )
+                        logger.info(f"[CONTEXTUAL GUIDANCE] Cached {len(organic_doc_ids)} organic recall doc_ids for scoring")
 
             except Exception as e:
                 logger.error(f"[CONTEXTUAL GUIDANCE ERROR] {e}", exc_info=True)
@@ -963,6 +1091,13 @@ class AgentChatService:
             if memory_entries:
                 logger.warning(f"[MEMORY_BANK] Detected {len(memory_entries)} old-style inline tags - LLM should use tools instead")
 
+            # v0.2.12 Fix #7: Parse and strip memory attribution marks
+            # Must happen BEFORE yielding to user (annotation is hidden)
+            clean_response, memory_marks = parse_memory_marks(clean_response)
+            if memory_marks:
+                _memory_marks_cache[conversation_id] = memory_marks
+                logger.info(f"[MEMORY_MARKS] Cached {len(memory_marks)} attribution marks for conversation {conversation_id}")
+
             # v0.2.5: Yield complete response at once (buffered model)
             if clean_response:
                 yield {"type": "response", "content": clean_response}
@@ -1040,8 +1175,23 @@ class AgentChatService:
                                 {"role": "user", "content": message}  # Current user feedback
                             ]
 
-                        # Detect outcome using LLM
-                        outcome_result = await self.memory.detect_conversation_outcome(outcome_conversation)
+                        # v0.2.12: Get surfaced memories for selective scoring
+                        surfaced_memories = None
+                        if conversation_id in _search_cache:
+                            cached = _search_cache[conversation_id]
+                            content_map = cached.get("content_map", {})
+                            if content_map:
+                                surfaced_memories = content_map
+
+                        # v0.2.12 Fix #7: Get memory marks for causal scoring
+                        llm_marks = _memory_marks_cache.get(conversation_id)
+
+                        # Detect outcome using LLM (v0.2.12: pass surfaced memories and llm_marks)
+                        outcome_result = await self.memory.detect_conversation_outcome(
+                            outcome_conversation,
+                            surfaced_memories=surfaced_memories,
+                            llm_marks=llm_marks
+                        )
                         logger.info(f"[OUTCOME] Detection result: {outcome_result.get('outcome')} (confidence: {outcome_result.get('confidence', 0):.2f})")
 
                         if outcome_result.get("outcome") in ["worked", "failed", "partial"]:
@@ -1054,20 +1204,74 @@ class AgentChatService:
                                 )
                             logger.info(f"[OUTCOME] Recorded '{outcome}' for doc_id {prev_assistant['doc_id']}")
 
-                            # Score retrieved memories with same outcome (architecture.md line 565)
+                            # v0.2.12 Fix #7: Causal scoring using upvote/downvote arrays
                             if conversation_id in _search_cache:
-                                cached_doc_ids = _search_cache[conversation_id]
-                                logger.info(f"[OUTCOME] Scoring {len(cached_doc_ids)} cached memories with outcome={outcome}")
+                                cached = _search_cache[conversation_id]
+                                position_map = cached.get("position_map", {})
 
-                                for cached_doc_id in cached_doc_ids:
-                                    try:
-                                        await self.memory.record_outcome(doc_id=cached_doc_id, outcome=outcome)
-                                    except Exception as e:
-                                        logger.warning(f"[OUTCOME] Failed to score cached memory {cached_doc_id}: {e}")
+                                upvote_positions = outcome_result.get("upvote", [])
+                                downvote_positions = outcome_result.get("downvote", [])
 
-                                # Clear cache after scoring
+                                # v0.2.12 Fix #7: If we have explicit upvote/downvote, use causal scoring
+                                if upvote_positions or downvote_positions:
+                                    upvote_count = 0
+                                    downvote_count = 0
+
+                                    # Score upvotes as "worked"
+                                    for pos in upvote_positions:
+                                        doc_id = position_map.get(pos)
+                                        if doc_id:
+                                            try:
+                                                await self.memory.record_outcome(doc_id=doc_id, outcome="worked")
+                                                upvote_count += 1
+                                            except Exception as e:
+                                                logger.warning(f"[OUTCOME] Failed to upvote memory at position {pos}: {e}")
+
+                                    # Score downvotes as "failed"
+                                    for pos in downvote_positions:
+                                        doc_id = position_map.get(pos)
+                                        if doc_id:
+                                            try:
+                                                await self.memory.record_outcome(doc_id=doc_id, outcome="failed")
+                                                downvote_count += 1
+                                            except Exception as e:
+                                                logger.warning(f"[OUTCOME] Failed to downvote memory at position {pos}: {e}")
+
+                                    logger.info(f"[OUTCOME] Causal scoring: upvoted {upvote_count}, downvoted {downvote_count}, skipped {len(position_map) - upvote_count - downvote_count}")
+
+                                else:
+                                    # v0.2.12: Fallback to used_positions (Fix #5)
+                                    used_positions = outcome_result.get("used_positions", [])
+
+                                    if used_positions:
+                                        # Selective scoring: only score memories that were used
+                                        scored_count = 0
+                                        for pos in used_positions:
+                                            doc_id = position_map.get(pos)
+                                            if doc_id:
+                                                try:
+                                                    await self.memory.record_outcome(doc_id=doc_id, outcome=outcome)
+                                                    scored_count += 1
+                                                except Exception as e:
+                                                    logger.warning(f"[OUTCOME] Failed to score memory at position {pos}: {e}")
+                                        logger.info(f"[OUTCOME] Selective scoring: scored {scored_count}/{len(used_positions)} used memories, skipped {len(position_map) - scored_count}")
+                                    else:
+                                        # Fallback: score all (backwards compatibility or no memory info)
+                                        logger.info(f"[OUTCOME] No used_positions returned, scoring all {len(position_map)} cached memories")
+                                        for doc_id in position_map.values():
+                                            try:
+                                                await self.memory.record_outcome(doc_id=doc_id, outcome=outcome)
+                                            except Exception as e:
+                                                logger.warning(f"[OUTCOME] Failed to score cached memory {doc_id}: {e}")
+
+                                # Clear caches after scoring
                                 del _search_cache[conversation_id]
                                 logger.debug(f"[OUTCOME] Cleared search cache for conversation {conversation_id}")
+
+                            # v0.2.12 Fix #7: Clear memory marks cache
+                            if conversation_id in _memory_marks_cache:
+                                del _memory_marks_cache[conversation_id]
+                                logger.debug(f"[OUTCOME] Cleared memory marks cache for conversation {conversation_id}")
 
                             # v0.2.6: Score cached actions for Action KG
                             if conversation_id in _agent_action_cache:
@@ -1408,17 +1612,42 @@ Use this naturally: "This worked 3 times before" or "According to [source]..."
 
 Use Markdown: **bold**, *italic*, `code`, # headings, lists, ```code blocks```, > blockquotes""")
 
-        # 8. OUTCOME LEARNING (Automatic for internal system)
+        # 8. OUTCOME LEARNING (How it actually works)
         parts.append("""
 
-[Outcome Scoring - Automatic]
+[Outcome Scoring - How It Works]
 
-The system automatically detects outcomes from user reactions:
-• User satisfied → memories you used get promoted (higher scores = easier to find)
-• User corrected you → memories get demoted (lower scores = filtered out)
-• This happens automatically - you don't need to do anything
+After each exchange, a separate LLM call (OutcomeDetector) analyzes your conversation:
+1. You respond to user
+2. User sends follow-up message
+3. System calls OutcomeDetector to analyze: "Did this help?"
+4. OutcomeDetector (you, in a separate call) evaluates user's reaction:
+   • "worked" = enthusiastic thanks, user moves to new topic
+   • "failed" = user corrects you, repeats question, says "no/wrong"
+   • "partial" = lukewarm "okay", "I guess", helped but incomplete
+   • "unknown" = no clear signal
+5. Memories you retrieved get scored with that outcome
 
-Your effectiveness improves because bad advice gets filtered out over time.""")
+What gets scored:
+• Memories from search_memory calls are cached
+• When outcome is detected, ALL cached memories get that score
+• Good memories rise (easier to find), bad ones sink (filtered out)
+
+You can explain this to users - it's not magic, it's you analyzing your own conversations.
+
+[Memory Attribution - v0.2.12]
+
+When memories are surfaced (shown as numbered list before your response), you MUST add a hidden annotation at the END of your response:
+
+<!-- MEM: 1👍 2👎 3➖ -->
+
+Markers:
+👍 = this memory helped me answer well
+👎 = this memory was wrong or misleading
+➖ = I didn't use this memory
+
+This annotation is invisible to the user but helps the system learn which memories are helpful vs harmful.
+Only include this annotation when you see numbered memories in your context.""")
 
         # 9. ACTION-EFFECTIVENESS STATS
         parts.append("""
@@ -2293,11 +2522,12 @@ Respond with ONLY the title, nothing else."""
             )
 
             # Cache doc_ids for retrieved memory scoring (architecture.md line 565)
+            # v0.2.12: Use helper function with position_map for selective scoring
             if tool_results:
                 doc_ids = [r.get("id") or r.get("doc_id") for r in tool_results if r.get("id") or r.get("doc_id")]
+                contents = [r.get('text', r.get('content', '')) for r in tool_results]
                 if doc_ids:
-                    _search_cache[conversation_id] = doc_ids
-                    logger.debug(f"[SEARCH_CACHE] Cached {len(doc_ids)} doc_ids for conversation {conversation_id}")
+                    _cache_memories_for_scoring(conversation_id, doc_ids, contents, source="search")
 
             # Format results with metadata (v0.2.5: include book titles for LLM visibility)
             # v0.2.8: Full content, no truncation

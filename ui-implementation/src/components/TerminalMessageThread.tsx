@@ -223,11 +223,16 @@ const MessageRow = memo(({
 }) => {
   const rowRef = useRef<HTMLDivElement>(null);
 
+  // v0.2.12: Watch actual content changes, not just message reference
+  const messageContent = message === 'loading-indicator' ? null : message.content;
+  const messageStreaming = message === 'loading-indicator' ? false : message.streaming;
+  const messageEventsLength = message === 'loading-indicator' ? 0 : message.events?.length;
+
   useLayoutEffect(() => {
     if (rowRef.current) {
       setSize(index, rowRef.current.getBoundingClientRect().height);
     }
-  }, [setSize, index, message]); // Re-measure if message content changes
+  }, [setSize, index, messageContent, messageStreaming, messageEventsLength]);
 
   if (message === 'loading-indicator') {
     return (
@@ -393,9 +398,17 @@ const MessageRow = memo(({
     </div>
   );
 }, (prev, next) => {
-  // Only re-render if message, dimensions, or processing state changes
-  // Be careful with object equality on message
-  return prev.message === next.message && prev.index === next.index && prev.style === next.style && prev.isProcessing === next.isProcessing;
+  // v0.2.12: Compare actual content, not just references
+  if (prev.message === 'loading-indicator' || next.message === 'loading-indicator') {
+    return prev.message === next.message && prev.isProcessing === next.isProcessing;
+  }
+  return (
+    prev.message.content === next.message.content &&
+    prev.message.streaming === next.message.streaming &&
+    prev.message.events?.length === next.message.events?.length &&
+    prev.index === next.index &&
+    prev.isProcessing === next.isProcessing
+  );
 });
 
 interface TerminalMessageThreadProps {
@@ -446,7 +459,19 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
     }
   }, []);
 
-  const getSize = (index: number) => sizeMap.current[index] || 60; // Default estimate
+  // v0.2.12: Better initial height estimation based on content
+  const getSize = (index: number) => {
+    if (sizeMap.current[index]) return sizeMap.current[index];
+    // Estimate based on content length for better initial positioning
+    const msg = messages[index];
+    if (!msg) return 60;
+    const contentLength = msg.content?.length || 0;
+    const hasTools = msg.toolExecutions?.length || msg.events?.some(e => e.type === 'tool_execution');
+    const baseHeight = 40;
+    const textHeight = Math.ceil(contentLength / 80) * 20; // ~80 chars per line, 20px per line
+    const toolHeight = hasTools ? 30 : 0;
+    return Math.max(60, baseHeight + textHeight + toolHeight);
+  };
 
   // Auto-scroll logic
   useEffect(() => {

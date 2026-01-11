@@ -900,6 +900,38 @@ The system uses LLM intelligence for outcome detection only. All scoring, promot
 
 **LLM Service Injection (Internal System Only):** The LLM client is injected into the memory system after initialization via `memory.set_llm_service(llm_client)` ([main.py:295-298](../main.py#L295-L298)). This allows the `OutcomeDetector` to access the LLM for analyzing conversation outcomes. **Note**: MCP system does not use automatic detection - external LLMs provide outcomes **explicitly** via the `outcome` parameter (optional, defaults to "unknown" if not provided).
 
+**OutcomeDetector API (v0.2.12):** [outcome_detector.py](../ui-implementation/src-tauri/backend/modules/advanced/outcome_detector.py)
+
+```python
+async def analyze(
+    self,
+    conversation: List[Dict[str, Any]],
+    surfaced_memories: Optional[Dict[int, str]] = None,  # v0.2.12 Fix #5
+    llm_marks: Optional[Dict[int, str]] = None           # v0.2.12 Fix #7
+) -> Dict[str, Any]:
+    """
+    Returns:
+        {
+            "outcome": "worked|failed|partial|unknown",
+            "confidence": 0.0-1.0,
+            "indicators": ["explicit_thanks", ...],
+            "reasoning": "User said thanks",
+            "used_positions": [1, 3],           # v0.2.12 Fix #5: inferred usage
+            "upvote": [1],                      # v0.2.12 Fix #7: positions to upvote
+            "downvote": [2]                     # v0.2.12 Fix #7: positions to downvote
+        }
+    """
+```
+
+**Parameters:**
+- `conversation`: Recent turns for outcome analysis
+- `surfaced_memories` (v0.2.12): `{position: content}` - memories shown to main LLM, used for selective scoring
+- `llm_marks` (v0.2.12): `{position: emoji}` - main LLM's attribution marks (👍👎➖)
+
+**Returns:**
+- `used_positions`: Inferred from response analysis (Fix #5 fallback)
+- `upvote`/`downvote`: Calculated from llm_marks + outcome (Fix #7)
+
 **The Clean Flow:**
 
 1. **User:** "What's an IRA?"
@@ -926,6 +958,31 @@ The system uses LLM intelligence for outcome detection only. All scoring, promot
 **Key Principle:** The outcome detection scores BOTH:
 - The PREVIOUS exchange that the user is reacting to
 - Any retrieved memories (working/history/patterns) that were used in that response
+
+**v0.2.12 Enhancements - Selective & Causal Scoring:**
+
+The internal system now has parity with MCP's selective scoring, plus causal attribution:
+
+1. **Selective Scoring (Fix #5):** OutcomeDetector identifies which memories were actually USED in the response, not just surfaced. Only used memories get scored.
+   - Cache structure: `{position_map: {1: doc_id, ...}, content_map: {1: "content preview", ...}}`
+   - OutcomeDetector returns `used_positions: [1, 3]`
+   - Only those positions get the outcome score; unused memories stay neutral
+
+2. **Causal Attribution (Fix #7):** Main LLM marks memories as helpful/unhelpful at response time:
+   - Main LLM adds hidden annotation: `<!-- MEM: 1👍 2👎 3➖ -->`
+   - Parsed and stripped before showing response to user
+   - Passed to OutcomeDetector which combines marks with outcome detection
+   - Scoring matrix:
+     ```
+                     | YES (worked) | KINDA (partial) | NO (failed) |
+     ----------------|--------------|-----------------|-------------|
+     👍 (helpful)    | upvote       | slight_up       | neutral     |
+     👎 (unhelpful)  | neutral      | slight_down     | downvote    |
+     ➖ (no_impact)  | neutral      | neutral         | neutral     |
+     ```
+   - **Key insight:** A positive exchange can still downvote bad memories if LLM marked them 👎
+
+3. **Fallback behavior:** If main LLM doesn't include annotation, falls back to Fix #5 (infer usage) → Fix #4 (score all)
 
 **Scoring Rules:**
 - `worked` → +0.2 to score
@@ -3075,10 +3132,17 @@ MCP and Internal prompts use different approaches based on system differences:
 - Automatic outcome detection - LLM doesn't need to call anything for scoring
 - Prompt explains what happens automatically, not what LLM must do
 - Section 8: "Outcome Scoring - Automatic"
+- **v0.2.12 Memory Attribution:** Main LLM adds `<!-- MEM: 1👍 2👎 3➖ -->` annotation for causal scoring
+  - 👍 = memory helped me answer well
+  - 👎 = memory was wrong/misleading
+  - ➖ = memory not used
+  - Annotation stripped before showing response to user
+  - Parsed by `parse_memory_marks()` and passed to OutcomeDetector
 
 **Implementation:**
 - MCP tools: [main.py:807-948](../ui-implementation/src-tauri/backend/main.py#L807-L948)
 - Internal prompt: [agent_chat.py:1370-1380](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py#L1370-L1380)
+- v0.2.12 memory attribution: [agent_chat.py](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py) - `parse_memory_marks()` function
 
 #### Available MCP Tools (6)
 

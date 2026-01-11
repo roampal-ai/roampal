@@ -207,7 +207,7 @@ Works with any tool-calling model via Ollama or LM Studio:
 |----------|-------------|
 | [Architecture](dev/docs/architecture.md) | 5-tier memory, knowledge graphs, technical deep-dive |
 | [Benchmarks](dev/docs/BENCHMARKS.md) | Test methodology, statistical significance |
-| [Release Notes](dev/docs/releases/v0.2.11/RELEASE_NOTES.md) | Latest: KG 25x faster, Message Virtualization, Store Subscription Fix |
+| [Release Notes](dev/docs/releases/v0.2.12/RELEASE_NOTES.md) | Latest: Memory Attribution Scoring, Virtualization Fix, Organic Recall Scoring |
 
 ---
 
