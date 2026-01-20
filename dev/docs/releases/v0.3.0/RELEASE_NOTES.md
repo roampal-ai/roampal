@@ -1,6 +1,6 @@
 # Roampal Desktop v0.3.0 - Performance & Polish
 
-**Release Date:** January 16, 2025
+**Release Date:** January 20, 2025
 
 ---
 
