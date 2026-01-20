@@ -168,8 +168,8 @@ fn read_api_port_from_env(backend_dir: &std::path::Path) -> u16 {
     8765 // Default to PROD port
 }
 
-// Read data directory name from backend/.env file
-fn read_data_dir_from_env(backend_dir: &std::path::Path) -> String {
+// v0.3.0: Read ROAMPAL_DATA_DIR from backend/.env file (v0.2.12 compatibility)
+fn read_data_dir_from_env(backend_dir: &std::path::Path) -> Option<String> {
     let env_file = backend_dir.join(".env");
     if let Ok(content) = std::fs::read_to_string(&env_file) {
         for line in content.lines() {
@@ -178,14 +178,13 @@ fn read_data_dir_from_env(backend_dir: &std::path::Path) -> String {
                     let dir_name = dir_name.trim();
                     if !dir_name.is_empty() {
                         println!("[read_data_dir] Found data dir '{}' in .env file", dir_name);
-                        return dir_name.to_string();
+                        return Some(dir_name.to_string());
                     }
                 }
             }
         }
     }
-    println!("[read_data_dir] Using default data dir 'Roampal'");
-    "Roampal".to_string() // Default to PROD data dir
+    None
 }
 
 // v0.2.9: Check if port is already in use (backend survived refresh)
@@ -236,9 +235,9 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
     let main_py = backend_dir.join("main.py");
     let backend_root = &backend_dir;
 
-    // Read API port and data dir from .env file
+    // Read config from .env file
     let api_port = read_api_port_from_env(&backend_dir);
-    let data_dir = read_data_dir_from_env(&backend_dir);
+    let data_dir = read_data_dir_from_env(&backend_dir); // v0.3.0: v0.2.12 compatibility
 
     // v0.2.9: Check if port is already in use (backend survived window refresh)
     // This fixes the 120-second timeout when user presses Ctrl+R
@@ -250,7 +249,6 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
     println!("[start_backend] Python exe: {:?}", python_exe);
     println!("[start_backend] Main.py: {:?}", main_py);
     println!("[start_backend] API port: {}", api_port);
-    println!("[start_backend] Data dir: {}", data_dir);
 
     // Check if main.py exists with more details
     println!("[start_backend] Checking main.py existence...");
@@ -287,9 +285,21 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
             .arg(&main_py)
             .current_dir(backend_root)
             .env("PYTHONPATH", pythonpath)
-            .env("ROAMPAL_API_PORT", api_port.to_string())
-            .env("ROAMPAL_DATA_DIR", &data_dir)
-            .creation_flags(CREATE_NO_WINDOW);
+            .env("ROAMPAL_API_PORT", api_port.to_string());
+
+        // Set ROAMPAL_DEV based on build type
+        #[cfg(debug_assertions)]
+        child_cmd.env("ROAMPAL_DEV", "1");
+        #[cfg(not(debug_assertions))]
+        child_cmd.env("ROAMPAL_DEV", "0");
+
+        // v0.3.0: Pass ROAMPAL_DATA_DIR if set in .env (v0.2.12 compatibility)
+        // This takes priority over ROAMPAL_DEV in settings.py
+        if let Some(ref dir) = data_dir {
+            child_cmd.env("ROAMPAL_DATA_DIR", dir);
+        }
+
+        child_cmd.creation_flags(CREATE_NO_WINDOW);
 
         let child = child_cmd
             .spawn()
@@ -387,14 +397,21 @@ fn run_mcp_backend() -> ! {
     {
         // NOTE: Don't use CREATE_NO_WINDOW for MCP mode - it breaks stdio pipes
         // MCP requires proper stdin/stdout for JSON-RPC communication
-        let mut child = Command::new(&python_exe)
-            .arg(&main_py)
+        let mut cmd = Command::new(&python_exe);
+        cmd.arg(&main_py)
             .arg("--mcp")
             .current_dir(&backend_dir)
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .spawn()
+            .stderr(std::process::Stdio::inherit());
+
+        // Set ROAMPAL_DEV based on build type (single source of truth for data path)
+        #[cfg(debug_assertions)]
+        cmd.env("ROAMPAL_DEV", "1");
+        #[cfg(not(debug_assertions))]
+        cmd.env("ROAMPAL_DEV", "0");
+
+        let mut child = cmd.spawn()
             .expect("Failed to start MCP server");
 
         let status = child.wait().expect("MCP server wait failed");
@@ -403,14 +420,21 @@ fn run_mcp_backend() -> ! {
 
     #[cfg(not(target_os = "windows"))]
     {
-        let mut child = Command::new(&python_exe)
-            .arg(&main_py)
+        let mut cmd = Command::new(&python_exe);
+        cmd.arg(&main_py)
             .arg("--mcp")
             .current_dir(&backend_dir)
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .spawn()
+            .stderr(std::process::Stdio::inherit());
+
+        // Set ROAMPAL_DEV based on build type (single source of truth for data path)
+        #[cfg(debug_assertions)]
+        cmd.env("ROAMPAL_DEV", "1");
+        #[cfg(not(debug_assertions))]
+        cmd.env("ROAMPAL_DEV", "0");
+
+        let mut child = cmd.spawn()
             .expect("Failed to start MCP server");
 
         let status = child.wait().expect("MCP server wait failed");

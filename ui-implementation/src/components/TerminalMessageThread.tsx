@@ -1,7 +1,6 @@
-import React, { useRef, useEffect, useMemo, useState, memo, useCallback, useLayoutEffect } from 'react';
-import { Terminal, CheckCircle, XCircle, AlertCircle, Loader2, Search, Wrench, MessageSquare, CheckCircle2, ChevronDown, ChevronRight, BookOpen, Database } from 'lucide-react';
-import { VariableSizeList as List } from 'react-window';
-import { MemoryCitation } from './MemoryCitation';
+import React, { useRef, useEffect, useState, memo, useCallback } from 'react';
+import { Terminal } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { CodeChangePreview } from './CodeChangePreview';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -122,10 +121,14 @@ const ThinkingDots: React.FC = () => {
   );
 };
 
-// Citations Block Component - Terminal-style
-const CitationsBlock: React.FC<{ citations: any[] }> = ({ citations }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-
+// v0.3.0: Surfaced Memories Block - shows what context was injected
+interface SurfacedMemoriesBlockProps {
+  memories: Array<{ id: string; collection: string; text: string; score?: number }>;
+  isExpanded: boolean;
+  onToggle: () => void;
+}
+const SurfacedMemoriesBlock: React.FC<SurfacedMemoriesBlockProps> = ({ memories, isExpanded, onToggle }) => {
+  const [expandedItems, setExpandedItems] = React.useState<Set<number>>(new Set());
   const collectionColors: Record<string, string> = {
     'books': 'text-purple-400',
     'working': 'text-blue-400',
@@ -134,11 +137,107 @@ const CitationsBlock: React.FC<{ citations: any[] }> = ({ citations }) => {
     'memory_bank': 'text-pink-400'
   };
 
+  const PREVIEW_LENGTH = 80;
+
+  const toggleItem = (idx: number) => {
+    setExpandedItems(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div className="mt-2 pt-2 border-t border-zinc-800/30 font-mono">
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-400 transition-colors"
+      >
+        <span className="text-zinc-600">{isExpanded ? '▼' : '▶'}</span>
+        <span className="text-zinc-500">
+          context: {memories.length} {memories.length === 1 ? 'memory' : 'memories'}
+        </span>
+      </button>
+
+      {isExpanded && (
+        <div className="mt-2 space-y-1.5 pl-4 border-l border-zinc-800/50 text-left">
+          {memories.map((mem, idx) => {
+            const isItemExpanded = expandedItems.has(idx);
+            const needsTruncation = mem.text && mem.text.length > PREVIEW_LENGTH;
+            const displayText = isItemExpanded || !needsTruncation
+              ? mem.text
+              : mem.text.slice(0, PREVIEW_LENGTH) + '...';
+
+            return (
+              <div key={idx} className="text-xs text-zinc-500 leading-relaxed">
+                <div className="flex items-start gap-2">
+                  <span className="text-zinc-600 select-none">[{idx + 1}]</span>
+                  <div className="flex-1">
+                    <span className={collectionColors[mem.collection] || 'text-zinc-400'}>
+                      {mem.collection}
+                    </span>
+                    {mem.text && (
+                      <div
+                        className={`text-zinc-600 text-[11px] leading-relaxed mt-0.5 ${needsTruncation ? 'cursor-pointer hover:text-zinc-500' : ''}`}
+                        onClick={needsTruncation ? () => toggleItem(idx) : undefined}
+                        title={needsTruncation ? (isItemExpanded ? 'Click to collapse' : 'Click to expand') : undefined}
+                      >
+                        {displayText}
+                        {needsTruncation && !isItemExpanded && (
+                          <span className="text-zinc-700 ml-1">[+]</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Citations Block Component - Terminal-style
+interface CitationsBlockProps {
+  citations: any[];
+  isExpanded: boolean;
+  onToggle: () => void;
+}
+const CitationsBlock: React.FC<CitationsBlockProps> = ({ citations, isExpanded, onToggle }) => {
+  const [expandedItems, setExpandedItems] = React.useState<Set<number>>(new Set());
+  const collectionColors: Record<string, string> = {
+    'books': 'text-purple-400',
+    'working': 'text-blue-400',
+    'history': 'text-green-400',
+    'patterns': 'text-yellow-400',
+    'memory_bank': 'text-pink-400'
+  };
+
+  const PREVIEW_LENGTH = 80;
+
+  const toggleItem = (idx: number) => {
+    setExpandedItems(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="mt-2 pt-2 border-t border-zinc-800/30 font-mono">
       <div>
         <button
-          onClick={() => setIsExpanded(!isExpanded)}
+          onClick={onToggle}
           className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-400 transition-colors"
         >
           <span className="text-zinc-600">{isExpanded ? '▼' : '▶'}</span>
@@ -149,25 +248,41 @@ const CitationsBlock: React.FC<{ citations: any[] }> = ({ citations }) => {
 
         {isExpanded && (
           <div className="mt-2 space-y-1.5 pl-4 border-l border-zinc-800/50 text-left">
-            {citations.map((citation: any, idx: number) => (
-              <div key={idx} className="text-xs text-zinc-500 leading-relaxed">
-                <div className="flex items-start gap-2">
-                  <span className="text-zinc-600 select-none">[{citation.citation_id || idx + 1}]</span>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className={collectionColors[citation.collection] || 'text-zinc-400'}>
-                        {citation.collection}
-                      </span>
-                    </div>
-                    {citation.text && (
-                      <div className="text-zinc-600 text-[11px] leading-relaxed pl-4 border-l border-zinc-800/30">
-                        {citation.text}
+            {citations.map((citation: any, idx: number) => {
+              const isItemExpanded = expandedItems.has(idx);
+              const text = citation.text || '';
+              const needsTruncation = text.length > PREVIEW_LENGTH;
+              const displayText = isItemExpanded || !needsTruncation
+                ? text
+                : text.slice(0, PREVIEW_LENGTH) + '...';
+
+              return (
+                <div key={idx} className="text-xs text-zinc-500 leading-relaxed">
+                  <div className="flex items-start gap-2">
+                    <span className="text-zinc-600 select-none">[{citation.citation_id || idx + 1}]</span>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className={collectionColors[citation.collection] || 'text-zinc-400'}>
+                          {citation.collection}
+                        </span>
                       </div>
-                    )}
+                      {text && (
+                        <div
+                          className={`text-zinc-600 text-[11px] leading-relaxed pl-4 border-l border-zinc-800/30 ${needsTruncation ? 'cursor-pointer hover:text-zinc-500' : ''}`}
+                          onClick={needsTruncation ? () => toggleItem(idx) : undefined}
+                          title={needsTruncation ? (isItemExpanded ? 'Click to collapse' : 'Click to expand') : undefined}
+                        >
+                          {displayText}
+                          {needsTruncation && !isItemExpanded && (
+                            <span className="text-zinc-700 ml-1">[+]</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -186,7 +301,13 @@ interface Message {
   attachments?: any[];
   memories?: any[];
   citations?: any[];
-  thinking?: string; // LLM reasoning from <think> tags
+  surfacedMemories?: Array<{
+    id: string;
+    collection: string;
+    text: string;
+    score?: number;
+  }>;
+  thinking?: string;
   toolExecutions?: Array<{
     tool: string;
     status: 'running' | 'completed' | 'failed';
@@ -197,208 +318,214 @@ interface Message {
     arguments?: Record<string, any>;
     resultPreview?: string;
   }>;
-  code_changes?: any[]; // For future code change previews
+  code_changes?: any[];
   events?: Array<{
     type: 'thinking' | 'tool_execution' | 'text' | 'text_segment';
     timestamp: number;
     data: any;
-  }>; // Chronological event timeline
-  _lastTextEndIndex?: number; // v0.2.5: Internal tracking for text segment boundaries
+  }>;
+  _lastTextEndIndex?: number;
+}
+
+// v0.3.0: Simplified MessageRow - no longer needs virtualization-specific props
+// TanStack Virtual handles measurement automatically via measureElement ref
+interface MessageRowProps {
+  message: Message | 'loading-indicator';
+  renderContent: (content: string) => React.ReactNode;
+  isProcessing: boolean;
+  isMemoryExpanded: boolean;
+  isCitationExpanded: boolean;
+  onToggleMemory: () => void;
+  onToggleCitation: () => void;
 }
 
 const MessageRow = memo(({
   message,
-  style,
-  index,
-  setSize,
   renderContent,
-  isProcessing
-}: {
-  message: Message | 'loading-indicator',
-  style: React.CSSProperties,
-  index: number,
-  setSize: (index: number, size: number) => void,
-  renderContent: (content: string) => React.ReactNode,
-  isProcessing: boolean
-}) => {
-  const rowRef = useRef<HTMLDivElement>(null);
-
-  // v0.2.12: Watch actual content changes, not just message reference
-  const messageContent = message === 'loading-indicator' ? null : message.content;
-  const messageStreaming = message === 'loading-indicator' ? false : message.streaming;
-  const messageEventsLength = message === 'loading-indicator' ? 0 : message.events?.length;
-
-  useLayoutEffect(() => {
-    if (rowRef.current) {
-      setSize(index, rowRef.current.getBoundingClientRect().height);
-    }
-  }, [setSize, index, messageContent, messageStreaming, messageEventsLength]);
-
+  isProcessing,
+  isMemoryExpanded,
+  isCitationExpanded,
+  onToggleMemory,
+  onToggleCitation,
+}: MessageRowProps) => {
+  // v0.3.0: Don't render loading-indicator at all when not processing
   if (message === 'loading-indicator') {
+    if (!isProcessing) {
+      return null;
+    }
     return (
-      <div style={style}>
-        <div ref={rowRef} className="pb-4">
-          {isProcessing && (
-            <div className="flex items-start gap-3">
-              <div className="flex-1">
-                <div className="text-sm text-zinc-500 flex items-center gap-2">
-                  <ThinkingDots />
-                </div>
-              </div>
+      <div className="pb-4">
+        <div className="flex items-start gap-3">
+          <div className="flex-1">
+            <div className="text-sm text-zinc-500 flex items-center gap-2">
+              <ThinkingDots />
             </div>
-          )}
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={style}>
-      <div ref={rowRef} className="pb-4 pr-2">
-        <div className="group">
-          {message.sender === 'user' && (
-            <div className="flex items-start gap-3">
-              <span className="text-zinc-600 text-sm mt-0.5">&gt;</span>
-              <div className="flex-1">
-                <div className="text-zinc-400 text-sm leading-relaxed">{message.content}</div>
-                {message.attachments && message.attachments.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {message.attachments.map((att: any, idx: number) => (
-                      <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 bg-zinc-800 rounded text-xs text-zinc-400">
-                        📎 {att.name} {att.size ? `(${Math.ceil(att.size / 1024)}KB)` : ''}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
+    <div className="pb-4">
+      <div className="group">
+        {message.sender === 'user' && (
+          <div className="flex items-start gap-3 border-l-2 border-blue-500/40 pl-3">
+            <span className="text-blue-400/70 text-sm mt-0.5">&gt;</span>
+            <div className="flex-1">
+              <div className="text-zinc-300 text-sm leading-relaxed">{message.content}</div>
+              {message.attachments && message.attachments.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {message.attachments.map((att: any, idx: number) => (
+                    <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 bg-zinc-800 rounded text-xs text-zinc-400">
+                      {att.name} {att.size ? `(${Math.ceil(att.size / 1024)}KB)` : ''}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+          </div>
+        )}
 
-          {message.sender === 'assistant' && (
-            <div className="flex items-start gap-3">
-              <div className="flex-1 min-w-0">
-                {message.events && message.events.length > 0 ? (
-                  <>
-                    {(() => {
-                      const hasTextSegments = message.events.some((e: any) => e.type === 'text_segment');
-                      const hasTools = message.events.some((e: any) => e.type === 'tool_execution');
-                      let liveStreamingText = '';
-                      if (message.streaming && hasTools && message.content) {
-                        const lastEndIndex = message._lastTextEndIndex || 0;
-                        liveStreamingText = message.content.slice(lastEndIndex);
-                      }
+        {message.sender === 'assistant' && (
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              {/* v0.3.0: Show thinking dots when streaming but no content yet */}
+              {message.streaming && !message.content && (!message.events || message.events.length === 0) && (!message.toolExecutions || message.toolExecutions.length === 0) && (
+                <div className="text-sm text-zinc-500 flex items-center gap-2">
+                  <ThinkingDots />
+                </div>
+              )}
+              {message.events && message.events.length > 0 ? (
+                <>
+                  {(() => {
+                    const hasTools = message.events.some((e: any) => e.type === 'tool_execution');
+                    let liveStreamingText = '';
+                    if (message.streaming && hasTools && message.content) {
+                      const lastEndIndex = message._lastTextEndIndex || 0;
+                      liveStreamingText = message.content.slice(lastEndIndex);
+                    }
 
-                      return (
-                        <>
-                          {message.events.map((event: any, idx: number) => {
-                            if (event.type === 'tool_execution') {
-                              const tool = event.data;
-                              const isRunning = message.streaming && tool.status === 'running';
-                              const resultCount = tool.metadata?.result_count || tool.metadata?.fragmentCount;
-                              return (
-                                <div key={idx} className="text-xs font-mono mb-3">
-                                  <div className={`text-zinc-500 ${isRunning ? 'animate-pulse-subtle' : ''}`}>
-                                    {isRunning ? '⋯ ' : '✓ '}
-                                    {tool.description || (tool.tool === 'search_memory' ? 'Searching memory' : tool.tool)}
-                                    {!isRunning && resultCount !== undefined && (
-                                      <>
-                                        {` · ${resultCount} results`}
-                                        {tool.resultPreview && (
-                                          <span className="text-zinc-600"> · {tool.resultPreview}</span>
-                                        )}
-                                      </>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            } else if (event.type === 'text_segment') {
-                              return (
-                                <div key={idx} className="text-zinc-100 text-sm leading-relaxed mb-2">
-                                  {renderContent(event.data.content)}
-                                </div>
-                              );
-                            }
-                            return null;
-                          })}
-                          {liveStreamingText && (
-                            <div className="text-zinc-100 text-sm leading-relaxed mb-2">
-                              {renderContent(liveStreamingText)}
-                            </div>
-                          )}
-                        </>
-                      );
-                    })()}
-                  </>
-                ) : (
-                  <>
-                    {/* Legacy Rendering */}
-                    {message.toolExecutions && message.toolExecutions.length > 0 && (
-                      <div className="text-xs font-mono mb-3">
-                        {message.toolExecutions.map((tool, idx) => {
-                          const isRunning = message.streaming && tool.status === 'running';
-                          const resultCount = tool.resultCount ?? tool.metadata?.result_count ?? tool.metadata?.fragmentCount;
-                          const query = tool.arguments?.query || tool.metadata?.query;
-                          let description = tool.description;
-                          if (!description && tool.tool === 'search_memory' && query) {
-                            description = `searching "${query.length > 40 ? query.substring(0, 40) + '...' : query}"`;
-                          } else if (!description) {
-                            description = tool.tool;
-                          }
-
-                          return (
-                            <div key={idx} className={`text-zinc-500 ${isRunning ? 'animate-pulse-subtle' : ''}`}>
-                              {isRunning ? '⋯ ' : '✓ '}
-                              {description}
-                              {!isRunning && resultCount !== undefined && (
-                                <>
-                                  {` · ${resultCount} results`}
-                                  {tool.resultPreview && (
-                                    <span className="text-zinc-600"> · {tool.resultPreview}</span>
+                    return (
+                      <>
+                        {message.events.map((event: any, idx: number) => {
+                          if (event.type === 'tool_execution') {
+                            const tool = event.data;
+                            const isRunning = message.streaming && tool.status === 'running';
+                            const resultCount = tool.metadata?.result_count || tool.metadata?.fragmentCount;
+                            return (
+                              <div key={idx} className="text-xs font-mono mb-3">
+                                <div className={`text-zinc-500 ${isRunning ? 'animate-pulse-subtle' : ''}`}>
+                                  {isRunning ? '⋯ ' : '✓ '}
+                                  {tool.description || (tool.tool === 'search_memory' ? 'Searching memory' : tool.tool)}
+                                  {!isRunning && resultCount !== undefined && (
+                                    <>
+                                      {` · ${resultCount} results`}
+                                      {tool.resultPreview && (
+                                        <span className="text-zinc-600"> · {tool.resultPreview}</span>
+                                      )}
+                                    </>
                                   )}
-                                </>
-                              )}
-                            </div>
-                          );
+                                </div>
+                              </div>
+                            );
+                          } else if (event.type === 'text_segment' || event.type === 'text') {
+                            // Handle both text_segment (captured before/after tools) and text (initial token)
+                            const content = event.data.content || event.data.chunk || '';
+                            if (!content) return null;
+                            return (
+                              <div key={idx} className="text-zinc-100 text-sm leading-relaxed mb-2">
+                                {renderContent(content)}
+                              </div>
+                            );
+                          }
+                          return null;
                         })}
-                      </div>
-                    )}
-                    {message.content && (
-                      <div className={`text-zinc-100 text-sm leading-relaxed ${message.citations && message.citations.length > 0 ? 'mb-0' : 'mb-2'}`}>
-                        {renderContent(message.content)}
-                      </div>
-                    )}
-                  </>
-                )}
+                        {liveStreamingText && (
+                          <div className="text-zinc-100 text-sm leading-relaxed mb-2">
+                            {renderContent(liveStreamingText)}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </>
+              ) : (
+                <>
+                  {/* Legacy Rendering */}
+                  {message.toolExecutions && message.toolExecutions.length > 0 && (
+                    <div className="text-xs font-mono mb-3">
+                      {message.toolExecutions.map((tool, idx) => {
+                        const isRunning = message.streaming && tool.status === 'running';
+                        const resultCount = tool.resultCount ?? tool.metadata?.result_count ?? tool.metadata?.fragmentCount;
+                        const query = tool.arguments?.query || tool.metadata?.query;
+                        let description = tool.description;
+                        if (!description && tool.tool === 'search_memory' && query) {
+                          description = `searching "${query.length > 40 ? query.substring(0, 40) + '...' : query}"`;
+                        } else if (!description) {
+                          description = tool.tool;
+                        }
 
-                {!message.streaming && message.citations && message.citations.length > 0 && (
-                  <CitationsBlock citations={message.citations} />
-                )}
+                        return (
+                          <div key={idx} className={`text-zinc-500 ${isRunning ? 'animate-pulse-subtle' : ''}`}>
+                            {isRunning ? '⋯ ' : '✓ '}
+                            {description}
+                            {!isRunning && resultCount !== undefined && (
+                              <>
+                                {` · ${resultCount} results`}
+                                {tool.resultPreview && (
+                                  <span className="text-zinc-600"> · {tool.resultPreview}</span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {message.content && (
+                    <div className={`text-zinc-100 text-sm leading-relaxed ${message.citations && message.citations.length > 0 ? 'mb-0' : 'mb-2'}`}>
+                      {renderContent(message.content)}
+                    </div>
+                  )}
+                </>
+              )}
 
-                {message.code_changes && message.code_changes.length > 0 && (
-                  <CodeChangePreview changes={message.code_changes} onApply={() => { }} onSkip={() => { }} onApplyAll={() => { }} />
-                )}
+              {/* v0.3.0: Show surfaced memories (context injection) */}
+              {!message.streaming && message.surfacedMemories && message.surfacedMemories.length > 0 && (
+                <SurfacedMemoriesBlock
+                  memories={message.surfacedMemories}
+                  isExpanded={isMemoryExpanded}
+                  onToggle={onToggleMemory}
+                />
+              )}
 
-                {message.memories && message.memories.length > 0 && !message.citations && (
-                  <div className="mt-2 text-xs text-zinc-600">
-                    Using {message.memories.length} relevant memories
-                  </div>
-                )}
-              </div>
+              {/* Show citations from search_memory tool calls */}
+              {!message.streaming && message.citations && message.citations.length > 0 && (
+                <CitationsBlock
+                  citations={message.citations}
+                  isExpanded={isCitationExpanded}
+                  onToggle={onToggleCitation}
+                />
+              )}
+
+              {message.code_changes && message.code_changes.length > 0 && (
+                <CodeChangePreview changes={message.code_changes} onApply={() => { }} onSkip={() => { }} onApplyAll={() => { }} />
+              )}
             </div>
-          )}
+          </div>
+        )}
 
-          {message.sender === 'system' && (
-            <div className="flex items-start gap-3">
-              <span className="text-amber-600 text-sm mt-0.5">!</span>
-              <span className="text-amber-500 text-sm">{message.content}</span>
-            </div>
-          )}
-        </div>
+        {message.sender === 'system' && (
+          <div className="flex items-start gap-3">
+            <span className="text-amber-600 text-sm mt-0.5">!</span>
+            <span className="text-amber-500 text-sm">{message.content}</span>
+          </div>
+        )}
       </div>
     </div>
   );
 }, (prev, next) => {
-  // v0.2.12: Compare actual content, not just references
   if (prev.message === 'loading-indicator' || next.message === 'loading-indicator') {
     return prev.message === next.message && prev.isProcessing === next.isProcessing;
   }
@@ -406,8 +533,11 @@ const MessageRow = memo(({
     prev.message.content === next.message.content &&
     prev.message.streaming === next.message.streaming &&
     prev.message.events?.length === next.message.events?.length &&
-    prev.index === next.index &&
-    prev.isProcessing === next.isProcessing
+    prev.message.citations?.length === next.message.citations?.length &&
+    prev.message.surfacedMemories?.length === next.message.surfacedMemories?.length &&
+    prev.isProcessing === next.isProcessing &&
+    prev.isMemoryExpanded === next.isMemoryExpanded &&
+    prev.isCitationExpanded === next.isCitationExpanded
   );
 });
 
@@ -430,71 +560,102 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
   processingStage,
   processingStatus
 }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<List>(null);
-  const sizeMap = useRef<Record<number, number>>({});
-  const [size, setSize] = useState<{ width: number, height: number }>({ width: 0, height: 0 });
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const prevWidthRef = useRef<number>(0);
 
-  // Handle auto-scroll
-  const prevMessagesLength = useRef(messages.length);
-  const isScrolledToBottom = useRef(true);
+  // v0.3.0: Lift expanded state out of child components
+  const [expandedMemories, setExpandedMemories] = useState<Set<string>>(new Set());
+  const [expandedCitations, setExpandedCitations] = useState<Set<string>>(new Set());
 
-  // Measure container size
+  const toggleMemoryExpanded = useCallback((messageId: string) => {
+    setExpandedMemories(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleCitationExpanded = useCallback((messageId: string) => {
+    setExpandedCitations(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  }, []);
+
+  // v0.3.0: Only show loading indicator when processing AND no streaming message exists
+  const lastMessage = messages[messages.length - 1];
+  const hasStreamingMessage = lastMessage && lastMessage.streaming;
+  const showLoadingIndicator = isProcessing && !hasStreamingMessage;
+  const itemCount = showLoadingIndicator ? messages.length + 1 : messages.length;
+
+  // v0.3.0: TanStack Virtual - the fix for width-change jank
+  const virtualizer = useVirtualizer({
+    count: itemCount,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 80,
+    overscan: 5,
+  });
+
+  // v0.3.0: On width change, preserve scroll position
+  // Don't call measure() - it nukes all cached heights causing 1-frame overlap
+  // Let measureElement's ResizeObserver handle height updates naturally
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!scrollRef.current) return;
     const resizeObserver = new ResizeObserver(entries => {
       for (let entry of entries) {
-        setSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+        const newWidth = entry.contentRect.width;
+        const widthDelta = Math.abs(newWidth - prevWidthRef.current);
+
+        if (prevWidthRef.current > 0 && widthDelta > 10) {
+          // Just preserve scroll position - don't call measure()
+          const visibleItems = virtualizer.getVirtualItems();
+          const firstVisibleIndex = visibleItems[0]?.index ?? 0;
+          requestAnimationFrame(() => {
+            virtualizer.scrollToIndex(firstVisibleIndex, { align: 'start' });
+          });
+        }
+        prevWidthRef.current = newWidth;
       }
     });
-    resizeObserver.observe(containerRef.current);
-    return () => resizeObserver.disconnect();
-  }, []);
+    resizeObserver.observe(scrollRef.current);
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [virtualizer]);
 
-  // Update item size
-  const setSizeCallback = useCallback((index: number, size: number) => {
-    if (sizeMap.current[index] !== size) {
-      sizeMap.current[index] = size;
-      listRef.current?.resetAfterIndex(index);
-    }
-  }, []);
-
-  // v0.2.12: Better initial height estimation based on content
-  const getSize = (index: number) => {
-    if (sizeMap.current[index]) return sizeMap.current[index];
-    // Estimate based on content length for better initial positioning
-    const msg = messages[index];
-    if (!msg) return 60;
-    const contentLength = msg.content?.length || 0;
-    const hasTools = msg.toolExecutions?.length || msg.events?.some(e => e.type === 'tool_execution');
-    const baseHeight = 40;
-    const textHeight = Math.ceil(contentLength / 80) * 20; // ~80 chars per line, 20px per line
-    const toolHeight = hasTools ? 30 : 0;
-    return Math.max(60, baseHeight + textHeight + toolHeight);
-  };
-
-  // Auto-scroll logic
+  // Auto-scroll to bottom when new messages arrive
+  const prevMessagesLength = useRef(messages.length);
   useEffect(() => {
     const len = messages.length;
-    // Check if we should render a helper "loading" row
-    const actualLen = isProcessing ? len + 1 : len;
-
     if (len > prevMessagesLength.current) {
-      // New message added - strict auto scroll
-      listRef.current?.scrollToItem(actualLen - 1, 'end');
+      // New message added - scroll to bottom
+      virtualizer.scrollToIndex(itemCount - 1, { align: 'end' });
     }
     prevMessagesLength.current = len;
-  }, [messages.length, isProcessing]);
+  }, [messages.length, itemCount, virtualizer]);
+
+  // Also scroll when processing starts (to show loading indicator)
+  useEffect(() => {
+    if (showLoadingIndicator) {
+      virtualizer.scrollToIndex(itemCount - 1, { align: 'end' });
+    }
+  }, [showLoadingIndicator, itemCount, virtualizer]);
 
   const renderContent = useCallback((content: string) => {
     return <MemoizedMarkdown content={content} />;
   }, []);
 
-  // Determine list items: messages + optional processing indicator
-  const itemCount = isProcessing ? messages.length + 1 : messages.length;
-
   return (
-    <div ref={containerRef} className="h-full w-full bg-zinc-950 pl-6 pt-6 pb-6 pr-2 overflow-hidden" style={{ fontFamily: 'SF Mono, Monaco, Inconsolata, Fira Code, monospace' }}>
+    <div className="h-full w-full bg-zinc-950 pl-6 pt-6 pb-6 overflow-hidden" style={{ fontFamily: 'SF Mono, Monaco, Inconsolata, Fira Code, monospace' }}>
       {messages.length === 0 && !isProcessing && (
         <div className="text-zinc-400 text-sm">
           <div className="flex items-center gap-2 mb-1">
@@ -504,32 +665,51 @@ const TerminalMessageThreadComponent: React.FC<TerminalMessageThreadProps> = ({
         </div>
       )}
 
-      {size.height > 0 && (
-        <List
-          ref={listRef}
-          height={size.height}
-          width={size.width}
-          itemCount={itemCount}
-          itemSize={getSize}
-          itemData={messages}
-          overscanCount={5}
+      {/* v0.3.0: TanStack Virtual scroll container */}
+      <div
+        ref={scrollRef}
+        className="h-full overflow-y-auto pr-2"
+      >
+        <div
+          style={{
+            height: virtualizer.getTotalSize(),
+            width: '100%',
+            position: 'relative',
+          }}
         >
-          {({ index, style }) => {
+          {virtualizer.getVirtualItems().map(virtualRow => {
+            const index = virtualRow.index;
             const isLoader = index === messages.length;
             const message = isLoader ? 'loading-indicator' : messages[index];
+            const messageId = isLoader ? '' : (message as Message).id;
+
             return (
-              <MessageRow
-                index={index}
-                style={style}
-                message={message}
-                setSize={setSizeCallback}
-                renderContent={renderContent}
-                isProcessing={!!isProcessing}
-              />
+              <div
+                key={virtualRow.key}
+                data-index={index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                <MessageRow
+                  message={message}
+                  renderContent={renderContent}
+                  isProcessing={!!isProcessing}
+                  isMemoryExpanded={expandedMemories.has(messageId)}
+                  isCitationExpanded={expandedCitations.has(messageId)}
+                  onToggleMemory={() => toggleMemoryExpanded(messageId)}
+                  onToggleCitation={() => toggleCitationExpanded(messageId)}
+                />
+              </div>
             );
-          }}
-        </List>
-      )}
+          })}
+        </div>
+      </div>
     </div>
   );
 };

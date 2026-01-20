@@ -264,9 +264,13 @@ class TestMCPToolShapes:
         """get_cold_start_context returns expected shape."""
         result = await memory_system.get_cold_start_context(limit=5)
 
-        # Can be None or string
-        assert result is None or isinstance(result, str)
-        print(f"get_cold_start_context type: {type(result)}")
+        # v0.3.0: Returns tuple (context_string, always_inject_list, doc_ids_list)
+        assert isinstance(result, tuple) and len(result) == 3
+        context, always_inject, doc_ids = result
+        assert context is None or isinstance(context, str)
+        assert isinstance(always_inject, list)
+        assert isinstance(doc_ids, list)
+        print(f"get_cold_start_context returns: context={type(context)}, always_inject={len(always_inject)}, doc_ids={len(doc_ids)}")
 
     @pytest.mark.asyncio
     async def test_store_memory_bank_shape(self, memory_system):

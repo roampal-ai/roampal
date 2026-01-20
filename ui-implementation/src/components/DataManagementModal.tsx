@@ -39,10 +39,12 @@ interface DataStats {
   books: { count: number };
   sessions: { count: number };
   knowledge_graph: { nodes: number; edges: number };
+  // v0.3.0: New data types
+  outcomes?: { exists: boolean };
 }
 
 type ActiveTab = 'export' | 'delete';
-type DeleteTarget = 'memory_bank' | 'working' | 'history' | 'patterns' | 'books' | 'sessions' | 'knowledge-graph' | null;
+type DeleteTarget = 'memory_bank' | 'working' | 'history' | 'patterns' | 'books' | 'sessions' | 'knowledge-graph' | 'outcomes' | null;
 
 export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen, onClose }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('export');
@@ -61,6 +63,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
   // Delete tab state
   const [dataStats, setDataStats] = useState<DataStats | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);  // v0.3.0: Show errors to user
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isCompacting, setIsCompacting] = useState(false);
@@ -108,14 +111,21 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
 
   const fetchDataStats = async () => {
     setIsLoadingStats(true);
+    setStatsError(null);
     try {
       const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/data/stats`);
       if (response.ok) {
         const data = await response.json();
         setDataStats(data);
+      } else {
+        // v0.3.0: Show error when stats fail to load (delete buttons would be disabled otherwise)
+        const errorText = await response.text();
+        console.error('Stats API error:', response.status, errorText);
+        setStatsError(`Failed to load data stats (${response.status})`);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to fetch data stats:', error);
+      setStatsError(error.message || 'Failed to connect to backend');
     } finally {
       setIsLoadingStats(false);
     }
@@ -203,8 +213,15 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Delete failed');
+        // v0.3.0: Handle non-JSON error responses gracefully
+        let errorMsg = `Delete failed (${response.status})`;
+        try {
+          const error = await response.json();
+          errorMsg = error.detail || errorMsg;
+        } catch {
+          // Response body wasn't JSON, use status-based message
+        }
+        throw new Error(errorMsg);
       }
 
       const result = await response.json();
@@ -237,8 +254,15 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Compaction failed');
+        // v0.3.0: Handle non-JSON error responses gracefully
+        let errorMsg = `Compaction failed (${response.status})`;
+        try {
+          const error = await response.json();
+          errorMsg = error.detail || errorMsg;
+        } catch {
+          // Response body wasn't JSON, use status-based message
+        }
+        throw new Error(errorMsg);
       }
 
       const result = await response.json();
@@ -278,6 +302,8 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
         return dataStats.sessions.count;
       case 'knowledge-graph':
         return dataStats.knowledge_graph.nodes + dataStats.knowledge_graph.edges;
+      case 'outcomes':
+        return dataStats.outcomes?.exists ? 1 : 0;
       default:
         return 0;
     }
@@ -299,6 +325,8 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
         return 'This will delete all conversation session files. Your active conversation will be preserved.';
       case 'knowledge-graph':
         return 'This will clear all concept relationships and connections AI has built.';
+      case 'outcomes':
+        return 'This will clear all outcome tracking data used for memory scoring and ranking.';
       default:
         return 'This action cannot be undone.';
     }
@@ -553,6 +581,18 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                     </svg>
                   </div>
+                ) : statsError ? (
+                  // v0.3.0: Show error when stats fail to load
+                  <div className="p-4 bg-yellow-600/10 border border-yellow-600/30 rounded-lg">
+                    <p className="text-sm text-yellow-400 font-medium">⚠️ {statsError}</p>
+                    <p className="text-xs text-zinc-400 mt-2">Unable to show data counts. The backend may not be running.</p>
+                    <button
+                      onClick={fetchDataStats}
+                      className="mt-3 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-sm text-zinc-300 transition-colors"
+                    >
+                      Retry
+                    </button>
+                  </div>
                 ) : (
                   <div className="space-y-2">
                     {[
@@ -562,7 +602,8 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
                       { key: 'patterns', label: 'Patterns', desc: 'Proven solutions', count: dataStats?.patterns.count || 0 },
                       { key: 'books', label: 'Books', desc: 'Reference documents', count: dataStats?.books.count || 0 },
                       { key: 'sessions', label: 'Sessions', desc: 'Conversation files', count: dataStats?.sessions.count || 0 },
-                      { key: 'knowledge-graph', label: 'Knowledge Graph', desc: 'Concept relationships', count: (dataStats?.knowledge_graph.nodes || 0) + (dataStats?.knowledge_graph.edges || 0) }
+                      { key: 'knowledge-graph', label: 'Knowledge Graph', desc: 'Concept relationships', count: (dataStats?.knowledge_graph.nodes || 0) + (dataStats?.knowledge_graph.edges || 0) },
+                      { key: 'outcomes', label: 'Outcomes', desc: 'Scoring history', count: dataStats?.outcomes?.exists ? 1 : 0 }
                     ].map((item) => (
                       <div key={item.key} className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
                         <div className="flex-1">

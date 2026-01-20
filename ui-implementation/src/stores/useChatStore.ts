@@ -291,12 +291,78 @@ export const useChatStore = create<ChatState>()((set, get) => ({
               ? new Date(msg.timestamp.replace('T', ' '))
               : new Date();
 
-            // Extract toolExecutions from metadata.toolResults
-            let toolExecutions = undefined;
-            if (msg.metadata?.toolResults && Array.isArray(msg.metadata.toolResults)) {
+            // v0.3.0: Extract toolExecutions from metadata.toolEvents (has content_position for interleaving)
+            // Fall back to toolResults for older sessions
+            let toolExecutions: any[] | undefined = undefined;
+            let events: any[] | undefined = undefined;
+
+            const toolEvents = msg.metadata?.toolEvents;
+            if (toolEvents && Array.isArray(toolEvents) && toolEvents.length > 0) {
+              // Check if toolEvents have content_position for interleaving
+              const hasPositions = toolEvents.some((e: any) => typeof e.content_position === 'number');
+
+              if (hasPositions && content) {
+                // v0.3.0: Build interleaved events array using content_position
+                const sortedTools = [...toolEvents]
+                  .filter((e: any) => typeof e.content_position === 'number')
+                  .sort((a: any, b: any) => a.content_position - b.content_position);
+
+                events = [];
+                let lastPos = 0;
+
+                for (const toolEvent of sortedTools) {
+                  // Add text segment before this tool (if any)
+                  if (toolEvent.content_position > lastPos) {
+                    const textSegment = content.slice(lastPos, toolEvent.content_position);
+                    if (textSegment.trim()) {
+                      events.push({
+                        type: 'text_segment' as const,
+                        timestamp: Date.now(),
+                        data: { content: textSegment }
+                      });
+                    }
+                  }
+
+                  // Add tool execution event
+                  events.push({
+                    type: 'tool_execution' as const,
+                    timestamp: Date.now(),
+                    data: {
+                      tool: toolEvent.tool || 'search_memory',
+                      status: 'completed',
+                      resultCount: toolEvent.result_count,
+                      metadata: { result_count: toolEvent.result_count }
+                    }
+                  });
+
+                  lastPos = toolEvent.content_position;
+                }
+
+                // Add trailing text after last tool (if any)
+                if (lastPos < content.length) {
+                  const trailingText = content.slice(lastPos);
+                  if (trailingText.trim()) {
+                    events.push({
+                      type: 'text_segment' as const,
+                      timestamp: Date.now(),
+                      data: { content: trailingText }
+                    });
+                  }
+                }
+              }
+
+              // Also create flat toolExecutions for legacy rendering
+              toolExecutions = toolEvents.map((e: any) => ({
+                tool: e.tool || 'search_memory',
+                status: 'completed',
+                resultCount: e.result_count,
+                arguments: e.arguments
+              }));
+            } else if (msg.metadata?.toolResults && Array.isArray(msg.metadata.toolResults)) {
+              // Fallback: older sessions without toolEvents
               toolExecutions = msg.metadata.toolResults.map((result: any) => ({
                 tool: result.tool || 'search_memory',
-                status: 'completed',  // All loaded tools are already completed
+                status: 'completed',
                 resultCount: result.result_count,
                 arguments: result.arguments
               }));
@@ -309,6 +375,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
               timestamp: parsedTimestamp,
               thinking: thinking,
               toolExecutions: toolExecutions,
+              events: events,  // v0.3.0: Interleaved events for proper tool ordering
               streaming: false
             };
           });
@@ -588,12 +655,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
               if (!lastMsg || lastMsg.sender !== 'assistant' || !lastMsg.streaming) {
                 console.log('[WebSocket] Creating assistant message on first token');
-                // v0.2.5: Initialize events timeline for chronological rendering
-                const firstTextEvent = {
-                  type: 'text' as const,
-                  timestamp: Date.now(),
-                  data: { chunk: tokenContent, firstChunk: true }
-                };
+                // v0.3.0: Start with empty events array - tool_start captures text segments
                 messages.push({
                   id: `msg-${Date.now()}`,
                   sender: 'assistant',
@@ -602,18 +664,16 @@ export const useChatStore = create<ChatState>()((set, get) => ({
                   timestamp: new Date(),
                   thinking: null,
                   toolExecutions: [],
-                  events: [firstTextEvent]
+                  events: []
                 });
               } else {
-                // Immutable update - preserve all properties including toolExecutions and events
+                // Immutable update - preserve all properties
                 const newContent = (lastMsg.content || '') + tokenContent;
-                // v0.2.5: Add text event to timeline (only if we have events - timeline mode)
-                const existingEvents = lastMsg.events || [];
                 messages[messages.length - 1] = {
                   ...lastMsg,
                   content: newContent,
                   toolExecutions: lastMsg.toolExecutions,
-                  events: existingEvents  // Don't add every token to events (too granular)
+                  events: lastMsg.events || []
                 };
                 console.log('[WebSocket] Updated message content, now:', newContent.substring(0, 50), 'Length:', newContent.length);
               }
@@ -625,12 +685,19 @@ export const useChatStore = create<ChatState>()((set, get) => ({
             });
             break;
 
-          // v0.2.5: Response case - buffered complete response
+          // v0.2.5: Response case - buffered complete response (non-streaming mode)
           case 'response':
             console.log('[WebSocket] Full response received:', data.content?.substring(0, 50));
             set((state) => {
               const messages = [...state.messages];
               let lastMsg = messages[messages.length - 1];
+
+              // v0.3.0: Skip if message is currently streaming - don't overwrite streamed content
+              // The response event is for non-streaming mode only
+              if (lastMsg && lastMsg.sender === 'assistant' && lastMsg.streaming) {
+                console.log('[WebSocket] Skipping response event - message is streaming');
+                return state;  // Don't modify state
+              }
 
               if (lastMsg && lastMsg.sender === 'assistant') {
                 messages[messages.length - 1] = {
@@ -688,7 +755,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
               // Lazy message creation: create assistant message if tool_start arrives before first token
               if (!lastMsg || lastMsg.sender !== 'assistant' || !lastMsg.streaming) {
-                console.log('[WebSocket] Creating assistant message for tool execution');
+                console.log('[WebSocket] Creating assistant message for tool execution (tool arrived first)');
                 messages.push({
                   id: `msg-${Date.now()}`,
                   sender: 'assistant' as const,
@@ -698,7 +765,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
                   thinking: null,
                   toolExecutions: [toolData],
                   events: [toolEvent],  // v0.2.5: Initialize timeline with tool event
-                  _lastTextEndIndex: 0  // v0.2.5: Track text position for segment capture
+                  _lastTextEndIndex: 0,  // v0.2.5: Track text position for segment capture
+                  _toolArrivedFirst: true  // v0.3.0: Flag for stream_complete to handle preamble insertion
                 });
               } else {
                 // v0.2.5: Capture text segment BEFORE tool starts (true chronological interleaving)
@@ -762,9 +830,17 @@ export const useChatStore = create<ChatState>()((set, get) => ({
                     ? { ...t, status: 'completed', resultCount: data.result_count, resultPreview: data.result_preview }
                     : t
                 );
+
+                // v0.3.0: If tool arrived first, record content position at completion
+                // This marks the boundary between preamble and continuation text
+                const toolCompleteIndex = lastMsg._toolArrivedFirst
+                  ? (lastMsg.content?.length || 0)
+                  : undefined;
+
                 messages[messages.length - 1] = {
                   ...lastMsg,
-                  toolExecutions: updatedTools
+                  toolExecutions: updatedTools,
+                  ...(toolCompleteIndex !== undefined && { _toolCompleteContentIndex: toolCompleteIndex })
                 };
               }
 
@@ -823,8 +899,55 @@ export const useChatStore = create<ChatState>()((set, get) => ({
               // Refresh lastMsg reference after citation update
               let updatedLastMsg = messages[messages.length - 1];
 
-              // v0.2.5: Capture trailing text segment (after last tool)
-              if (updatedLastMsg?.sender === 'assistant' && updatedLastMsg.events?.length > 0) {
+              // v0.3.0: Handle _toolArrivedFirst - split content into preamble (before tool) and continuation (after tool)
+              if (updatedLastMsg?.sender === 'assistant' && updatedLastMsg._toolArrivedFirst && updatedLastMsg.events?.length > 0) {
+                const content = updatedLastMsg.content || '';
+                const toolCompleteIndex = updatedLastMsg._toolCompleteContentIndex || 0;
+
+                // Split content at the boundary
+                const preambleText = content.slice(0, toolCompleteIndex);
+                const continuationText = content.slice(toolCompleteIndex);
+
+                // Find the first tool_execution event
+                const existingEvents = [...(updatedLastMsg.events || [])];
+                const toolEventIndex = existingEvents.findIndex((e: any) => e.type === 'tool_execution');
+
+                if (toolEventIndex !== -1) {
+                  // Rebuild events with preamble BEFORE tool and continuation AFTER
+                  const newEvents: any[] = [];
+
+                  // Add preamble before tool (if any)
+                  if (preambleText.trim()) {
+                    newEvents.push({
+                      type: 'text_segment' as const,
+                      timestamp: Date.now() - 2,
+                      data: { content: preambleText }
+                    });
+                    console.log('[WebSocket] Inserted preamble before tool:', preambleText.substring(0, 50));
+                  }
+
+                  // Add the tool event
+                  newEvents.push(existingEvents[toolEventIndex]);
+
+                  // Add continuation after tool (if any)
+                  if (continuationText.trim()) {
+                    newEvents.push({
+                      type: 'text_segment' as const,
+                      timestamp: Date.now(),
+                      data: { content: continuationText }
+                    });
+                    console.log('[WebSocket] Added continuation after tool:', continuationText.substring(0, 50));
+                  }
+
+                  messages[messages.length - 1] = {
+                    ...updatedLastMsg,
+                    events: newEvents
+                  };
+                  updatedLastMsg = messages[messages.length - 1];  // Refresh reference
+                }
+              }
+              // v0.2.5: Capture trailing text segment (after last tool) - only if NOT _toolArrivedFirst (already handled above)
+              else if (updatedLastMsg?.sender === 'assistant' && updatedLastMsg.events?.length > 0) {
                 const currentContent = updatedLastMsg.content || '';
                 const lastTextEndIndex = updatedLastMsg._lastTextEndIndex || 0;
                 const trailingText = currentContent.slice(lastTextEndIndex);
@@ -932,6 +1055,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     if (state.abortController) {
       state.abortController.abort();
       set({ abortController: null });
+    }
+
+    // 1b. Close WebSocket to stop streaming (v0.3.0 fix)
+    if (state.websocket && state.websocket.readyState === WebSocket.OPEN) {
+      console.log('[Cancel] Closing WebSocket to stop streaming');
+      state.websocket.close();
+      set({ websocket: null, connectionStatus: 'disconnected' });
     }
 
     // 2. Call backend to cancel task
@@ -1374,14 +1504,70 @@ export const useChatStore = create<ChatState>()((set, get) => ({
             ...(msg.metadata?.hybridEvents ? { hybridEvents: msg.metadata.hybridEvents } : {}),
             ...(msg.actions ? { actions: msg.actions } : {}),
             ...(msg.citations ? { citations: msg.citations } : {}),
-            // FIX: Load toolEvents from session metadata for display after reload
-            ...(msg.metadata?.toolEvents ? {
-              toolExecutions: msg.metadata.toolEvents.map((e: any) => ({
-                tool: e.tool,
-                status: 'completed',
-                resultCount: e.result_count
-              }))
-            } : {})
+            // v0.3.0: Build interleaved events array from toolEvents with content_position
+            ...(() => {
+              const toolEvents = msg.metadata?.toolEvents;
+              if (!toolEvents || !Array.isArray(toolEvents) || toolEvents.length === 0) {
+                return {};
+              }
+
+              // Check if toolEvents have content_position for interleaving
+              const hasPositions = toolEvents.some((e: any) => typeof e.content_position === 'number');
+              let events: any[] | undefined = undefined;
+
+              if (hasPositions && content) {
+                const sortedTools = [...toolEvents]
+                  .filter((e: any) => typeof e.content_position === 'number')
+                  .sort((a: any, b: any) => a.content_position - b.content_position);
+
+                events = [];
+                let lastPos = 0;
+
+                for (const toolEvent of sortedTools) {
+                  if (toolEvent.content_position > lastPos) {
+                    const textSegment = content.slice(lastPos, toolEvent.content_position);
+                    if (textSegment.trim()) {
+                      events.push({
+                        type: 'text_segment' as const,
+                        timestamp: Date.now(),
+                        data: { content: textSegment }
+                      });
+                    }
+                  }
+                  events.push({
+                    type: 'tool_execution' as const,
+                    timestamp: Date.now(),
+                    data: {
+                      tool: toolEvent.tool || 'search_memory',
+                      status: 'completed',
+                      resultCount: toolEvent.result_count,
+                      metadata: { result_count: toolEvent.result_count }
+                    }
+                  });
+                  lastPos = toolEvent.content_position;
+                }
+
+                if (lastPos < content.length) {
+                  const trailingText = content.slice(lastPos);
+                  if (trailingText.trim()) {
+                    events.push({
+                      type: 'text_segment' as const,
+                      timestamp: Date.now(),
+                      data: { content: trailingText }
+                    });
+                  }
+                }
+              }
+
+              return {
+                toolExecutions: toolEvents.map((e: any) => ({
+                  tool: e.tool,
+                  status: 'completed',
+                  resultCount: e.result_count
+                })),
+                ...(events && { events })
+              };
+            })()
           };
         });
 

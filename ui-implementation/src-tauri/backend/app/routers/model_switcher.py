@@ -29,6 +29,7 @@ router = APIRouter(tags=["model-switcher"])
 
 # Global state for concurrency control
 _download_lock = asyncio.Lock()
+_switch_lock = asyncio.Lock()  # v0.3.0: Prevent concurrent model switches
 _downloading_models: set = set()
 _cancel_flags: Dict[str, bool] = {}  # Track which downloads should be cancelled
 _env_file_lock = asyncio.Lock()
@@ -365,6 +366,8 @@ async def download_gguf_stream(request_body: Dict[str, Any] = Body(...)):
             logger.info(f"[LOCK DEBUG] Added {model_name} to download set, releasing lock. Set: {_downloading_models}")
 
         logger.info(f"[LOCK DEBUG] Lock released, starting download for {model_name}, set ID: {id(_downloading_models)}")
+        cache_path = None  # v0.3.0: Track for cleanup on error
+        download_success = False  # v0.3.0: Track if download completed successfully
         try:
             # 1. Download GGUF file from HuggingFace
             cache_path = get_lmstudio_cache_path() / model_info['file']
@@ -512,32 +515,19 @@ async def download_gguf_stream(request_body: Dict[str, Any] = Body(...)):
                         lmstudio_models = [m.get('id', '') for m in data.get('data', [])]
                         logger.info(f"LM Studio models after import: {lmstudio_models}")
 
-                        # Try multiple matching strategies to find the imported model
-                        # Strategy 1: Direct match on original model name with hyphens (qwen2.5:7b -> qwen2.5-7b)
-                        normalized_name = model_name.replace(':', '-')
+                        # v0.3.0: Use unified matching function
                         for model_id in lmstudio_models:
-                            if normalized_name in model_id or model_id.startswith(normalized_name):
+                            if _model_names_match(model_name, model_id, model_info):
                                 actual_model_id = model_id
-                                logger.info(f"Found LM Studio model ID via normalized match: {actual_model_id}")
+                                logger.info(f"Found LM Studio model ID: {actual_model_id}")
                                 break
-
-                        # Strategy 2: Match on repo name parts (e.g., qwen2.5, 7b, instruct)
-                        if not actual_model_id:
-                            # Extract key parts from model_name (e.g., qwen2.5:7b -> ["qwen2", "5", "7b"])
-                            name_parts = model_name.replace(':', '.').replace('-', '.').split('.')
-                            for model_id in lmstudio_models:
-                                model_id_lower = model_id.lower()
-                                # Check if all key parts appear in model_id
-                                if all(part.lower() in model_id_lower for part in name_parts if part):
-                                    actual_model_id = model_id
-                                    logger.info(f"Found LM Studio model ID via part matching: {actual_model_id}")
-                                    break
             except Exception as e:
                 logger.warning(f"Failed to query LM Studio for actual model ID: {e}")
 
             # Use actual model ID if found, otherwise fall back to original name
             model_to_return = actual_model_id if actual_model_id else model_name
             logger.info(f"Successfully imported {model_name} - ready for use as '{model_to_return}'")
+            download_success = True  # v0.3.0: Mark success to prevent cleanup
             yield f"data: {json.dumps({'type': 'loaded', 'model': model_to_return, 'message': 'Model ready!'})}\n\n"
 
         except httpx.ConnectError as e:
@@ -570,6 +560,15 @@ async def download_gguf_stream(request_body: Dict[str, Any] = Body(...)):
             logger.info(f"[LOCK DEBUG] Cleaning up {model_name} from download set. Set before: {_downloading_models}")
             _downloading_models.discard(model_name)
             _cancel_flags.pop(model_name, None)  # Clean up cancel flag
+
+            # v0.3.0: Delete partial download on failure
+            if not download_success and cache_path and cache_path.exists():
+                try:
+                    cache_path.unlink()
+                    logger.info(f"Deleted partial download for {model_name}: {cache_path}")
+                except Exception as cleanup_err:
+                    logger.warning(f"Could not delete partial download {cache_path}: {cleanup_err}")
+
             logger.info(f"[LOCK DEBUG] Cleaned up {model_name}. Set after: {_downloading_models}")
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -605,19 +604,69 @@ async def cancel_download(request_body: Dict[str, Any] = Body(...)):
 
     return {"status": "not_found", "model": model_name}
 
+
+def _model_names_match(registry_name: str, provider_id: str, model_info: dict = None) -> bool:
+    """
+    v0.3.0: Robust model name matching for LM Studio and Ollama.
+    Handles naming convention differences like:
+    - llama3.3:70b vs llama-3.3-70b-instruct
+    - qwen2.5:7b vs qwen2.5-7b-instruct
+
+    Args:
+        registry_name: Roampal registry name (e.g., "llama3.3:70b")
+        provider_id: LM Studio/Ollama model ID (e.g., "llama-3.3-70b-instruct")
+        model_info: Optional dict with 'file' key containing GGUF filename
+
+    Returns:
+        True if the names refer to the same model
+    """
+    provider_lower = provider_id.lower()
+
+    # Strategy 1: Direct match after basic normalization
+    normalized = registry_name.replace(':', '-').lower()
+    if normalized in provider_lower or provider_lower.startswith(normalized):
+        return True
+
+    # Strategy 2: Match via GGUF filename stem (most reliable for LM Studio)
+    if model_info and model_info.get('file'):
+        gguf_file = model_info['file']
+        # Extract stem: "Llama-3.3-70B-Instruct-Q4_K_M.gguf" -> "llama-3.3-70b-instruct"
+        stem = gguf_file.replace('.gguf', '').lower()
+        # Remove quantization suffixes
+        for q in ['-q4_k_m', '-q8_0', '-q5_k_m', '-q6_k', '-q4_0', '.q4_k_m', '.q8_0']:
+            stem = stem.replace(q, '')
+        if stem in provider_lower or provider_lower in stem:
+            return True
+
+    # Strategy 3: Extract and compare key components (model family + size)
+    # "llama3.3:70b" -> ["llama", "3", "3", "70b"]
+    # "qwen2.5:7b" -> ["qwen", "2", "5", "7b"]
+    import re
+    registry_parts = re.split(r'[:.\\-_]', registry_name.lower())
+    registry_parts = [p for p in registry_parts if p]  # Remove empty
+
+    # All registry parts must appear in provider ID
+    if all(part in provider_lower for part in registry_parts):
+        # But also check size match to avoid qwen2.5:7b matching qwen2.5:70b
+        # Extract size patterns (numbers followed by 'b')
+        registry_sizes = re.findall(r'(\d+b)', registry_name.lower())
+        provider_sizes = re.findall(r'(\d+b)', provider_lower)
+        if registry_sizes and provider_sizes:
+            # Must have at least one common size
+            if any(s in provider_sizes for s in registry_sizes):
+                return True
+        elif not registry_sizes:
+            # No size in registry name, parts match is enough
+            return True
+
+    return False
+
+
 def _map_lmstudio_id_to_original_name(lmstudio_id: str) -> str:
     """Map LM Studio model ID back to original download name (e.g., qwen2.5-7b-instruct -> qwen2.5:7b)"""
-    # Try direct mapping first by normalizing (qwen2.5:7b -> qwen2.5-7b)
-    for original_name in MODEL_TO_HUGGINGFACE.keys():
-        normalized = original_name.replace(':', '-')
-        if normalized in lmstudio_id or lmstudio_id.startswith(normalized):
-            return original_name
-
-    # Fallback: try matching by key parts (qwen2.5, 7b, etc.)
-    for original_name in MODEL_TO_HUGGINGFACE.keys():
-        name_parts = original_name.replace(':', '.').replace('-', '.').split('.')
-        lmstudio_lower = lmstudio_id.lower()
-        if all(part.lower() in lmstudio_lower for part in name_parts if part):
+    # v0.3.0: Use unified matching function
+    for original_name, model_info in MODEL_TO_HUGGINGFACE.items():
+        if _model_names_match(original_name, lmstudio_id, model_info):
             return original_name
 
     # If no match, return the LM Studio ID as-is
@@ -774,214 +823,236 @@ async def get_current_model(request: Request):
 @router.post("/switch")
 async def switch_model(request: Request, model_request: ModelSwitchRequest):
     """Switch to a different model at runtime - supports both Ollama and LM Studio"""
-    try:
-        model_name = model_request.model_name
-
-        # Step 1: Detect which provider owns this model
-        provider = None
-        base_url = None
-        api_style = None
-
-        # Check Ollama
+    # v0.3.0: Prevent concurrent switches from corrupting state
+    async with _switch_lock:
         try:
-            import shutil
-            ollama_cmd = shutil.which("ollama")
-            if not ollama_cmd:
-                common_paths = [
-                    r"C:\Users\{}\AppData\Local\Programs\Ollama\ollama.exe".format(os.environ.get('USERNAME', '')),
-                    r"C:\Program Files\Ollama\ollama.exe",
-                ]
-                for path in common_paths:
-                    if os.path.exists(path):
-                        ollama_cmd = path
-                        break
+            model_name = model_request.model_name
 
-            if ollama_cmd:
-                result = subprocess.run(
-                    [ollama_cmd, "list"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    creationflags=_SUBPROCESS_FLAGS
-                )
-                if result.returncode == 0:
-                    available_models = [line.split()[0] for line in result.stdout.strip().split('\n')[1:] if line.strip()]
-                    if model_name in available_models:
-                        provider = 'ollama'
-                        base_url = 'http://localhost:11434'
-                        api_style = 'ollama'
-                        logger.info(f"Model '{model_name}' found in Ollama")
-        except Exception as e:
-            logger.warning(f"Failed to check Ollama: {e}")
+            # Step 1: Detect which provider owns this model
+            provider = None
+            base_url = None
+            api_style = None
 
-        # Check LM Studio if not found in Ollama
-        if not provider:
+            # Check Ollama
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    response = await client.get('http://localhost:1234/v1/models')
-                    if response.status_code == 200:
-                        data = response.json()
-                        lmstudio_models = [model.get('id', '') for model in data.get('data', [])]
-                        if model_name in lmstudio_models:
-                            provider = 'lmstudio'
-                            base_url = 'http://localhost:1234'
-                            api_style = 'openai'
-                            logger.info(f"Model '{model_name}' found in LM Studio")
+                import shutil
+                ollama_cmd = shutil.which("ollama")
+                if not ollama_cmd:
+                    common_paths = [
+                        r"C:\Users\{}\AppData\Local\Programs\Ollama\ollama.exe".format(os.environ.get('USERNAME', '')),
+                        r"C:\Program Files\Ollama\ollama.exe",
+                    ]
+                    for path in common_paths:
+                        if os.path.exists(path):
+                            ollama_cmd = path
+                            break
+
+                if ollama_cmd:
+                    result = subprocess.run(
+                        [ollama_cmd, "list"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        creationflags=_SUBPROCESS_FLAGS
+                    )
+                    if result.returncode == 0:
+                        available_models = [line.split()[0] for line in result.stdout.strip().split('\n')[1:] if line.strip()]
+                        if model_name in available_models:
+                            provider = 'ollama'
+                            base_url = 'http://localhost:11434'
+                            api_style = 'ollama'
+                            logger.info(f"Model '{model_name}' found in Ollama")
             except Exception as e:
-                logger.warning(f"Failed to check LM Studio: {e}")
+                logger.warning(f"Failed to check Ollama: {e}")
 
-        # If model not found in either provider, raise error
-        if not provider:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Model '{model_name}' not found in Ollama or LM Studio"
-            )
+            # Check LM Studio if not found in Ollama
+            if not provider:
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        response = await client.get('http://localhost:1234/v1/models')
+                        if response.status_code == 200:
+                            data = response.json()
+                            lmstudio_models = [model.get('id', '') for model in data.get('data', [])]
+                            if model_name in lmstudio_models:
+                                provider = 'lmstudio'
+                                base_url = 'http://localhost:1234'
+                                api_style = 'openai'
+                                logger.info(f"Model '{model_name}' found in LM Studio")
+                except Exception as e:
+                    logger.warning(f"Failed to check LM Studio: {e}")
 
-        # Step 2: Update the LLM client
-        if hasattr(request.app.state, 'llm_client'):
-            # Lazy initialization: create LLM client if None
-            if request.app.state.llm_client is None:
-                from modules.llm.ollama_client import OllamaClient
-                request.app.state.llm_client = OllamaClient()
-                await request.app.state.llm_client.initialize({"ollama_model": model_name})
-                logger.info(f"Lazily initialized LLM client with model: {model_name}")
-                previous_model = None
-                previous_provider = None
-            else:
-                # Store previous model and provider for rollback
-                previous_model = request.app.state.llm_client.model_name
-                previous_provider = getattr(request.app.state.llm_client, 'api_style', 'ollama')
+            # If model not found in either provider, raise error
+            if not provider:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Model '{model_name}' not found in Ollama or LM Studio"
+                )
 
-                # Update llm_client with new provider configuration
-                request.app.state.llm_client.model_name = model_name
-                request.app.state.llm_client.base_url = base_url
-                request.app.state.llm_client.api_style = api_style
-                logger.info(f"Updated llm_client: model={model_name}, provider={provider}, base_url={base_url}")
+            # Step 2: Update the LLM client
+            if hasattr(request.app.state, 'llm_client'):
+                # Lazy initialization: create LLM client if None
+                if request.app.state.llm_client is None:
+                    from modules.llm.ollama_client import OllamaClient
+                    request.app.state.llm_client = OllamaClient()
+                    await request.app.state.llm_client.initialize({"ollama_model": model_name})
+                    logger.info(f"Lazily initialized LLM client with model: {model_name}")
+                    previous_model = None
+                    previous_provider = None
+                else:
+                    # Store previous model and provider for rollback
+                    previous_model = request.app.state.llm_client.model_name
+                    previous_provider = getattr(request.app.state.llm_client, 'api_style', 'ollama')
 
-            # Update global agent_service LLM reference
-            from app.routers.agent_chat import agent_service
-            if agent_service and hasattr(agent_service, 'llm'):
-                agent_service.llm = request.app.state.llm_client
+                    # Update llm_client with new provider configuration
+                    request.app.state.llm_client.model_name = model_name
+                    request.app.state.llm_client.base_url = base_url
+                    request.app.state.llm_client.api_style = api_style
+                    logger.info(f"Updated llm_client: model={model_name}, provider={provider}, base_url={base_url}")
 
-            # Step 3: Run health check against correct provider endpoint
-            try:
-                logger.info(f"Performing health check on {provider} model: {model_name}")
+                # Update global agent_service LLM reference
+                from app.routers.agent_chat import agent_service
+                if agent_service and hasattr(agent_service, 'llm'):
+                    agent_service.llm = request.app.state.llm_client
 
-                # Recycle HTTP client if available
-                if hasattr(request.app.state.llm_client, '_recycle_client'):
-                    await request.app.state.llm_client._recycle_client()
+                # Step 3: Run health check against correct provider endpoint
+                try:
+                    logger.info(f"Performing health check on {provider} model: {model_name}")
 
-                await asyncio.sleep(2.0)  # Give provider time to load model
+                    # Recycle HTTP client if available
+                    if hasattr(request.app.state.llm_client, '_recycle_client'):
+                        await request.app.state.llm_client._recycle_client()
 
-                async with httpx.AsyncClient(timeout=30.0) as health_client:
-                    if provider == 'ollama':
-                        health_payload = {
-                            "model": model_name,
-                            "messages": [{"role": "user", "content": "test"}],
-                            "stream": False,
-                            "options": {
-                                "num_ctx": 2048,
-                                "num_predict": 10
+                    await asyncio.sleep(2.0)  # Give provider time to load model
+
+                    # v0.3.0: 90s timeout for both providers (larger models need time to load)
+                    health_timeout = 90.0
+                    async with httpx.AsyncClient(timeout=health_timeout) as health_client:
+                        if provider == 'ollama':
+                            health_payload = {
+                                "model": model_name,
+                                "messages": [{"role": "user", "content": "test"}],
+                                "stream": False,
+                                "options": {
+                                    "num_ctx": 2048,
+                                    "num_predict": 10
+                                }
                             }
-                        }
-                        health_response = await health_client.post(
-                            "http://localhost:11434/api/chat",
-                            json=health_payload
-                        )
-                    else:  # lmstudio
-                        health_payload = {
-                            "model": model_name,
-                            "messages": [{"role": "user", "content": "test"}],
-                            "max_tokens": 10
-                        }
-                        health_response = await health_client.post(
-                            "http://localhost:1234/v1/chat/completions",
-                            json=health_payload
-                        )
+                            health_response = await health_client.post(
+                                "http://localhost:11434/api/chat",
+                                json=health_payload
+                            )
+                        else:  # lmstudio
+                            health_payload = {
+                                "model": model_name,
+                                "messages": [{"role": "user", "content": "test"}],
+                                "max_tokens": 10
+                            }
+                            health_response = await health_client.post(
+                                "http://localhost:1234/v1/chat/completions",
+                                json=health_payload
+                            )
 
-                    health_response.raise_for_status()
-                    logger.info(f"Health check passed for {provider} model: {model_name}")
+                        health_response.raise_for_status()
+                        logger.info(f"Health check passed for {provider} model: {model_name}")
 
-            except Exception as health_error:
-                logger.error(f"Health check failed for {model_name}: {health_error}")
-                # Rollback
-                if previous_model:
-                    request.app.state.llm_client.model_name = previous_model
-                    if previous_provider == 'lmstudio':
-                        request.app.state.llm_client.base_url = 'http://localhost:1234'
-                        request.app.state.llm_client.api_style = 'openai'
+                except Exception as health_error:
+                    # v0.3.0: Better logging - empty exceptions usually mean timeout
+                    error_detail = str(health_error).strip() or "timeout (no response within 90s)"
+                    logger.error(f"Health check failed for {model_name}: {error_detail}")
+                    # Rollback
+                    if previous_model:
+                        request.app.state.llm_client.model_name = previous_model
+                        if previous_provider == 'lmstudio':
+                            request.app.state.llm_client.base_url = 'http://localhost:1234'
+                            request.app.state.llm_client.api_style = 'openai'
+                        else:
+                            request.app.state.llm_client.base_url = 'http://localhost:11434'
+                            request.app.state.llm_client.api_style = 'ollama'
+
+                    # v0.3.0: Better error messages for common failures
+                    error_str = str(health_error).lower()
+                    if 'timeout' in error_str or 'timed out' in error_str or not str(health_error).strip():
+                        error_msg = f"Model load timed out. The model may be too large or still loading. Try a smaller model or pre-load it in {provider.upper()}."
+                    elif '400' in error_str or 'bad request' in error_str:
+                        error_msg = f"Model {model_name} returned an error. It may not be fully loaded in {provider.upper()}."
                     else:
-                        request.app.state.llm_client.base_url = 'http://localhost:11434'
-                        request.app.state.llm_client.api_style = 'ollama'
+                        error_msg = f"Health check failed: {str(health_error)}"
+
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"{error_msg} Rolled back to {previous_model}."
+                    )
+
+                # Step 4: Update environment variables
+                os.environ['ROAMPAL_LLM_PROVIDER'] = provider
+                if provider == 'ollama':
+                    os.environ['OLLAMA_MODEL'] = model_name
+                    os.environ['ROAMPAL_LLM_OLLAMA_MODEL'] = model_name
+                else:
+                    os.environ['ROAMPAL_LLM_LMSTUDIO_MODEL'] = model_name
+
+                # Update .env file
+                async with _env_file_lock:
+                    env_path = Path(__file__).parent.parent.parent / '.env'
+                    if env_path.exists():
+                        lines = env_path.read_text().splitlines()
+
+                        # Update ROAMPAL_LLM_PROVIDER
+                        provider_updated = False
+                        for i, line in enumerate(lines):
+                            if line.startswith('ROAMPAL_LLM_PROVIDER='):
+                                lines[i] = f'ROAMPAL_LLM_PROVIDER={provider}'
+                                provider_updated = True
+                                break
+                        if not provider_updated:
+                            lines.append(f'ROAMPAL_LLM_PROVIDER={provider}')
+
+                        # Update model-specific env vars
+                        if provider == 'ollama':
+                            for i, line in enumerate(lines):
+                                if line.startswith('OLLAMA_MODEL='):
+                                    lines[i] = f'OLLAMA_MODEL={model_name}'
+                                elif line.startswith('ROAMPAL_LLM_OLLAMA_MODEL='):
+                                    lines[i] = f'ROAMPAL_LLM_OLLAMA_MODEL={model_name}'
+                        else:
+                            lmstudio_updated = False
+                            for i, line in enumerate(lines):
+                                if line.startswith('ROAMPAL_LLM_LMSTUDIO_MODEL='):
+                                    lines[i] = f'ROAMPAL_LLM_LMSTUDIO_MODEL={model_name}'
+                                    lmstudio_updated = True
+                                    break
+                            if not lmstudio_updated:
+                                lines.append(f'ROAMPAL_LLM_LMSTUDIO_MODEL={model_name}')
+
+                        env_path.write_text('\n'.join(lines) + '\n')
+
+                # v0.3.0: Validate state after switch
+                actual_model = request.app.state.llm_client.model_name
+                if actual_model != model_name:
+                    logger.warning(f"State validation failed: expected {model_name}, got {actual_model}. Correcting.")
+                    request.app.state.llm_client.model_name = model_name
+
+                return {
+                    "status": "success",
+                    "message": f"Switched to {provider} model: {model_name}",
+                    "current_model": model_name,
+                    "provider": provider
+                }
+            else:
                 raise HTTPException(
                     status_code=503,
-                    detail=f"Model {model_name} failed health check: {str(health_error)}. Rolled back to {previous_model}"
+                    detail="LLM client not initialized"
                 )
-
-            # Step 4: Update environment variables
-            os.environ['ROAMPAL_LLM_PROVIDER'] = provider
-            if provider == 'ollama':
-                os.environ['OLLAMA_MODEL'] = model_name
-                os.environ['ROAMPAL_LLM_OLLAMA_MODEL'] = model_name
-            else:
-                os.environ['ROAMPAL_LLM_LMSTUDIO_MODEL'] = model_name
-
-            # Update .env file
-            async with _env_file_lock:
-                env_path = Path(__file__).parent.parent.parent / '.env'
-                if env_path.exists():
-                    lines = env_path.read_text().splitlines()
-
-                    # Update ROAMPAL_LLM_PROVIDER
-                    provider_updated = False
-                    for i, line in enumerate(lines):
-                        if line.startswith('ROAMPAL_LLM_PROVIDER='):
-                            lines[i] = f'ROAMPAL_LLM_PROVIDER={provider}'
-                            provider_updated = True
-                            break
-                    if not provider_updated:
-                        lines.append(f'ROAMPAL_LLM_PROVIDER={provider}')
-
-                    # Update model-specific env vars
-                    if provider == 'ollama':
-                        for i, line in enumerate(lines):
-                            if line.startswith('OLLAMA_MODEL='):
-                                lines[i] = f'OLLAMA_MODEL={model_name}'
-                            elif line.startswith('ROAMPAL_LLM_OLLAMA_MODEL='):
-                                lines[i] = f'ROAMPAL_LLM_OLLAMA_MODEL={model_name}'
-                    else:
-                        lmstudio_updated = False
-                        for i, line in enumerate(lines):
-                            if line.startswith('ROAMPAL_LLM_LMSTUDIO_MODEL='):
-                                lines[i] = f'ROAMPAL_LLM_LMSTUDIO_MODEL={model_name}'
-                                lmstudio_updated = True
-                                break
-                        if not lmstudio_updated:
-                            lines.append(f'ROAMPAL_LLM_LMSTUDIO_MODEL={model_name}')
-
-                    env_path.write_text('\n'.join(lines) + '\n')
-
-            return {
-                "status": "success",
-                "message": f"Switched to {provider} model: {model_name}",
-                "current_model": model_name,
-                "provider": provider
-            }
-        else:
+        except HTTPException:
+            raise
+        except Exception as e:
+            import traceback
+            logger.error(f"Error switching model: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise HTTPException(
-                status_code=503,
-                detail="LLM client not initialized"
+                status_code=500,
+                detail=f"Failed to switch model: {str(e)}"
             )
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        logger.error(f"Error switching model: {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to switch model: {str(e)}"
-        )
 
 @router.post("/pull")
 async def pull_model(request_body: Dict[str, Any] = Body(...)):
@@ -1233,26 +1304,23 @@ async def uninstall_model(model_name: str, request: Request, provider_hint: str 
 
         if provider_hint == "lmstudio":
             # Map registry name to LM Studio model name
-            if model_name in MODEL_TO_HUGGINGFACE:
-                # For LM Studio, the actual model ID is different from registry name
-                # Check what's actually installed in LM Studio
-                try:
-                    async with httpx.AsyncClient(timeout=2.0) as client:
-                        resp = await client.get("http://localhost:1234/v1/models")
-                        if resp.status_code == 200:
-                            lms_models = [m['id'] for m in resp.json().get('data', [])]
+            model_info = MODEL_TO_HUGGINGFACE.get(model_name)
+            # Check what's actually installed in LM Studio
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    resp = await client.get("http://localhost:1234/v1/models")
+                    if resp.status_code == 200:
+                        lms_models = [m['id'] for m in resp.json().get('data', [])]
 
-                            # Try to find matching model in LM Studio
-                            # Registry name: qwen2.5:7b -> LM Studio ID: qwen2.5-7b-instruct
-                            normalized_name = model_name.replace(':', '-')
-                            for lms_id in lms_models:
-                                if normalized_name in lms_id or lms_id.startswith(normalized_name):
-                                    provider = "lmstudio"
-                                    actual_model_name = lms_id
-                                    logger.info(f"Mapped registry name {model_name} to LM Studio model {lms_id}")
-                                    break
-                except Exception as e:
-                    logger.error(f"Failed to check LM Studio for {model_name}: {e}")
+                        # v0.3.0: Use unified matching function
+                        for lms_id in lms_models:
+                            if _model_names_match(model_name, lms_id, model_info):
+                                provider = "lmstudio"
+                                actual_model_name = lms_id
+                                logger.info(f"Mapped registry name {model_name} to LM Studio model {lms_id}")
+                                break
+            except Exception as e:
+                logger.error(f"Failed to check LM Studio for {model_name}: {e}")
 
         elif provider_hint == "ollama":
             # For Ollama, registry name matches actual model name
@@ -1298,10 +1366,10 @@ async def uninstall_model(model_name: str, request: Request, provider_hint: str 
                                 provider = "lmstudio"
                                 actual_model_name = model_name
                             else:
-                                # Try mapping: qwen2.5:7b -> qwen2.5-7b-instruct
-                                normalized_name = model_name.replace(':', '-')
+                                # v0.3.0: Use unified matching function
+                                model_info = MODEL_TO_HUGGINGFACE.get(model_name)
                                 for lms_id in lms_models:
-                                    if normalized_name in lms_id or lms_id.startswith(normalized_name):
+                                    if _model_names_match(model_name, lms_id, model_info):
                                         provider = "lmstudio"
                                         actual_model_name = lms_id
                                         logger.info(f"Mapped {model_name} to LM Studio ID: {lms_id}")
@@ -1843,3 +1911,124 @@ async def download_gguf_websocket(websocket: WebSocket):
         if model_name:
             _downloading_models.discard(model_name)
             _cancel_flags.pop(model_name, None)
+
+
+# =============================================================================
+# v0.3.0: Ghost Model Detection & Cleanup
+# =============================================================================
+
+@router.get("/ghost-models")
+async def get_ghost_models():
+    """
+    Detect orphaned/ghost models - models that appear in LM Studio but have
+    no backing file on disk, or partial downloads that weren't cleaned up.
+    """
+    ghost_models = []
+
+    try:
+        # Get models LM Studio thinks are installed
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get('http://localhost:1234/v1/models')
+            if response.status_code != 200:
+                return {"ghost_models": [], "error": "LM Studio not running"}
+
+            data = response.json()
+            lmstudio_models = [model.get('id', '') for model in data.get('data', [])]
+
+        # Check each model for actual file existence
+        lmstudio_models_dir = Path.home() / ".lmstudio" / "models"
+        cache_path = get_lmstudio_cache_path()
+
+        for model_id in lmstudio_models:
+            is_ghost = False
+            reason = ""
+
+            # Check if model directory exists in LM Studio models folder
+            # Model IDs are like "user/repo/filename" or "filename"
+            model_path = lmstudio_models_dir / model_id
+
+            # Also check for GGUF file directly
+            if not model_path.exists():
+                # Try to find a matching .gguf file
+                found = False
+                for gguf_file in lmstudio_models_dir.rglob("*.gguf"):
+                    if model_id.lower() in gguf_file.name.lower():
+                        found = True
+                        break
+
+                if not found:
+                    is_ghost = True
+                    reason = "No backing GGUF file found"
+
+            if is_ghost:
+                ghost_models.append({
+                    "model_id": model_id,
+                    "reason": reason
+                })
+
+        # Also check for orphaned cache files (partial downloads)
+        if cache_path.exists():
+            for cache_file in cache_path.glob("*.gguf"):
+                # If there's a .gguf in cache but not in models, it's orphaned
+                ghost_models.append({
+                    "model_id": f"[cache] {cache_file.name}",
+                    "reason": "Partial download in cache",
+                    "path": str(cache_file),
+                    "size_mb": round(cache_file.stat().st_size / (1024 * 1024), 2)
+                })
+
+        return {
+            "ghost_models": ghost_models,
+            "count": len(ghost_models)
+        }
+
+    except Exception as e:
+        logger.error(f"Error detecting ghost models: {e}")
+        return {"ghost_models": [], "error": str(e)}
+
+
+@router.delete("/ghost-models/{model_id:path}")
+async def cleanup_ghost_model(model_id: str):
+    """
+    Remove a ghost/orphaned model. For cache files, deletes the file.
+    For LM Studio registered models, removes from registry if possible.
+    """
+    try:
+        # Handle cache files
+        if model_id.startswith("[cache] "):
+            filename = model_id.replace("[cache] ", "")
+            cache_path = get_lmstudio_cache_path() / filename
+
+            if cache_path.exists():
+                cache_path.unlink()
+                logger.info(f"Deleted ghost cache file: {cache_path}")
+                return {"status": "deleted", "model_id": model_id}
+            else:
+                return {"status": "not_found", "model_id": model_id}
+
+        # For LM Studio models, try to find and delete the file
+        lmstudio_models_dir = Path.home() / ".lmstudio" / "models"
+
+        # Try direct path
+        model_path = lmstudio_models_dir / model_id
+        if model_path.exists():
+            if model_path.is_file():
+                model_path.unlink()
+            else:
+                import shutil
+                shutil.rmtree(model_path)
+            logger.info(f"Deleted ghost model: {model_path}")
+            return {"status": "deleted", "model_id": model_id}
+
+        # Try to find matching .gguf file
+        for gguf_file in lmstudio_models_dir.rglob("*.gguf"):
+            if model_id.lower() in gguf_file.name.lower() or model_id.lower() in str(gguf_file).lower():
+                gguf_file.unlink()
+                logger.info(f"Deleted ghost model file: {gguf_file}")
+                return {"status": "deleted", "model_id": model_id, "path": str(gguf_file)}
+
+        return {"status": "not_found", "model_id": model_id}
+
+    except Exception as e:
+        logger.error(f"Error cleaning up ghost model {model_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

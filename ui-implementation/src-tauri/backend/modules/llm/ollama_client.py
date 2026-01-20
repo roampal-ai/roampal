@@ -590,7 +590,8 @@ class OllamaClient(LLMClientInterface):
         history: Optional[List[Dict[str, str]]] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
+        prompt_role: str = "user"
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Stream response with tool support for function calling.
 
@@ -598,6 +599,10 @@ class OllamaClient(LLMClientInterface):
         - {"type": "text", "content": str} for text chunks
         - {"type": "tool_call", "tool_calls": list} when LLM wants to use tools
         - {"type": "done"} when complete
+
+        Args:
+            prompt_role: Role for the prompt message ("user" or "system"). Use "system"
+                        for continuation instructions to avoid model treating it as new question.
         """
         if not self.client:
             raise OllamaException("OllamaClient is not initialized.")
@@ -607,9 +612,9 @@ class OllamaClient(LLMClientInterface):
             messages.append({"role": "system", "content": system_prompt})
         if history:
             messages.extend(history)
-        # Only add user message if prompt is not empty
+        # Only add prompt message if not empty - use specified role (default: user)
         if prompt:
-            messages.append({"role": "user", "content": prompt})
+            messages.append({"role": prompt_role, "content": prompt})
 
         actual_model = model or self.model_name
         logger.info(f"[STREAM WITH TOOLS] Using model: {actual_model}")
@@ -934,8 +939,10 @@ class OllamaClient(LLMClientInterface):
                         message = chunk_data["message"]
                         logger.debug(f"[STREAM DEBUG] Message keys: {message.keys()}")
 
-                        # Check for tool calls
-                        if "tool_calls" in message and message["tool_calls"]:
+                        # Check for tool calls (only if we actually passed tools in request)
+                        # v0.3.0: Enforce contract - if tools=None, ignore tool_calls from model
+                        # Models sometimes try to call tools from conversation history even without tools in payload
+                        if "tool_calls" in message and message["tool_calls"] and tools:
                             logger.info(f"[STREAM WITH TOOLS] Tool call detected")
                             yield {"type": "tool_call", "tool_calls": message["tool_calls"]}
                             yield_count += 1
@@ -943,6 +950,8 @@ class OllamaClient(LLMClientInterface):
                             # The native tool handler in agent_chat.py will execute the tool and continue
                             # the conversation with the tool results
                             break  # Exit the streaming loop to let agent handle tool execution
+                        elif "tool_calls" in message and message["tool_calls"] and not tools:
+                            logger.warning(f"[STREAM WITH TOOLS] Model returned tool_calls but tools=None - ignoring (wrap-up mode)")
 
                         # Regular content streaming
                         if "content" in message:

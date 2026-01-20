@@ -720,8 +720,8 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
               <div className="space-y-2">
                 <h4 className="text-sm font-semibold text-zinc-100">What is this?</h4>
                 <p className="text-sm text-zinc-400 leading-relaxed">
-                  Shows your top 20 most valuable learned patterns. When you search memory or chat with Roampal,
-                  the system tracks which concepts lead to successful outcomes (you say "thanks", "worked", etc.).
+                  When you search memory or chat with Roampal, the system tracks which concepts lead to
+                  successful outcomes (you say "thanks", "worked", etc.).
                 </p>
                 <p className="text-sm text-zinc-400 leading-relaxed">
                   Each node represents a concept the system has learned to route effectively — it knows which

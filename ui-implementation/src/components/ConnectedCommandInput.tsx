@@ -31,8 +31,8 @@ const ConnectedCommandInputComponent: React.FC<ConnectedCommandInputProps> = ({ 
     { trigger: '/help', name: 'help', description: 'Show all commands', handler: handleHelp },
   ];
   
-  // Auto-resize textarea
-  useEffect(() => {
+  // Auto-resize textarea (also on width change from sidebar toggle)
+  const resizeTextarea = useCallback(() => {
     if (textareaRef.current) {
       // Reset height to auto to get the correct scrollHeight
       textareaRef.current.style.height = 'auto';
@@ -40,7 +40,22 @@ const ConnectedCommandInputComponent: React.FC<ConnectedCommandInputProps> = ({ 
       const newHeight = Math.max(24, Math.min(textareaRef.current.scrollHeight, 208));
       textareaRef.current.style.height = `${newHeight}px`;
     }
-  }, [message]);
+  }, []);
+
+  // Resize on message change
+  useEffect(() => {
+    resizeTextarea();
+  }, [message, resizeTextarea]);
+
+  // Resize on container width change (sidebar toggle)
+  useEffect(() => {
+    if (!textareaRef.current) return;
+    const observer = new ResizeObserver(() => {
+      resizeTextarea();
+    });
+    observer.observe(textareaRef.current);
+    return () => observer.disconnect();
+  }, [resizeTextarea]);
 
   // Set initial height on mount
   useEffect(() => {
@@ -201,7 +216,7 @@ const ConnectedCommandInputComponent: React.FC<ConnectedCommandInputProps> = ({ 
             placeholder={!hasChatModel ? "Install a chat model to start" : isProcessing ? "Processing... (type your next message)" : "Ready when you are."}
             disabled={!hasChatModel}
             className="flex-1 bg-transparent text-sm text-zinc-100 placeholder-zinc-600 resize-none focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ height: '24px', minHeight: '24px', maxHeight: '208px', overflowY: message && message.split('\n').length > 5 ? 'auto' : 'hidden' }}
+            style={{ minHeight: '24px', maxHeight: '208px', overflowY: 'auto' }}
             rows={1}
           />
           

@@ -67,47 +67,63 @@ async def get_data_stats(request: Request):
                     stats[collection_name] = {"count": count}
 
         # Count session files (use memory.data_dir for correct path)
+        # v0.3.0: Include archive folder in count
         sessions_dir = memory.data_dir / "sessions"
         if sessions_dir.exists():
-            session_files = list(sessions_dir.glob("*.jsonl"))
+            session_files = list(sessions_dir.glob("**/*.jsonl"))
             stats["sessions"] = {"count": len(session_files)}
         else:
             stats["sessions"] = {"count": 0}
 
-        # Parse knowledge graph (use memory.kg_path for correct location)
+        # v0.3.0: Check outcomes.db exists
+        outcomes_db = memory.data_dir / "outcomes.db"
+        stats["outcomes"] = {"exists": outcomes_db.exists()}
+
+        # Parse knowledge graph data from multiple sources
+        nodes = 0
+        edges = 0
+
+        # 1. Count from knowledge_graph.json (outcome routing patterns)
         kg_path = memory.kg_path
         if kg_path and kg_path.exists():
             try:
                 with open(kg_path, 'r', encoding='utf-8') as f:
                     kg_data = json.load(f)
-
-                # Count actual KG data (not just legacy nodes/edges)
-                nodes = len(kg_data.get("routing_patterns", {}))
+                nodes += len(kg_data.get("routing_patterns", {}))
                 nodes += len(kg_data.get("problem_solutions", {}))
                 nodes += len(kg_data.get("solution_patterns", {}))
-
-                # Count edges from memory_relationships.json (document relationships)
-                edges = 0
-                rel_path = memory.data_dir / "memory_relationships.json"
-                if rel_path.exists():
-                    try:
-                        with open(rel_path, 'r', encoding='utf-8') as f:
-                            rel_data = json.load(f)
-                            # Count document relationships
-                            edges = len(rel_data.get("related", {}))
-                            edges += len(rel_data.get("evolution", {}))
-                            edges += len(rel_data.get("conflicts", {}))
-                    except:
-                        pass
-
-                stats["knowledge_graph"] = {
-                    "nodes": nodes,
-                    "edges": edges
-                }
             except:
-                stats["knowledge_graph"] = {"nodes": 0, "edges": 0}
-        else:
-            stats["knowledge_graph"] = {"nodes": 0, "edges": 0}
+                pass
+
+        # 2. Count from content_graph.json (concept visualization - what UI shows)
+        content_graph_path = memory.data_dir / "content_graph.json"
+        if content_graph_path.exists():
+            try:
+                with open(content_graph_path, 'r', encoding='utf-8') as f:
+                    cg_data = json.load(f)
+                # Count unique entities from content graph
+                nodes += len(cg_data.get("entities", {}))
+                # Count entity relationships as edges
+                edges += len(cg_data.get("relationships", {}))
+            except:
+                pass
+
+        # 3. Count edges from memory_relationships.json (document relationships)
+        rel_path = memory.data_dir / "memory_relationships.json"
+        if rel_path.exists():
+            try:
+                with open(rel_path, 'r', encoding='utf-8') as f:
+                    rel_data = json.load(f)
+                edges += len(rel_data.get("related", {}))
+                edges += len(rel_data.get("evolution", {}))
+                edges += len(rel_data.get("conflicts", {}))
+            except:
+                pass
+
+        stats["knowledge_graph"] = {
+            "nodes": nodes,
+            "edges": edges
+        }
 
         return stats
 
@@ -383,7 +399,7 @@ async def clear_books(request: Request):
 @router.post("/clear/sessions")
 async def clear_sessions(request: Request):
     """
-    Delete all session/conversation files.
+    Delete all session/conversation files including archived sessions.
 
     Safety: Prevents deletion if any session is currently active.
     """
@@ -404,7 +420,8 @@ async def clear_sessions(request: Request):
         if memory and hasattr(memory, 'conversation_id'):
             active_conversation_id = memory.conversation_id
 
-        session_files = list(sessions_dir.glob("*.jsonl"))
+        # v0.3.0: Include archive folder - use recursive glob
+        session_files = list(sessions_dir.glob("**/*.jsonl"))
         deleted_count = 0
         skipped_active = False
 
@@ -423,7 +440,16 @@ async def clear_sessions(request: Request):
             except Exception as e:
                 logger.warning(f"Failed to delete session {session_id}: {e}")
 
-        logger.info(f"Cleared {deleted_count} session files")
+        # Clean up empty archive folder if it exists
+        archive_dir = sessions_dir / "archive"
+        if archive_dir.exists() and not any(archive_dir.iterdir()):
+            try:
+                archive_dir.rmdir()
+                logger.info("Removed empty archive directory")
+            except Exception:
+                pass  # Not critical
+
+        logger.info(f"Cleared {deleted_count} session files (including archive)")
 
         result = {
             "status": "success",
@@ -441,66 +467,123 @@ async def clear_sessions(request: Request):
         raise HTTPException(500, f"Failed to clear sessions: {str(e)}")
 
 
-@router.post("/clear/knowledge-graph")
-async def clear_knowledge_graph(request: Request):
-    """Clear the knowledge graph (concept relationships)."""
+@router.post("/clear/outcomes")
+async def clear_outcomes(request: Request):
+    """
+    Clear outcome tracking data (outcomes.db SQLite database).
+
+    This removes all outcome scoring history used for memory ranking.
+    """
     memory = request.app.state.memory
 
     try:
-        # Use AppData paths, not bundled data folder
-        kg_path = memory.kg_path if memory else Path("data/knowledge_graph.json")
+        data_dir = memory.data_dir if memory else Path("data")
+        outcomes_db = data_dir / "outcomes.db"
 
-        if not kg_path.exists():
+        if not outcomes_db.exists():
             return {
                 "status": "success",
-                "message": "Knowledge graph file does not exist",
-                "cleared": False
+                "message": "No outcomes database found",
+                "deleted_count": 0
             }
 
-        # Read existing to get count (use actual KG structure, not legacy nodes/edges)
+        try:
+            outcomes_db.unlink()
+            logger.info("Cleared outcomes.db")
+            return {
+                "status": "success",
+                "deleted_count": 1,
+                "message": "Outcomes database cleared"
+            }
+        except Exception as e:
+            logger.error(f"Failed to delete outcomes.db: {e}")
+            raise HTTPException(500, f"Failed to delete outcomes.db: {str(e)}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error clearing outcomes: {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to clear outcomes: {str(e)}")
+
+
+@router.post("/clear/knowledge-graph")
+async def clear_knowledge_graph(request: Request):
+    """Clear the knowledge graph (concept relationships and content graph)."""
+    memory = request.app.state.memory
+
+    try:
         nodes_count = 0
         edges_count = 0
-        try:
-            with open(kg_path, 'r', encoding='utf-8') as f:
-                kg_data = json.load(f)
-            # Count actual KG data
-            nodes_count = len(kg_data.get("routing_patterns", {}))
-            nodes_count += len(kg_data.get("problem_solutions", {}))
-            nodes_count += len(kg_data.get("solution_patterns", {}))
-            edges_count = len(kg_data.get("relationships", {}))
-        except:
-            pass
 
-        # Overwrite with empty structure (use proper schema from unified_memory_system)
-        empty_kg = {
-            "routing_patterns": {},
-            "success_rates": {},
-            "failure_patterns": {},
-            "problem_categories": {},
-            "problem_solutions": {},
-            "solution_patterns": {}
-        }
+        # 1. Clear knowledge_graph.json (outcome routing patterns)
+        kg_path = memory.kg_path if memory else Path("data/knowledge_graph.json")
+        if kg_path and kg_path.exists():
+            try:
+                with open(kg_path, 'r', encoding='utf-8') as f:
+                    kg_data = json.load(f)
+                nodes_count += len(kg_data.get("routing_patterns", {}))
+                nodes_count += len(kg_data.get("problem_solutions", {}))
+                nodes_count += len(kg_data.get("solution_patterns", {}))
+            except:
+                pass
 
-        with open(kg_path, 'w', encoding='utf-8') as f:
-            json.dump(empty_kg, f, indent=2)
+            empty_kg = {
+                "routing_patterns": {},
+                "success_rates": {},
+                "failure_patterns": {},
+                "problem_categories": {},
+                "problem_solutions": {},
+                "solution_patterns": {}
+            }
+            with open(kg_path, 'w', encoding='utf-8') as f:
+                json.dump(empty_kg, f, indent=2)
 
-        # Also clear memory_relationships.json
+            # Clear in-memory cache
+            if memory and hasattr(memory, '_kg_service') and memory._kg_service:
+                memory._kg_service.knowledge_graph = empty_kg
+                logger.info("Cleared in-memory knowledge graph cache")
+
+        # 2. Clear content_graph.json (concept visualization - what UI shows)
+        content_graph_path = memory.data_dir / "content_graph.json" if memory else Path("data/content_graph.json")
+        if content_graph_path.exists():
+            try:
+                with open(content_graph_path, 'r', encoding='utf-8') as f:
+                    cg_data = json.load(f)
+                nodes_count += len(cg_data.get("entities", {}))
+                edges_count += len(cg_data.get("relationships", {}))
+            except:
+                pass
+
+            empty_cg = {"entities": {}, "relationships": {}, "metadata": {}}
+            with open(content_graph_path, 'w', encoding='utf-8') as f:
+                json.dump(empty_cg, f, indent=2)
+
+            # Clear in-memory content graph (lives in kg_service)
+            if memory and hasattr(memory, '_kg_service') and memory._kg_service:
+                cg = memory._kg_service.content_graph
+                cg.entities = {}
+                cg.relationships = {}
+                cg.entity_metadata = {}
+                cg._doc_entities = {}
+                logger.info("Cleared in-memory content graph cache")
+
+        # 3. Clear memory_relationships.json
         rel_path = memory.data_dir / "memory_relationships.json" if memory else Path("data/memory_relationships.json")
-        empty_rel = {
-            "related": {},
-            "evolution": {},
-            "conflicts": {}
-        }
+        empty_rel = {"related": {}, "evolution": {}, "conflicts": {}}
         if rel_path.exists():
+            try:
+                with open(rel_path, 'r', encoding='utf-8') as f:
+                    rel_data = json.load(f)
+                edges_count += len(rel_data.get("related", {}))
+                edges_count += len(rel_data.get("evolution", {}))
+                edges_count += len(rel_data.get("conflicts", {}))
+            except:
+                pass
+
             with open(rel_path, 'w', encoding='utf-8') as f:
                 json.dump(empty_rel, f, indent=2)
 
-        # CRITICAL: Clear in-memory cache in the UnifiedMemorySystem
-        if memory:
-            if hasattr(memory, 'knowledge_graph'):
-                memory.knowledge_graph = empty_kg
-                logger.info("Cleared in-memory knowledge graph cache")
-            if hasattr(memory, 'relationships'):
+            if memory and hasattr(memory, 'relationships'):
                 memory.relationships = empty_rel
                 logger.info("Cleared in-memory relationships cache")
 

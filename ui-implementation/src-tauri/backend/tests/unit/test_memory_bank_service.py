@@ -5,7 +5,10 @@ Tests the extracted memory bank operations.
 """
 
 import sys
-sys.path.insert(0, "C:/ROAMPAL-REFACTOR")
+from pathlib import Path
+backend_dir = Path(__file__).parent.parent.parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 
 import json
 import pytest

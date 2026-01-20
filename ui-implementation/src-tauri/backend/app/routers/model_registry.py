@@ -255,7 +255,7 @@ def get_recommended_models(vram_gb: float) -> List[Dict[str, Any]]:
 TOOL_CAPABLE_FAMILIES = {
     "verified": [
         # Models personally tested with reliable tool calling
-        "qwen2.5:7b", "qwen2.5:14b", "qwen2.5:32b", "qwen2.5:72b",
+        "qwen2.5:14b", "qwen2.5:32b", "qwen2.5:72b",
         "llama3.3:70b", "llama3.1:70b",
         "gpt-oss:20b", "gpt-oss:120b",
         "mixtral:8x7b",
@@ -266,8 +266,8 @@ TOOL_CAPABLE_FAMILIES = {
         "qwen3:32b", "qwen3-coder:30b",
     ],
     "compatible": [
-        # Same family as verified, likely works but untested
-        "qwen2.5:3b",  # Other qwen2.5 variants
+        # Same family as verified, may have issues with complex context
+        "qwen2.5:7b", "qwen2.5:3b",  # Smaller qwen2.5 variants - tool calling may be unreliable
         "llama3.2:3b", "llama3.2:8b", "llama3.1:8b",  # Llama 3.x family
         "mistral:7b", "phi-4", "phi3",
         # Qwen3 smaller variants (same family)
@@ -313,18 +313,18 @@ def get_model_description(model_name: str, tier: str) -> str:
     """Generate description based on model name and tier"""
     descriptions = {
         # Qwen 2.5 Series
-        "qwen2.5:7b": "Best-in-class tool calling",
+        "qwen2.5:7b": "Tool calling may be unreliable",
         "qwen2.5:14b": "Larger Qwen - Great tool performance",
         "qwen2.5:32b": "Powerful Qwen - Excellent tools",
         "qwen2.5:72b": "Massive Qwen - Superior tool calling",
-        "qwen2.5:3b": "Efficient with tool support",
+        "qwen2.5:3b": "May have inconsistent tool calling",
 
         # Llama 3 Series
         "llama3.3:70b": "Meta's latest 70B - Native tools, 128K context",
         "llama3.1:70b": "Meta's flagship - Excellent tools, 128K context",
-        "llama3.1:8b": "Compact Llama - Good tools, 128K context",
+        "llama3.1:8b": "Unreliable tool calling",
         "llama3.2:8b": "Latest compact Llama - Tool support",
-        "llama3.2:3b": "Ultra-compact Llama - May have inconsistent tools",
+        "llama3.2:3b": "May output JSON instead of calling tools",
 
         # Llama 4 Series - MoE with native tool calling
         "llama4:scout": "MoE 109B - 10M context, native tools",

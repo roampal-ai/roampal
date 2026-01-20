@@ -5,7 +5,10 @@ Tests the extracted outcome recording logic.
 """
 
 import sys
-sys.path.insert(0, "C:/ROAMPAL-REFACTOR")
+from pathlib import Path
+backend_dir = Path(__file__).parent.parent.parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 
 import json
 import pytest
@@ -95,7 +98,7 @@ class TestRecordOutcome:
 
         assert result is not None
         assert result["score"] < 0.5  # Score decreased
-        assert result["uses"] == 0  # Uses not incremented for failure
+        assert result["uses"] == 1  # v0.3.0: Uses now incremented for failure (supports Wilson score)
         assert result["last_outcome"] == "failed"
 
     @pytest.mark.asyncio
@@ -110,6 +113,19 @@ class TestRecordOutcome:
         assert result["score"] > 0.5  # Score slightly increased
         assert result["uses"] == 1  # Uses incremented for partial
         assert result["last_outcome"] == "partial"
+
+    @pytest.mark.asyncio
+    async def test_record_unknown_outcome(self, service, mock_collections):
+        """Should handle unknown outcome (surfaced but not used)."""
+        result = await service.record_outcome(
+            doc_id="working_test123",
+            outcome="unknown"
+        )
+
+        assert result is not None
+        assert result["score"] == 0.5  # Score unchanged for unknown
+        assert result["uses"] == 1  # Uses still incremented
+        assert result["last_outcome"] == "unknown"
 
     @pytest.mark.asyncio
     async def test_safeguard_books(self, service):
@@ -217,52 +233,65 @@ class TestScoreCalculation:
 
     def test_worked_increases_score(self, service):
         """Worked should increase score."""
-        delta, new_score, uses = service._calculate_score_update(
+        delta, new_score, uses, success_delta = service._calculate_score_update(
             "worked", 0.5, 0, 1.0
         )
         assert delta > 0
         assert new_score > 0.5
         assert uses == 1
+        assert success_delta == 1.0  # Full success
 
     def test_failed_decreases_score(self, service):
         """Failed should decrease score."""
-        delta, new_score, uses = service._calculate_score_update(
+        delta, new_score, uses, success_delta = service._calculate_score_update(
             "failed", 0.5, 0, 1.0
         )
         assert delta < 0
         assert new_score < 0.5
-        assert uses == 0
+        assert uses == 1  # v0.3.0: failed now increments uses
+        assert success_delta == 0.0  # No success
 
     def test_partial_slightly_increases(self, service):
         """Partial should slightly increase score."""
-        delta, new_score, uses = service._calculate_score_update(
+        delta, new_score, uses, success_delta = service._calculate_score_update(
             "partial", 0.5, 0, 1.0
         )
         assert delta > 0
         assert delta < 0.1  # Small increase
         assert new_score > 0.5
         assert uses == 1
+        assert success_delta == 0.5  # Half success
 
     def test_score_capped_at_1(self, service):
         """Score should not exceed 1.0."""
-        delta, new_score, uses = service._calculate_score_update(
+        delta, new_score, uses, _ = service._calculate_score_update(
             "worked", 0.95, 0, 1.0
         )
         assert new_score <= 1.0
 
     def test_score_capped_at_0(self, service):
         """Score should not go below 0.0."""
-        delta, new_score, uses = service._calculate_score_update(
+        delta, new_score, uses, _ = service._calculate_score_update(
             "failed", 0.1, 0, 1.0
         )
         assert new_score >= 0.0
 
     def test_time_weight_affects_delta(self, service):
         """Time weight should affect score delta."""
-        delta_full, _, _ = service._calculate_score_update("worked", 0.5, 0, 1.0)
-        delta_half, _, _ = service._calculate_score_update("worked", 0.5, 0, 0.5)
+        delta_full, _, _, _ = service._calculate_score_update("worked", 0.5, 0, 1.0)
+        delta_half, _, _, _ = service._calculate_score_update("worked", 0.5, 0, 0.5)
 
         assert abs(delta_half - delta_full * 0.5) < 0.01
+
+    def test_unknown_no_score_change(self, service):
+        """Unknown outcome should not change score but count as weak negative."""
+        delta, new_score, uses, success_delta = service._calculate_score_update(
+            "unknown", 0.5, 0, 1.0
+        )
+        assert delta == 0.0  # No score change
+        assert new_score == 0.5  # Score unchanged
+        assert uses == 1  # Uses incremented
+        assert success_delta == 0.25  # Weak negative for Wilson drift
 
 
 class TestCountSuccesses:
@@ -291,6 +320,11 @@ class TestCountSuccesses:
         """Failed outcomes count as 0."""
         history = json.dumps([{"outcome": "failed"}])
         assert service.count_successes_from_history(history) == 0
+
+    def test_unknown_counts_as_quarter(self, service):
+        """Unknown outcomes count as 0.25 (weak negative)."""
+        history = json.dumps([{"outcome": "unknown"}])
+        assert service.count_successes_from_history(history) == 0.25
 
     def test_mixed_outcomes(self, service):
         """Mixed outcomes sum correctly."""

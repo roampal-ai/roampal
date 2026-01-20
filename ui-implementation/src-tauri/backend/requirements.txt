@@ -10,6 +10,7 @@ starlette==0.27.0
 # HTTP client for Ollama and external APIs
 httpx>=0.27.0,<0.29.0
 httpcore==1.0.9
+aiohttp>=3.9.0         # Async HTTP for embedding_client
 
 # Database and vector storage
 chromadb>=1.0.0,<2.0.0  # v0.2.10: Aligned with roampal-core, auto-persists deletes
@@ -25,9 +26,8 @@ playwright==1.40.0
 
 # Async support
 aiofiles==23.2.1
-asyncio-mqtt==0.16.1
 filelock==3.13.1
-anyio>=4.0.0  # Updated for lmstudio SDK compatibility
+anyio>=4.0.0
 
 # Configuration and environment
 pydantic>=2.9.0,<3.0.0
@@ -36,28 +36,34 @@ pydantic-settings>=2.4.0,<3.0.0  # Required by langchain-community if installed
 # Logging and utilities
 loguru==0.7.2
 rich==13.7.0
+PyYAML>=6.0.0          # YAML parsing for personality configs
 
 # File handling
-pathlib2==2.3.7
+# pathlib2 removed - standard pathlib is used throughout
 
 # JSON handling
 orjson>=3.9.14,<4.0.0  # Updated for langsmith compatibility
+
+# Template engine
+Jinja2>=3.1.0          # Used by prompt_engine for template rendering
 
 # Machine Learning (compatible versions)
 torch>=2.1.0,<2.9.0
 torchaudio>=2.1.0,<2.9.0
 transformers>=4.36.2,<5.0.0
 tokenizers>=0.15.0,<1.0.0
+tiktoken>=0.5.0        # Token counting for context limits
+Pillow>=10.0.0         # Image processing for unified_image_service
 
 # Text processing
 nltk==3.8.1
-textblob==0.17.1
-vaderSentiment==3.3.2
+rank-bm25==0.2.2        # BM25 for hybrid search (vector + lexical)
+# textblob and vaderSentiment removed - not imported anywhere
 
 # Document processing (Enhanced - Session 11)
 PyPDF2==3.0.1           # Basic PDF text extraction
 python-docx==1.1.0      # Word document processing (.docx)
-docx2txt==0.8           # Alternative Word document text extraction
+# docx2txt removed - python-docx is used instead
 PyMuPDF==1.23.8         # Advanced PDF processing with OCR support
 chardet==5.2.0          # Encoding detection for text files
 beautifulsoup4==4.12.2  # HTML/XML text extraction
@@ -82,7 +88,10 @@ watchfiles==0.21.0
 
 # LLM Provider integrations
 ollama @ git+https://github.com/ollama/ollama-python.git@65f94b4fba2cc95dd718cbda683a326a8e5e670a
-lmstudio>=0.1.0  # LM Studio Python SDK for model loading
+# lmstudio SDK removed - httpx is used for LM Studio API calls
+
+# MCP (Model Context Protocol) Server
+mcp>=1.0.0             # MCP server SDK for Claude Code integration
 
 # HuggingFace for GGUF model downloads
 huggingface-hub>=0.20.0,<1.0.0

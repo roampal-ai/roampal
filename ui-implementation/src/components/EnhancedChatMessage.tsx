@@ -83,7 +83,7 @@ export const EnhancedChatMessage: React.FC<EnhancedChatMessageProps> = ({
   return (
     <div
       className={`flex gap-3 px-4 py-3 ${
-        isUser ? 'bg-zinc-900/30' : 'bg-transparent'
+        isUser ? 'bg-cyan-950/20' : 'bg-transparent'
       }`}
     >
       {/* Avatar */}

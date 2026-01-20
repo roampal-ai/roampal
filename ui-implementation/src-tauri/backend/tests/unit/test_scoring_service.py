@@ -5,7 +5,10 @@ Tests the extracted scoring logic to ensure it matches the original behavior.
 """
 
 import sys
-sys.path.insert(0, "C:/ROAMPAL-REFACTOR")
+from pathlib import Path
+backend_dir = Path(__file__).parent.parent.parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 
 import json
 import pytest
@@ -238,8 +241,8 @@ class TestScoringConsistency:
     def service(self):
         return ScoringService()
 
-    def test_memory_bank_quality_scoring(self, service):
-        """Memory bank should use importance*confidence as learned score."""
+    def test_memory_bank_quality_scoring_cold_start(self, service):
+        """Memory bank with <3 uses should use quality only (cold start protection)."""
         metadata = {
             "score": 0.5,
             "uses": 0,
@@ -247,7 +250,27 @@ class TestScoringConsistency:
             "confidence": 0.8,
         }
         result = service.calculate_final_score(metadata, distance=0.5, collection="memory_bank")
+        # quality = 0.9 * 0.8 = 0.72
+        # uses < 3, so no Wilson blend - quality only
         assert abs(result["learned_score"] - 0.72) < 0.01
+
+    def test_memory_bank_quality_scoring_with_uses(self, service):
+        """Memory bank with 3+ uses should blend 20% Wilson + 80% quality."""
+        metadata = {
+            "score": 0.5,
+            "uses": 5,
+            "importance": 0.9,
+            "confidence": 0.8,
+            "outcome_history": '["worked", "worked", "worked", "partial", "worked"]',
+            "success_count": 4.5,  # 4 worked + 0.5 partial
+        }
+        result = service.calculate_final_score(metadata, distance=0.5, collection="memory_bank")
+        # quality = 0.9 * 0.8 = 0.72
+        # wilson calculated from success_count/uses
+        # learned_score = 0.2 * wilson + 0.8 * 0.72
+        # Wilson lower bound is conservative (~0.55 for 4.5/5)
+        # learned_score = 0.2 * 0.55 + 0.8 * 0.72 ≈ 0.67
+        assert result["learned_score"] > 0.65  # Blended should reflect good outcomes
 
 
 if __name__ == "__main__":

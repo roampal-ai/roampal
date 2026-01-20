@@ -465,7 +465,9 @@ const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ searchQuery = '' }) => 
       }
       ctx.fill();
 
+      // Reset lineWidth from edge drawing before node stroke
       ctx.strokeStyle = '#52525b';
+      ctx.lineWidth = 1;
       ctx.stroke();
 
       // Node label

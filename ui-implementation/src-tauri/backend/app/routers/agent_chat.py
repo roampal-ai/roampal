@@ -178,9 +178,9 @@ def _cache_memories_for_scoring(
 
 
 def parse_memory_marks(response: str) -> tuple[str, Dict[int, str]]:
-    """v0.2.12 Fix #7: Extract and strip memory attribution from LLM response.
+    """v0.3.0: Extract and strip memory attribution from LLM response.
 
-    Parses annotations like: <!-- MEM: 1👍 2👎 3➖ -->
+    Parses annotations like: <!-- MEM: 1👍 2🤷 3👎 4➖ -->
 
     Args:
         response: The LLM response text
@@ -188,7 +188,7 @@ def parse_memory_marks(response: str) -> tuple[str, Dict[int, str]]:
     Returns:
         Tuple of (clean_response, marks_dict)
         - clean_response: Response with annotation stripped
-        - marks_dict: {position: emoji} e.g. {1: '👍', 2: '👎', 3: '➖'}
+        - marks_dict: {position: emoji} e.g. {1: '👍', 2: '🤷', 3: '👎', 4: '➖'}
     """
     import re
 
@@ -200,7 +200,7 @@ def parse_memory_marks(response: str) -> tuple[str, Dict[int, str]]:
     marks_str = match.group(1)
     marks = {}
 
-    # Parse "1👍 2👎 3➖" format
+    # Parse "1👍 2🤷 3👎 4➖" format
     for item in marks_str.split():
         try:
             # Extract position number and emoji
@@ -215,7 +215,7 @@ def parse_memory_marks(response: str) -> tuple[str, Dict[int, str]]:
     clean_response = re.sub(r'<!--\s*MEM:.*?-->', '', response).strip()
 
     if marks:
-        logger.debug(f"[MEMORY_MARKS] Parsed attribution: up={[p for p,e in marks.items() if e=='👍']}, down={[p for p,e in marks.items() if e=='👎']}, skip={[p for p,e in marks.items() if e=='➖']}")
+        logger.debug(f"[MEMORY_MARKS] Parsed attribution: worked={[p for p,e in marks.items() if e=='👍']}, partial={[p for p,e in marks.items() if e=='🤷']}, failed={[p for p,e in marks.items() if e=='👎']}, unknown={[p for p,e in marks.items() if e=='➖']}")
 
     return clean_response, marks
 
@@ -319,6 +319,40 @@ def _strip_all_tags(content: str, *tag_names: str) -> str:
 
 
 # Thinking display feature removed (v0.2.5) - models dont reliably use thinking APIs
+
+
+# v0.3.0: Humanize timestamp for LLM visibility
+def _humanize_age(ts: str) -> str:
+    """Convert ISO timestamp to human-readable age like '2d' for 2 days ago."""
+    if not ts:
+        return ""
+    try:
+        # Parse timestamp - handle both naive and timezone-aware formats
+        if 'Z' in ts:
+            ts = ts.replace('Z', '+00:00')
+        dt = datetime.fromisoformat(ts)
+
+        # Compare in naive datetime (local time) for consistent results
+        # Strip timezone if present, compare to local now()
+        dt_naive = dt.replace(tzinfo=None) if dt.tzinfo else dt
+        delta = datetime.now() - dt_naive
+
+        # Handle negative deltas (future timestamps)
+        if delta.total_seconds() < 0:
+            return "now"
+
+        if delta.days > 30:
+            return f"{delta.days // 30}mo"
+        if delta.days > 0:
+            return f"{delta.days}d"
+        if delta.seconds > 3600:
+            return f"{delta.seconds // 3600}h"
+        if delta.seconds > 60:
+            return f"{delta.seconds // 60}m"
+        return "now"
+    except Exception as e:
+        logger.debug(f"Failed to parse timestamp '{ts}': {e}")
+        return ""
 
 
 def _format_search_results_as_citations(
@@ -667,6 +701,10 @@ class AgentChatService:
                     logger.error(f"[COLD-START] Auto-trigger error: {e}", exc_info=True)
 
             # Add user message to history (AFTER auto-trigger injection if any)
+            # v0.3.0 FIX: Track history length BEFORE adding user message
+            # This is needed because context injection adds system messages AFTER the user message
+            # Using [:-1] would remove the system context, not the user message, causing duplicates
+            history_len_before_user = len(self.conversation_histories[conversation_id])
             self.conversation_histories[conversation_id].append({
                 "role": "user",
                 "content": message
@@ -689,142 +727,37 @@ class AgentChatService:
                     recent_messages=recent_conv
                 )
 
-                # Analyze conversation for organic insights (Content KG)
-                org_context = await self.memory.analyze_conversation_context(
-                    current_message=message,
-                    recent_conversation=recent_conv,
-                    conversation_id=conversation_id
+                # v0.3.0: Unified context injection (ported from roampal-core)
+                # Searches ALL collections (except books), ranks by Wilson score, returns top 3
+                context = await self.memory.get_context_for_injection(
+                    query=message,
+                    conversation_id=conversation_id,
+                    recent_conversation=recent_conv
                 )
 
-                # Check action-effectiveness for tool guidance (Action-Effectiveness KG)
-                action_stats = []
-                available_actions = ["search_memory", "create_memory", "update_memory", "archive_memory"]
-                collections_to_check = [None, "books", "working", "history", "patterns", "memory_bank"]  # Check all 5 tiers + wildcard
-
-                for action in available_actions:
-                    # Check across all collections
-                    for collection in collections_to_check:
-                        stats = self.memory.get_action_effectiveness(context_type, action, collection)
-                        # Only surface stats if we have enough data (10+ uses)
-                        if stats and stats['total_uses'] >= 10:
-                            coll_suffix = f" on {collection}" if collection else ""
-                            action_stats.append({
-                                'action': action,
-                                'collection': collection,
-                                'success_rate': stats['success_rate'],
-                                'uses': stats['total_uses'],
-                                'suffix': coll_suffix
-                            })
-
-                # v0.2.8: Get memory_bank facts for internal LLM (parity with MCP)
-                matched_concepts = org_context.get('matched_concepts', []) if org_context else []
-                relevant_facts = []
-                if matched_concepts:
-                    try:
-                        relevant_facts = await self.memory.get_facts_for_entities(matched_concepts[:5], limit=2)
-                    except Exception as e:
-                        logger.warning(f"[CONTEXTUAL GUIDANCE] Failed to get facts for entities: {e}")
-
-                # Format and inject combined guidance if any insights exist
-                has_content_insights = (
-                    org_context and (
-                        org_context.get('relevant_patterns') or
-                        org_context.get('past_outcomes') or
-                        org_context.get('proactive_insights')
-                    )
-                )
-
-                if has_content_insights or action_stats or relevant_facts:
-                    guidance_msg = f"\n\n═══ CONTEXTUAL GUIDANCE (Context: {context_type}) ═══\n"
-
-                    # v0.2.8: Surface memory_bank facts (parity with MCP get_context_insights)
-                    if relevant_facts:
-                        guidance_msg += "\n💡 YOU ALREADY KNOW THIS (from memory_bank):\n"
-                        for fact in relevant_facts:
-                            content = fact.get('content', '')
-                            eff = fact.get('effectiveness')
-                            eff_str = f" ({int(eff['success_rate']*100)}% helpful)" if eff and eff.get('total_uses', 0) >= 3 else ""
-                            guidance_msg += f"  • \"{content}\"{eff_str}\n"
-
-                    # Content KG insights
-                    if org_context and org_context.get('relevant_patterns'):
-                        # v0.2.8: Full content, no truncation
-                        guidance_msg += "\n📋 Past Experience:\n"
-                        for pattern in org_context['relevant_patterns'][:2]:
-                            guidance_msg += f"  • {pattern['insight']}\n"
-                            guidance_msg += f"    → {pattern['text']}\n"
-
-                    if org_context and org_context.get('past_outcomes'):
-                        guidance_msg += "\n⚠️ Past Failures to Avoid:\n"
-                        for outcome in org_context['past_outcomes'][:2]:
-                            guidance_msg += f"  • {outcome['insight']}\n"
-
-                    # Action-Effectiveness KG stats (informational only)
-                    if action_stats:
-                        # Sort by uses (most frequently used first)
-                        action_stats.sort(key=lambda x: x['uses'], reverse=True)
-                        top_stats = action_stats[:5]  # Show top 5 most-used
-
-                        guidance_msg += "\n📊 Action Outcome Stats (which actions led to correct answers):\n"
-                        guidance_msg += "In similar contexts, these actions contributed to correct final answers:\n"
-                        for stat in top_stats:
-                            suffix = stat.get('suffix', '')
-                            success_rate = int(stat['success_rate']*100)
-                            uses = stat['uses']
-                            guidance_msg += f"  • {stat['action']}(){suffix}: {success_rate}% of uses led to correct answers ({uses} uses)\n"
-                        guidance_msg += "\n⚠️ IMPORTANT: Low % means 'didn't help answer THIS question correctly', NOT 'tool is broken'.\n"
-                        guidance_msg += "If create_memory() returned a doc_id with no errors, it worked! Don't retry.\n"
-
-                    if org_context and org_context.get('proactive_insights'):
-                        guidance_msg += "\n💡 Search Recommendations:\n"
-                        for insight in org_context['proactive_insights'][:2]:
-                            guidance_msg += f"  • {insight}\n"
-
-                    if org_context and org_context.get('topic_continuity'):
-                        for topic in org_context['topic_continuity'][:1]:
-                            guidance_msg += f"\n🔗 {topic['insight']}\n"
-
-                    guidance_msg += "\nUse this guidance to choose appropriate tools and provide informed responses.\n"
-
-                    # Inject as system message
+                # Inject formatted context if we have memories to surface
+                if context.get("formatted_injection"):
                     self.conversation_histories[conversation_id].append({
                         "role": "system",
-                        "content": guidance_msg
+                        "content": context["formatted_injection"]
                     })
-                    logger.info(f"[CONTEXTUAL GUIDANCE] Context={context_type}, Memory facts={len(relevant_facts)}, Content insights={len(org_context.get('relevant_patterns', []))}, Action stats={len(action_stats)}")
+                    logger.info(f"[CONTEXT INJECTION] Surfaced {len(context.get('memories', []))} memories")
+                else:
+                    logger.info(f"[CONTEXT INJECTION] No formatted injection to surface (memories: {len(context.get('memories', []))})")
 
-                    # v0.2.12: Cache organic recall doc_ids for selective scoring
-                    organic_doc_ids = []
-                    organic_contents = []
-
-                    # From memory_bank facts
-                    for fact in relevant_facts:
-                        doc_id = fact.get('id') or fact.get('doc_id')
-                        if doc_id:
-                            organic_doc_ids.append(doc_id)
-                            organic_contents.append(fact.get('content', ''))
-
-                    # From content KG patterns
-                    if org_context:
-                        for pattern in org_context.get('relevant_patterns', []):
-                            doc_id = pattern.get('doc_id')
-                            if doc_id:
-                                organic_doc_ids.append(doc_id)
-                                organic_contents.append(pattern.get('text', pattern.get('insight', '')))
-                        for outcome in org_context.get('past_outcomes', []):
-                            doc_id = outcome.get('doc_id')
-                            if doc_id:
-                                organic_doc_ids.append(doc_id)
-                                organic_contents.append(outcome.get('insight', ''))
-
-                    if organic_doc_ids:
-                        _cache_memories_for_scoring(
-                            conversation_id,
-                            organic_doc_ids,
-                            organic_contents,
-                            source="organic"
-                        )
-                        logger.info(f"[CONTEXTUAL GUIDANCE] Cached {len(organic_doc_ids)} organic recall doc_ids for scoring")
+                # Cache doc_ids for selective outcome scoring
+                if context.get("doc_ids"):
+                    organic_contents = [
+                        m.get("content") or m.get("text", "")
+                        for m in context.get("memories", [])
+                    ]
+                    _cache_memories_for_scoring(
+                        conversation_id,
+                        context["doc_ids"],
+                        organic_contents,
+                        source="organic"
+                    )
+                    logger.info(f"[CONTEXT INJECTION] Cached {len(context['doc_ids'])} doc_ids for scoring")
 
             except Exception as e:
                 logger.error(f"[CONTEXTUAL GUIDANCE ERROR] {e}", exc_info=True)
@@ -840,6 +773,9 @@ class AgentChatService:
             # Phase 3: No pre-search - LLM controls memory search via tools
             # Backend does NOT search memory before LLM request
             citations = []
+
+            # v0.3.0: Track surfaced memories from context injection for UI display
+            surfaced_memories = context.get("memories", []) if 'context' in locals() else []
 
             # 2. Build system prompt (instructions only, no history or current message)
             conversation_history = self.conversation_histories.get(conversation_id, [])
@@ -868,7 +804,7 @@ class AgentChatService:
             thinking_content = None  # Deprecated but kept for API compatibility
             tool_executions = []
             chain_depth = 0  # Track recursion depth for chaining
-            MAX_CHAIN_DEPTH = 3  # Prevent infinite loops
+            MAX_CHAIN_DEPTH = 5  # Increased from 3 for models like Qwen that need more iterations
             tool_events = []  # Collect tool events for UI persistence
 
             # Check if LLM client is available
@@ -876,12 +812,107 @@ class AgentChatService:
                 raise Exception("No LLM client available. Please configure a provider (Ollama or LM Studio).")
 
             # Use the tool-enabled streaming method with proper message separation
-            # IMPORTANT: conversation_history already includes the current message (added at line 517)
-            # We pass it separately as 'prompt', so exclude it from history to avoid duplication
-            history_without_current = conversation_history[:-1] if conversation_history else []
+            # v0.3.0 FIX: Use tracked length instead of [:-1] to handle context injection
+            # Context injection adds system messages AFTER user message, so [:-1] removed wrong item
+            history_without_current = conversation_history[:history_len_before_user] if conversation_history else []
+            # Debug: Log what history is being passed (check for cold start injection)
+            history_to_pass = history_without_current[-self.max_context_messages:] if history_without_current else None
+            if history_to_pass:
+                logger.info(f"[DEBUG] Passing {len(history_to_pass)} history messages. Roles: {[m.get('role') for m in history_to_pass]}")
+                system_msgs = [m for m in history_to_pass if m.get('role') == 'system']
+                if system_msgs:
+                    logger.info(f"[DEBUG] System messages in history: {len(system_msgs)}, first 100 chars: {system_msgs[0].get('content', '')[:100]}...")
+
+            # v0.3.0: Pre-flight context check - warn if prompt exceeds model's context window
+            # This prevents silent truncation by Ollama/LM Studio which can cause barfing
+            from config.model_contexts import get_context_size
+            model_context_window = get_context_size(self.model_name)
+
+            # Estimate total tokens: system prompt + history + current message + tools schema
+            total_chars = len(system_instructions) + len(message)
+            if history_to_pass:
+                total_chars += sum(len(m.get('content', '')) for m in history_to_pass)
+            # Tools schema is roughly 200 chars per tool
+            total_chars += len(memory_tools) * 200
+
+            estimated_tokens = total_chars // 4  # ~4 chars per token estimate
+            context_usage_pct = (estimated_tokens / model_context_window) * 100
+
+            if estimated_tokens > model_context_window * 0.9:  # 90% threshold
+                logger.warning(f"[CONTEXT OVERFLOW] Estimated {estimated_tokens} tokens exceeds 90% of {model_context_window} context window ({context_usage_pct:.1f}%)")
+                truncation_actions = []
+
+                # Step 1: Remove context injection (system messages in history) first
+                # These are "nice to have" - user/assistant messages are more important
+                if history_to_pass:
+                    system_msgs = [m for m in history_to_pass if m.get('role') == 'system']
+                    if system_msgs:
+                        old_count = len(history_to_pass)
+                        history_to_pass = [m for m in history_to_pass if m.get('role') != 'system']
+                        logger.warning(f"[CONTEXT OVERFLOW] Removed {len(system_msgs)} context injection messages, {old_count}→{len(history_to_pass)} history")
+                        truncation_actions.append(f"dropped {len(system_msgs)} context memories")
+
+                        # Re-estimate
+                        post_chars = len(system_instructions) + len(message) + len(memory_tools) * 200
+                        post_chars += sum(len(m.get('content', '')) for m in history_to_pass)
+                        post_tokens = post_chars // 4
+                        post_pct = (post_tokens / model_context_window) * 100
+
+                        if post_tokens <= model_context_window * 0.9:
+                            logger.info(f"[CONTEXT OVERFLOW] After removing context injection: ~{post_tokens} tokens ({post_pct:.0f}%) - OK")
+                            yield {
+                                "type": "token",
+                                "content": f"*⚠️ Context limit reached ({context_usage_pct:.0f}% full). Dropped context memories to preserve conversation history.*\n\n"
+                            }
+                            # Skip further truncation - we're good
+                            pass
+                        else:
+                            estimated_tokens = post_tokens  # Update for next step
+
+                # Step 2: If still over 90%, truncate conversation history to 2 messages
+                if history_to_pass and len(history_to_pass) > 2:
+                    post_chars = len(system_instructions) + len(message) + len(memory_tools) * 200
+                    post_chars += sum(len(m.get('content', '')) for m in history_to_pass)
+                    post_tokens = post_chars // 4
+                    if post_tokens > model_context_window * 0.9:
+                        old_count = len(history_to_pass)
+                        history_to_pass = history_to_pass[-2:]
+                        truncation_actions.append(f"trimmed history {old_count}→2")
+                        logger.warning(f"[CONTEXT OVERFLOW] Truncated history {old_count}→2 messages")
+
+                        # Re-estimate
+                        post_chars = len(system_instructions) + len(message) + len(memory_tools) * 200
+                        post_chars += sum(len(m.get('content', '')) for m in history_to_pass)
+                        post_tokens = post_chars // 4
+                        post_pct = (post_tokens / model_context_window) * 100
+                        logger.warning(f"[CONTEXT OVERFLOW] Post-truncation: ~{post_tokens} tokens ({post_pct:.0f}%)")
+
+                # Step 3: If STILL over 90%, drop all history
+                post_chars = len(system_instructions) + len(message) + len(memory_tools) * 200
+                if history_to_pass:
+                    post_chars += sum(len(m.get('content', '')) for m in history_to_pass)
+                post_tokens = post_chars // 4
+                if post_tokens > model_context_window * 0.9 and history_to_pass:
+                    logger.warning(f"[CONTEXT OVERFLOW] Still over 90%, dropping ALL history")
+                    history_to_pass = []
+                    truncation_actions.append("dropped all history")
+                    post_chars = len(system_instructions) + len(message) + len(memory_tools) * 200
+                    post_tokens = post_chars // 4
+                    post_pct = (post_tokens / model_context_window) * 100
+                    logger.warning(f"[CONTEXT OVERFLOW] Final: ~{post_tokens} tokens ({post_pct:.0f}%)")
+
+                # Yield user-facing warning (if we did anything beyond removing context injection)
+                if truncation_actions and not (len(truncation_actions) == 1 and "context memories" in truncation_actions[0]):
+                    yield {
+                        "type": "token",
+                        "content": f"*⚠️ Context limit critical ({context_usage_pct:.0f}% full). Actions: {', '.join(truncation_actions)}.*\n\n"
+                    }
+            elif estimated_tokens > model_context_window * 0.7:  # 70% warning
+                logger.info(f"[CONTEXT] Using {context_usage_pct:.1f}% of context window ({estimated_tokens}/{model_context_window} tokens)")
+
             async for event in self.llm.stream_response_with_tools(
                 prompt=message,  # Current user message
-                history=history_without_current[-6:] if history_without_current else None,  # Last 3 exchanges (excluding current)
+                history=history_to_pass,  # Last 3 exchanges (may be truncated if context overflow)
                 system_prompt=system_instructions,  # System instructions only
                 tools=memory_tools
             ):
@@ -938,7 +969,8 @@ class AgentChatService:
 
                     # Try multiple patterns to catch different model outputs
                     patterns = [
-                        r'search_memory\s*\(\s*(?:query\s*=\s*)?["\']([^"\']+)["\']\s*\)',  # Function call
+                        r'search_memory\s*\(\s*(?:query\s*=\s*)?["\']([^"\']+)["\']\s*\)',  # Function call: search_memory(query="x")
+                        r'\(search_memory,\s*query\s*=\s*["\']([^"\']+)["\']',  # Qwen tuple style: (search_memory, query="x", ...)
                         r'<tool>search_memory</tool>\s*<query>([^<]+)</query>',  # XML style
                         r'<search>([^<]+)</search>',  # Simplified XML
                         r'\[SEARCH\]:\s*(.+?)(?:\n|$)',  # Bracket notation
@@ -952,7 +984,8 @@ class AgentChatService:
                             break
                     if tool_match and not tool_executions:  # Only execute once
                         query_text = tool_match.group(1).strip()
-                        logger.info(f"[FALLBACK] Detected text-based tool call: search_memory(query='{query_text}')")
+                        # SECURITY: Don't log user query content
+                        logger.info(f"[FALLBACK] Detected text-based tool call: search_memory(query_len={len(query_text)})")
 
                         # Execute the tool (use new method with full collection support)
                         tool_results = await self._search_memory_with_collections(
@@ -972,11 +1005,13 @@ class AgentChatService:
                             "result_count": len(tool_results) if tool_results else 0
                         })
 
-                        # Yield tool execution events
+                        # Yield tool execution events with content_position for session reload ordering
+                        content_position = len(''.join(full_response))
                         yield {
                             "type": "tool_start",
                             "tool": "search_memory",
-                            "arguments": {"query": query_text}
+                            "arguments": {"query": query_text},
+                            "content_position": content_position
                         }
 
                         # CRITICAL: Multi-turn implementation - feed results back to model
@@ -990,7 +1025,7 @@ class AgentChatService:
                             tool_result_text += "[END SEARCH RESULTS]\n\n"
 
                             # Build updated conversation with tool results
-                            conversation_with_tools = conversation_context + [
+                            conversation_with_tools = conversation_history + [
                                 {"role": "assistant", "content": full_text},  # What AI said so far
                                 {"role": "system", "content": tool_result_text}  # Tool results as system message
                             ]
@@ -999,22 +1034,25 @@ class AgentChatService:
                             logger.info(f"[MULTI-TURN] Continuing with tool results in context")
 
                             # Call LLM again with tool results
-                            continuation_prompt = "Continue your response using the search results above."
-                            async for event in self.ollama_client.stream_response_with_tools(
-                                prompt=continuation_prompt,
+                            # v0.3.0: Minimal continuation prompt helps weaker models synthesize responses
+                            # Strong models (Claude/GPT-4) ignore it, Qwen needs it to avoid echoing raw results
+                            async for event in self.llm.stream_response_with_tools(
+                                prompt="Now respond to the user based on what you found.",
                                 history=conversation_with_tools,
                                 model=self.model_name,
-                                tools=None  # Don't pass tools on continuation
+                                tools=memory_tools  # Allow chained tool calls
                             ):
                                 if event["type"] == "text":
-                                    # v0.2.5: Buffer only, no token yields
+                                    # v0.3.0: Stream continuation tokens for interleaving
                                     chunk = event["content"]
                                     full_response.append(chunk)
+                                    yield {"type": "token", "content": chunk}
 
                         yield {
                             "type": "tool_complete",
                             "tool": "search_memory",
-                            "result_count": len(tool_results) if tool_results else 0
+                            "result_count": len(tool_results) if tool_results else 0,
+                            "content_position": content_position  # Same position as tool_start
                         }
 
                         # Mark as handled to prevent re-execution
@@ -1047,6 +1085,7 @@ class AgentChatService:
                             citations=citations,
                             in_thinking=in_thinking,
                             memory_tools=memory_tools,
+                            user_message=message,
                             chain_depth=chain_depth,
                             max_depth=MAX_CHAIN_DEPTH
                         ):
@@ -1175,21 +1214,21 @@ class AgentChatService:
                                 {"role": "user", "content": message}  # Current user feedback
                             ]
 
-                        # v0.2.12: Get surfaced memories for selective scoring
-                        surfaced_memories = None
+                        # v0.2.12: Get cached memories for selective scoring (separate from surfaced_memories for UI)
+                        outcome_memories = None
                         if conversation_id in _search_cache:
                             cached = _search_cache[conversation_id]
                             content_map = cached.get("content_map", {})
                             if content_map:
-                                surfaced_memories = content_map
+                                outcome_memories = content_map
 
                         # v0.2.12 Fix #7: Get memory marks for causal scoring
                         llm_marks = _memory_marks_cache.get(conversation_id)
 
-                        # Detect outcome using LLM (v0.2.12: pass surfaced memories and llm_marks)
+                        # Detect outcome using LLM (v0.2.12: pass cached memories and llm_marks)
                         outcome_result = await self.memory.detect_conversation_outcome(
                             outcome_conversation,
-                            surfaced_memories=surfaced_memories,
+                            surfaced_memories=outcome_memories,
                             llm_marks=llm_marks
                         )
                         logger.info(f"[OUTCOME] Detection result: {outcome_result.get('outcome')} (confidence: {outcome_result.get('confidence', 0):.2f})")
@@ -1204,60 +1243,64 @@ class AgentChatService:
                                 )
                             logger.info(f"[OUTCOME] Recorded '{outcome}' for doc_id {prev_assistant['doc_id']}")
 
-                            # v0.2.12 Fix #7: Causal scoring using upvote/downvote arrays
+                            # v0.3.0: Direct emoji→outcome scoring
                             if conversation_id in _search_cache:
                                 cached = _search_cache[conversation_id]
                                 position_map = cached.get("position_map", {})
 
-                                upvote_positions = outcome_result.get("upvote", [])
-                                downvote_positions = outcome_result.get("downvote", [])
+                                # v0.3.0: If we have llm_marks, use direct emoji→outcome mapping
+                                if llm_marks:
+                                    # Emoji to outcome mapping (4-emoji system)
+                                    EMOJI_TO_OUTCOME = {
+                                        "👍": "worked",   # Definitely helped
+                                        "🤷": "partial",  # Kinda helped
+                                        "👎": "failed",   # Misleading/hurt
+                                        "➖": "unknown"   # Didn't use
+                                    }
 
-                                # v0.2.12 Fix #7: If we have explicit upvote/downvote, use causal scoring
-                                if upvote_positions or downvote_positions:
-                                    upvote_count = 0
-                                    downvote_count = 0
+                                    counts = {"worked": 0, "partial": 0, "failed": 0, "unknown": 0}
 
-                                    # Score upvotes as "worked"
-                                    for pos in upvote_positions:
-                                        doc_id = position_map.get(pos)
-                                        if doc_id:
-                                            try:
-                                                await self.memory.record_outcome(doc_id=doc_id, outcome="worked")
-                                                upvote_count += 1
-                                            except Exception as e:
-                                                logger.warning(f"[OUTCOME] Failed to upvote memory at position {pos}: {e}")
+                                    for pos, doc_id in position_map.items():
+                                        emoji = llm_marks.get(pos, "➖")  # Default to unused if not marked
+                                        outcome_for_memory = EMOJI_TO_OUTCOME.get(emoji, "unknown")
+                                        try:
+                                            await self.memory.record_outcome(doc_id=doc_id, outcome=outcome_for_memory)
+                                            counts[outcome_for_memory] += 1
+                                        except Exception as e:
+                                            logger.warning(f"[OUTCOME] Failed to score memory at position {pos}: {e}")
 
-                                    # Score downvotes as "failed"
-                                    for pos in downvote_positions:
-                                        doc_id = position_map.get(pos)
-                                        if doc_id:
-                                            try:
-                                                await self.memory.record_outcome(doc_id=doc_id, outcome="failed")
-                                                downvote_count += 1
-                                            except Exception as e:
-                                                logger.warning(f"[OUTCOME] Failed to downvote memory at position {pos}: {e}")
-
-                                    logger.info(f"[OUTCOME] Causal scoring: upvoted {upvote_count}, downvoted {downvote_count}, skipped {len(position_map) - upvote_count - downvote_count}")
+                                    logger.info(f"[OUTCOME] Direct scoring: worked={counts['worked']}, partial={counts['partial']}, failed={counts['failed']}, unknown={counts['unknown']}")
 
                                 else:
-                                    # v0.2.12: Fallback to used_positions (Fix #5)
+                                    # Fallback: no marks, use overall outcome for all memories
+                                    # This handles legacy behavior and cases where LLM didn't provide marks
                                     used_positions = outcome_result.get("used_positions", [])
 
                                     if used_positions:
-                                        # Selective scoring: only score memories that were used
+                                        # Selective scoring: score used memories with outcome, unused as "unknown"
                                         scored_count = 0
-                                        for pos in used_positions:
-                                            doc_id = position_map.get(pos)
-                                            if doc_id:
+                                        unknown_count = 0
+                                        used_set = set(used_positions)
+
+                                        for pos, doc_id in position_map.items():
+                                            if pos in used_set:
                                                 try:
                                                     await self.memory.record_outcome(doc_id=doc_id, outcome=outcome)
                                                     scored_count += 1
                                                 except Exception as e:
                                                     logger.warning(f"[OUTCOME] Failed to score memory at position {pos}: {e}")
-                                        logger.info(f"[OUTCOME] Selective scoring: scored {scored_count}/{len(used_positions)} used memories, skipped {len(position_map) - scored_count}")
+                                            else:
+                                                # Score unused as "unknown" for natural selection
+                                                try:
+                                                    await self.memory.record_outcome(doc_id=doc_id, outcome="unknown")
+                                                    unknown_count += 1
+                                                except Exception as e:
+                                                    logger.warning(f"[OUTCOME] Failed to score unknown memory at position {pos}: {e}")
+
+                                        logger.info(f"[OUTCOME] Selective scoring: {scored_count} used ({outcome}), {unknown_count} unknown")
                                     else:
-                                        # Fallback: score all (backwards compatibility or no memory info)
-                                        logger.info(f"[OUTCOME] No used_positions returned, scoring all {len(position_map)} cached memories")
+                                        # Fallback: score all with overall outcome (backwards compatibility)
+                                        logger.info(f"[OUTCOME] No marks or used_positions, scoring all {len(position_map)} cached memories as '{outcome}'")
                                         for doc_id in position_map.values():
                                             try:
                                                 await self.memory.record_outcome(doc_id=doc_id, outcome=outcome)
@@ -1307,13 +1350,25 @@ class AgentChatService:
             # Send completion with citations (fallback for non-tool responses)
             logger.info(f"[CITATIONS] Sending {len(citations)} citations at normal completion")
             # Always trigger memory refresh - UnifiedMemorySystem stores memories automatically
+            # add_to_memory_bank is an alias for create_memory
             memory_tool_used = any(
-                event.get('tool') in ['create_memory', 'update_memory', 'archive_memory']
+                event.get('tool') in ['create_memory', 'add_to_memory_bank', 'update_memory', 'archive_memory']
                 for event in tool_events
             )
+            # v0.3.0: Format surfaced memories for UI display
+            formatted_surfaced = []
+            for mem in surfaced_memories:
+                formatted_surfaced.append({
+                    "id": mem.get("id", ""),
+                    "collection": mem.get("collection", "unknown"),
+                    "text": (mem.get("content") or mem.get("text", ""))[:200],  # Truncate for UI
+                    "score": mem.get("score", 0)
+                })
+
             yield {
                 "type": "stream_complete",
                 "citations": citations,
+                "surfaced_memories": formatted_surfaced,  # v0.3.0: Send to UI
                 "memory_updated": True,
                 "timestamp": datetime.now().isoformat()
             }
@@ -1477,7 +1532,11 @@ class AgentChatService:
         # Thinking tags disabled (2025-10-17) - LLM provides reasoning in natural language when needed
         # No special response format instruction required
 
-        # 2. IDENTITY FIRST (Personality anchors behavior)
+        # 2. CRITICAL TOOL BEHAVIOR (must be early for model attention)
+        parts.append("""[IMPORTANT: Tool Call Behavior]
+When you call tools, the UI shows tool execution separately. Do NOT include JSON tool syntax like {"name": "search_memory"...} in your text response - just call the tool directly. Your text should only contain natural language.""")
+
+        # 3. IDENTITY (Personality anchors behavior)
         personality_prompt = self._load_personality_template()
         if personality_prompt:
             parts.append(personality_prompt)
@@ -1520,11 +1579,25 @@ BEFORE you see the user's message, the system analyzes it and injects:
 **How to Use This:**
 1. Read the guidance - it's intelligence extracted from past successful/failed interactions
 2. If guidance mentions proven solutions, reference them in your response
-3. If stats show search_memory(patterns) worked 85% in this context, prioritize searching patterns
+3. If stats show searching patterns worked 85% in this context, prioritize the patterns collection
 4. If low tool stats (<50%), don't assume tool is broken - it just didn't help answer correctly before
 5. Respond naturally - the system handles learning and promotion automatically""")
 
-        # 5. TOOL USAGE (Simple, trigger-based)
+        # 5. TOOL CALLING STYLE
+        parts.append("""
+
+[Tool Calling Style]
+
+**Always explain before acting:**
+Before using any tool, briefly explain what you're doing and why.
+Example: "Let me search for your project notes..." then use the search tool.
+Tools execute automatically through the API - never write tool calls as text in your response.
+
+**After tool results:**
+The user can see tool results directly. Don't re-announce what you already did.
+Just summarize findings and respond naturally.""")
+
+        # 6. MEMORY SEARCH (Simple, trigger-based)
         parts.append("""
 
 [Memory Search Tool]
@@ -1547,11 +1620,10 @@ BEFORE you see the user's message, the system analyzes it and injects:
 • Current conversation continuation (context already present)
 • You already have the answer from injected context
 
-**Tool: search_memory(query, collections=None, limit=5, metadata=None)**
-• query: Use user's EXACT words (don't simplify or extract keywords)
-• collections: Omit for auto-routing (recommended), or specify: ["memory_bank", "books", "working", "history", "patterns"]
-• limit: 5 (default) to 20 (for broad queries like "show me all...")
-• metadata: Optional filters (timestamp, last_outcome, has_code, author, title, source)
+**Search Tips:**
+• Use user's EXACT words as query (don't simplify or extract keywords)
+• Omit collections for auto-routing, or specify: memory_bank, books, working, history, patterns
+• Default limit is 5, use up to 20 for broad queries
 
 **Collection Guide:**
 • memory_bank = User facts (AUTHORITATIVE - trust over conversation history)
@@ -1565,7 +1637,7 @@ If search returns [], say: "I don't see any information about X in your data."
 NEVER pretend to remember when search returned 0 results.
 NEVER fabricate sources - only cite what search_memory actually returns.""")
 
-        # 6. MEMORY CREATION (Simple rules)
+        # 7. MEMORY CREATION (Simple rules)
         parts.append("""
 
 [Memory Creation Tool]
@@ -1587,18 +1659,12 @@ Store proactively - it's what makes you continuous, not reset-every-session.
 ✗ Session transcripts (working memory auto-captures)
 ✗ Temporary task details ("currently debugging...")
 ✗ General knowledge (not user-specific)
-✗ Say "I'll remember" without calling the tool
+✗ Say "I'll remember" without actually storing
 
-**Tool: create_memory(content, tags=[], importance=0.7, confidence=0.7)**
-• content: The fact to remember (be specific and complete)
-• tags: ["identity", "preference", "goal", "project", "system_mastery", "agent_growth"]
-• importance: How critical (0.0-1.0)
-• confidence: How certain you are (0.0-1.0)
-
-**Quality Ranking:** memory_bank uses importance × confidence for ranking (not outcome scores)
-
-For updates: update_memory(old_content="uses React", new_content="uses Vue now")
-For archiving: archive_memory(content="old project that's completed")""")
+**Storage Tips:**
+• Be specific and complete when storing facts
+• Use tags: identity, preference, goal, project, system_mastery, agent_growth
+• Quality ranking uses importance × confidence""")
 
         # 7. SEARCH RESULTS + FORMATTING
         parts.append("""
@@ -1635,14 +1701,15 @@ What gets scored:
 
 You can explain this to users - it's not magic, it's you analyzing your own conversations.
 
-[Memory Attribution - v0.2.12]
+[Memory Attribution - v0.3.0]
 
 When memories are surfaced (shown as numbered list before your response), you MUST add a hidden annotation at the END of your response:
 
-<!-- MEM: 1👍 2👎 3➖ -->
+<!-- MEM: 1👍 2🤷 3👎 4➖ -->
 
 Markers:
-👍 = this memory helped me answer well
+👍 = this memory definitely helped me answer well
+🤷 = this memory kinda helped (partially useful)
 👎 = this memory was wrong or misleading
 ➖ = I didn't use this memory
 
@@ -1654,7 +1721,7 @@ Only include this annotation when you see numbered memories in your context.""")
 
 [Action-Effectiveness Stats]
 
-When you see stats like "search_memory(patterns): 45% led to correct answers":
+When you see stats like "searching patterns: 45% led to correct answers":
 • High % (>70%): Prioritize this tool+collection combo
 • Low % (<40%): Try other approaches first, but don't avoid entirely
 • Stats measure "led to correct answer", not tool reliability. Use to prioritize, not avoid.""")
@@ -1680,21 +1747,18 @@ Your capabilities are LIMITED to the tools provided. You do NOT have:
 Only use the memory tools (search_memory, create_memory, update_memory, archive_memory) that are explicitly provided.""")
 
         # Add OpenAI-style tool calling instruction for LM Studio
+        # v0.3.0: Unified tool guidance for all providers (Ollama + LM Studio)
+        # Removed explicit function call syntax - tool definitions provide the API contract
         parts.append("""
-""")
-        if self.llm and hasattr(self.llm, 'api_style') and self.llm.api_style == "openai":
-            logger.info(f"[SYSTEM PROMPT] Adding OpenAI-style tool calling instructions (api_style={self.llm.api_style})")
-            parts.append("""
-[IMPORTANT - Function Calling]
 
-You have access to functions/tools. Use them when appropriate:
-• Simple questions about the user → You may reference the auto-loaded User Profile facts
-• Detailed questions or specific searches → CALL search_memory() for comprehensive results
-• User shares new info → CALL create_memory()
+[IMPORTANT - Tool Usage]
 
-Always wait for function results before responding with detailed information.""")
-        else:
-            logger.info(f"[SYSTEM PROMPT] NOT adding OpenAI instructions. llm={self.llm}, has api_style={hasattr(self.llm, 'api_style') if self.llm else 'N/A'}, api_style value={getattr(self.llm, 'api_style', 'N/A') if self.llm else 'N/A'}")
+You have access to memory tools. Use them when appropriate:
+• Simple questions about the user → Reference the auto-loaded User Profile facts first
+• Detailed questions or "remember"/"we discussed" → Search memory for comprehensive results
+• User shares new info worth keeping → Store it in memory
+
+Always wait for tool results before responding with detailed information.""")
 
         # Return ONLY system instructions - history and current message handled separately
         return "\n".join(parts)
@@ -2441,6 +2505,7 @@ Respond with ONLY the title, nothing else."""
         citations: list,
         in_thinking: bool,
         memory_tools: list,
+        user_message: str,
         chain_depth: int = 0,
         max_depth: int = 3
     ):
@@ -2472,12 +2537,16 @@ Respond with ONLY the title, nothing else."""
         import json
         from datetime import datetime
 
+        # Calculate content position for session reload ordering
+        content_position = len(''.join(full_response))
+
         # Yield tool start event
         yield {
             "type": "tool_start",
             "tool": tool_name,
             "arguments": tool_args,
-            "chain_depth": chain_depth
+            "chain_depth": chain_depth,
+            "content_position": content_position
         }
 
         tool_execution_record = None
@@ -2494,7 +2563,8 @@ Respond with ONLY the title, nothing else."""
                 query = "recent information"
 
             # Use LLM's collection choices (with validation)
-            collections = tool_args.get("collections", ["all"])
+            # Handle None explicitly (LLM may pass null)
+            collections = tool_args.get("collections") or ["all"]
             valid_collections = ['working', 'history', 'patterns', 'books', 'memory_bank', 'all']
             collections = [c for c in collections if c in valid_collections]
             if not collections:
@@ -2505,7 +2575,8 @@ Respond with ONLY the title, nothing else."""
             if metadata and isinstance(metadata, dict):
                 logger.info(f"[TOOL] search_memory called with metadata filters: {metadata}")
 
-            logger.info(f"[TOOL] search_memory called with collections={collections}, query='{query[:50]}...')")
+            # SECURITY: Don't log user query content
+            logger.info(f"[TOOL] search_memory called with collections={collections}, query_len={len(query)}")
 
             limit = tool_args.get("limit", 5)
             if not isinstance(limit, int) or limit < 1:
@@ -2538,6 +2609,10 @@ Respond with ONLY the title, nothing else."""
                     collection = r.get('collection', 'unknown')
                     metadata = r.get('metadata', {})
 
+                    # v0.3.0: Include humanized age so LLM can see recency
+                    age = _humanize_age(metadata.get('timestamp') or metadata.get('created_at', ''))
+                    age_str = f", {age}" if age else ""
+
                     # Include source context for books collection
                     source_info = ""
                     if collection == "books":
@@ -2548,11 +2623,12 @@ Respond with ONLY the title, nothing else."""
                             if author:
                                 source_info += f" by {author}"
 
-                    tool_response_content += f"[{idx}] ({collection}{source_info}): {content}...\n"
+                    tool_response_content += f"[{idx}] ({collection}{age_str}{source_info}): {content}...\n"
                     citations.append(self._format_citation(r, idx))
             else:
                 tool_response_content = "No relevant memories found for this query. I'll answer based on my general knowledge."
-                logger.info(f"[TOOL] No memories found for query: {query}")
+                # SECURITY: Don't log user query content
+                logger.info(f"[TOOL] No memories found (query_len={len(query)})")
 
             # v0.2.4: Build preview from first 2-3 results for UI display
             result_preview = None
@@ -2583,12 +2659,19 @@ Respond with ONLY the title, nothing else."""
                 "tool": "search_memory",
                 "result_count": len(tool_results) if tool_results else 0,
                 "result_preview": result_preview,
-                "chain_depth": chain_depth
+                "chain_depth": chain_depth,
+                "content_position": content_position
             }
 
-        elif tool_name == "create_memory":
+        elif tool_name == "create_memory" or tool_name == "add_to_memory_bank":
+            # add_to_memory_bank is an alias - MCP uses this name, Desktop uses create_memory
             content = tool_args.get("content", "")
-            tag = tool_args.get("tag", "context")
+            # Handle both "tags" (array, per tool definition) and "tag" (legacy singular)
+            tags = tool_args.get("tags", tool_args.get("tag", ["context"]))
+            if isinstance(tags, str):
+                tags = [tags]
+            importance = tool_args.get("importance", 0.7)
+            confidence = tool_args.get("confidence", 0.8)
 
             if content.strip() and self.memory:
                 now = datetime.now().isoformat()
@@ -2596,9 +2679,9 @@ Respond with ONLY the title, nothing else."""
                     text=content,
                     collection="memory_bank",
                     metadata={
-                        "tags": json.dumps([tag]),
-                        "importance": 0.7,
-                        "confidence": 0.8,
+                        "tags": json.dumps(tags),
+                        "importance": importance,
+                        "confidence": confidence,
                         "status": "active",
                         "created_at": now,
                         "updated_at": now,
@@ -2607,7 +2690,10 @@ Respond with ONLY the title, nothing else."""
                         "conversation_id": conversation_id
                     }
                 )
-                logger.info(f"[MEMORY_BANK TOOL] Created: {content[:50]}... with tag={tag} (depth={chain_depth})")
+                logger.info(f"[MEMORY_BANK TOOL] Created: {content[:50]}... with tags={tags} (depth={chain_depth})")
+
+                # Set response content for continuation (so LLM responds after storing)
+                tool_response_content = f"Memory stored successfully: \"{content[:100]}{'...' if len(content) > 100 else ''}\""
 
                 tool_execution_record = {
                     "tool": "create_memory",
@@ -2619,7 +2705,8 @@ Respond with ONLY the title, nothing else."""
                     "type": "tool_complete",
                     "tool": "create_memory",
                     "status": "success",
-                    "chain_depth": chain_depth
+                    "chain_depth": chain_depth,
+                    "content_position": content_position
                 }
 
         elif tool_name == "update_memory":
@@ -2643,6 +2730,8 @@ Respond with ONLY the title, nothing else."""
                     )
                     logger.info(f"[MEMORY_BANK TOOL] Updated: {doc_id} -> {new_content[:50]}... (depth={chain_depth})")
 
+                    tool_response_content = f"Memory updated successfully."
+
                     tool_execution_record = {
                         "tool": "update_memory",
                         "status": "success",
@@ -2653,10 +2742,12 @@ Respond with ONLY the title, nothing else."""
                         "type": "tool_complete",
                         "tool": "update_memory",
                         "status": "success",
-                        "chain_depth": chain_depth
+                        "chain_depth": chain_depth,
+                        "content_position": content_position
                     }
                 else:
                     logger.warning(f"[MEMORY_BANK TOOL] No match found for: {old_content[:50]}... (depth={chain_depth})")
+                    tool_response_content = f"No matching memory found to update."
 
                     tool_execution_record = {
                         "tool": "update_memory",
@@ -2668,7 +2759,8 @@ Respond with ONLY the title, nothing else."""
                         "type": "tool_complete",
                         "tool": "update_memory",
                         "status": "not_found",
-                        "chain_depth": chain_depth
+                        "chain_depth": chain_depth,
+                        "content_position": content_position
                     }
 
         elif tool_name == "archive_memory":
@@ -2687,6 +2779,8 @@ Respond with ONLY the title, nothing else."""
                     await self.memory.archive_memory_bank(doc_id)
                     logger.info(f"[MEMORY_BANK TOOL] Archived: {doc_id} (depth={chain_depth})")
 
+                    tool_response_content = f"Memory archived successfully."
+
                     tool_execution_record = {
                         "tool": "archive_memory",
                         "status": "success",
@@ -2697,10 +2791,12 @@ Respond with ONLY the title, nothing else."""
                         "type": "tool_complete",
                         "tool": "archive_memory",
                         "status": "success",
-                        "chain_depth": chain_depth
+                        "chain_depth": chain_depth,
+                        "content_position": content_position
                     }
                 else:
                     logger.warning(f"[MEMORY_BANK TOOL] No match found to archive: {content[:50]}... (depth={chain_depth})")
+                    tool_response_content = f"No matching memory found to archive."
 
                     tool_execution_record = {
                         "tool": "archive_memory",
@@ -2712,7 +2808,8 @@ Respond with ONLY the title, nothing else."""
                         "type": "tool_complete",
                         "tool": "archive_memory",
                         "status": "not_found",
-                        "chain_depth": chain_depth
+                        "chain_depth": chain_depth,
+                        "content_position": content_position
                     }
 
         else:
@@ -2738,7 +2835,8 @@ Respond with ONLY the title, nothing else."""
                         "tool": tool_name,
                         "status": "success",
                         "result_preview": str(result)[:100] if result else None,
-                        "chain_depth": chain_depth
+                        "chain_depth": chain_depth,
+                        "content_position": content_position
                     }
                     logger.info(f"[MCP TOOL] {tool_name} completed successfully")
                 else:
@@ -2754,7 +2852,8 @@ Respond with ONLY the title, nothing else."""
                         "tool": tool_name,
                         "status": "failed",
                         "error": str(result),
-                        "chain_depth": chain_depth
+                        "chain_depth": chain_depth,
+                        "content_position": content_position
                     }
                     logger.error(f"[MCP TOOL] {tool_name} failed: {result}")
             else:
@@ -2770,7 +2869,8 @@ Respond with ONLY the title, nothing else."""
                     "type": "tool_complete",
                     "tool": tool_name,
                     "status": "unknown",
-                    "chain_depth": chain_depth
+                    "chain_depth": chain_depth,
+                    "content_position": content_position
                 }
 
         # Yield tool complete event
@@ -2785,8 +2885,8 @@ Respond with ONLY the title, nothing else."""
                 context_type="general",  # Default - could be enhanced to pass from caller
                 outcome="unknown",  # Will be updated when user reaction is detected
                 action_params=tool_args,
-                collection=tool_args.get("collections", [None])[0] if tool_name == "search_memory" else None,
-                doc_id=_search_cache.get(conversation_id, [None])[0] if tool_name == "search_memory" else None
+                collection=(tool_args.get("collections") or [None])[0] if tool_name == "search_memory" else None,
+                doc_id=list(_search_cache.get(conversation_id, {}).get("position_map", {}).values())[0] if (tool_name == "search_memory" and _search_cache.get(conversation_id, {}).get("position_map")) else None
             )
             _agent_action_cache.setdefault(conversation_id, []).append(action)
             logger.debug(f"[ACTION_KG] Cached action: {tool_name} for conversation {conversation_id}")
@@ -2797,7 +2897,9 @@ Respond with ONLY the title, nothing else."""
         mcp_mgr = get_mcp_manager()
         is_external_tool = mcp_mgr and mcp_mgr.is_external_tool(tool_name) if mcp_mgr else False
 
-        if (tool_name == "search_memory" or is_external_tool) and chain_depth < max_depth and tool_response_content:
+        # Tools that need LLM to continue with a text response after execution
+        tools_needing_continuation = ["search_memory", "create_memory", "update_memory", "archive_memory"]
+        if (tool_name in tools_needing_continuation or is_external_tool) and chain_depth < max_depth and tool_response_content:
             logger.info(f"[CHAIN] Continuing with tool results at depth {chain_depth}")
 
             # Build conversation with results
@@ -2806,19 +2908,39 @@ Respond with ONLY the title, nothing else."""
                 {"role": "system", "content": tool_response_content}
             ]
 
-            # Continue streaming WITHOUT tools - LLM already has results, no need to search again
+            # Continue streaming WITH tools - allow chained tool calls (e.g., create_memory then search_memory)
+            # MAX_CHAIN_DEPTH (5) prevents infinite loops
             chain_depth += 1
-            continuation_prompt = "Continue your response using the tool results above."
+
+            # v0.3.0: Graceful wrap-up on final iteration - no tools, prompt to finish
+            # Normal continuation: no prompt (let model naturally continue after tool results)
+            # Final iteration: short system instruction to wrap up
+            is_final_iteration = chain_depth >= max_depth - 1
+            if is_final_iteration:
+                # Wrap-up mode: system instruction to finish without more tools
+                continuation_prompt = "Wrap up your response now. Provide a clear, concise answer based on the results above."
+                prompt_role = "system"
+                tools_for_continuation = None  # No tools on final iteration - text only
+                logger.info(f"[CHAIN] Final iteration {chain_depth}/{max_depth} - wrap-up mode, no tools")
+            else:
+                # Normal continuation: no prompt, let model naturally continue
+                continuation_prompt = ""
+                prompt_role = "user"  # Won't matter since prompt is empty
+                tools_for_continuation = memory_tools
+
             async for continuation_event in self.llm.stream_response_with_tools(
                 prompt=continuation_prompt,
                 history=conversation_with_tools,
                 model=self.model_name,
-                tools=None  # Don't pass tools on continuation - prevents recursive searches
+                tools=tools_for_continuation,  # None on final iteration to force text-only response
+                prompt_role=prompt_role
             ):
                 if continuation_event["type"] == "text":
-                    # v0.2.5: Buffer only, no token yields
+                    # v0.3.0: Stream continuation tokens for interleaving
+                    # (Changed from v0.2.5 buffer-only model)
                     chunk = continuation_event["content"]
                     full_response.append(chunk)
+                    yield {"type": "token", "content": chunk}
 
                 elif continuation_event["type"] == "tool_call":
                     # RECURSIVE: Handle chained tool calls
@@ -2841,6 +2963,7 @@ Respond with ONLY the title, nothing else."""
                             citations=citations,
                             in_thinking=in_thinking,
                             memory_tools=memory_tools,
+                            user_message=user_message,
                             chain_depth=chain_depth
                         ):
                             yield nested_event
@@ -3484,7 +3607,22 @@ async def agent_chat_stream(request: AgentChatRequest, req: Request):
 
     logger.info(f"WebSocket check - has_websockets: {has_websockets}, count: {websocket_count}, has {conversation_id}: {has_this_websocket}")
 
-    # Start appropriate generation task and track it for cancellation
+    # v0.3.0: Cancel existing task FIRST, await completion, THEN create new task
+    # This prevents race condition where both tasks send data simultaneously
+    existing_task = _active_tasks.get(conversation_id)
+    if existing_task and not existing_task.done():
+        logger.info(f"[CANCEL] Cancelling existing task for {conversation_id} before starting new one")
+        existing_task.cancel()
+        try:
+            # Wait for cancellation to complete (with timeout to prevent hanging)
+            await asyncio.wait_for(asyncio.shield(existing_task), timeout=2.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass  # Expected - task was cancelled or timed out
+        except Exception as e:
+            logger.warning(f"[CANCEL] Error waiting for task cancellation: {e}")
+        logger.info(f"[CANCEL] Previous task cancelled, starting new generation")
+
+    # Start appropriate generation task
     if use_streaming and has_websockets and has_this_websocket:
         logger.info(f"Using streaming generation for conversation {conversation_id}")
         # Use streaming version
@@ -3498,12 +3636,7 @@ async def agent_chat_stream(request: AgentChatRequest, req: Request):
             _run_generation_task(conversation_id, request, user_id, req.app.state)
         )
 
-    # Cancel existing task for this conversation (prevents race condition)
-    existing_task = _active_tasks.get(conversation_id)
-    if existing_task and not existing_task.done():
-        existing_task.cancel()
-
-    # Store task handle for cancellation
+    # Store task handle for future cancellation
     _active_tasks[conversation_id] = task
 
     # Clean up task handle when done (only if still current)
@@ -3696,7 +3829,7 @@ async def switch_conversation(req: Request):
             # Still promote old conversation's memories
             if agent_service.memory and old_id:
                 asyncio.create_task(
-                    agent_service.memory._promote_valuable_working_memory()
+                    agent_service.memory.promote_valuable_working_memory()
                 )
             return {
                 "status": "success",
@@ -3715,7 +3848,7 @@ async def switch_conversation(req: Request):
 
             asyncio.create_task(
 
-                agent_service.memory._promote_valuable_working_memory()
+                agent_service.memory.promote_valuable_working_memory()
 
             )
 

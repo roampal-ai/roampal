@@ -179,15 +179,20 @@ async def _inject_cold_start_if_needed(session_id: str, tool_response: str, memo
         _mcp_first_tool_call.add(session_id)
 
         try:
-            context_summary = await asyncio.wait_for(
-                memory_system.get_cold_start_context(limit=5),
+            # get_cold_start_context returns tuple: (profile_string, doc_ids, raw_facts)
+            # mode="mcp" uses add_to_memory_bank tool name (vs create_memory for internal)
+            result = await asyncio.wait_for(
+                memory_system.get_cold_start_context(limit=5, mode="mcp"),
                 timeout=10.0
             )
 
-            if context_summary:
-                logger.info(f"[MCP] Cold-start injection for {session_id}: {len(context_summary)} chars")
+            # Unpack the tuple - we only need the profile string for injection
+            profile_string = result[0] if result else None
+
+            if profile_string:
+                logger.info(f"[MCP] Cold-start injection for {session_id}: {len(profile_string)} chars")
                 return f"""═══ KNOWN CONTEXT (auto-loaded) ═══
-{context_summary}
+{profile_string}
 
 ═══ Tool Response ═══
 {tool_response}"""
@@ -918,17 +923,24 @@ Use this for stable user info, not session learnings (those go in record_respons
             ),
             types.Tool(
                 name="get_context_insights",
-                description="""Search your memory before responding. Returns what you know about this user/topic.
+                description="""⚠️ REQUIRED - Call this BEFORE answering the user's question.
 
-WORKFLOW (follow these steps):
-1. get_context_insights(query) ← YOU ARE HERE
+This is how you access the memory system. Without it, you have no context about this user.
+
+═══ WORKFLOW ═══
+1. get_context_insights(query) ← YOU ARE HERE (start every interaction here)
 2. Read the context returned
 3. search_memory() if you need more details
 4. Respond to user
-5. record_response() to complete
+5. record_response() to complete the loop
 
-Returns: Known facts, past solutions, recommended collections, tool stats.
-Fast lookup (5-10ms) - no embedding search, just pattern matching.""",
+═══ WHAT YOU GET ═══
+• User profile (identity, preferences, goals, projects)
+• Relevant memories from past sessions
+• Proven solutions ranked by success rate
+• Doc IDs for scoring when you call record_response()
+
+Fast lookup (5-10ms). Use the user's exact words as query.""",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -944,54 +956,59 @@ Fast lookup (5-10ms) - no embedding search, just pattern matching.""",
                 name="record_response",
                 description="""Complete the interaction. Call this after responding to the user.
 
-WORKFLOW:
+═══ WORKFLOW ═══
 1. get_context_insights() ✓
 2. search_memory() if needed ✓
 3. Respond to user ✓
 4. record_response() ← YOU ARE HERE (completes the interaction)
 
-Parameters:
-• key_takeaway: 1-2 sentence summary of what happened
-• outcome: "worked" | "failed" | "partial" | "unknown"
-• related: (Optional) Which search results were actually helpful (positions 1, 2, 3 or doc_ids)
+This closes the loop. Without it, the system can't learn what worked.
 
-OUTCOME DETECTION (read user's reaction):
+═══ PARAMETERS ═══
+• key_takeaway: 1-2 sentence summary of what happened (REQUIRED)
+• outcome: "worked" | "failed" | "partial" | "unknown"
+• memory_scores: (Optional) Per-memory scoring {doc_id: outcome}
+
+═══ OUTCOME DETECTION ═══
+Read user's reaction:
 ✓ worked = user satisfied, says thanks, moves on
-✗ failed = user corrects you, says "no", "that's wrong", provides the right answer
-~ partial = user says "kind of" or takes some but not all of your answer
+✗ failed = user corrects you, says "no", "that's wrong"
+~ partial = user says "kind of" or takes some but not all
 ? unknown = no clear signal from user
 
-⚠️ CRITICAL - "failed" OUTCOMES ARE ESSENTIAL:
-• If user says you were wrong → outcome="failed"
-• If memory you retrieved was outdated → outcome="failed"
-• If user had to correct you → outcome="failed"
-• If you gave advice that didn't help → outcome="failed"
+═══ PER-MEMORY SCORING (v0.3.0) ═══
+Score each cached memory individually in memory_scores:
+• worked = this memory was helpful
+• partial = somewhat helpful
+• unknown = didn't use this memory
+• failed = this memory was MISLEADING (gave bad advice)
 
-Failed outcomes are how bad memories get deleted. Without them, wrong info persists forever.
-Don't default to "worked" just to be optimistic. Wrong memories MUST be demoted.
-
-SELECTIVE SCORING (optional):
-If you retrieved 5 memories but only used 2, specify which with related=[1, 3].
-Unrelated memories get 0 (neutral) - they're not penalized, just skipped.
-
-This closes the loop. Without it, the system can't learn what worked OR what didn't.""",
+⚠️ "failed" means MISLEADING, not just unused. If you didn't use a memory, mark it "unknown".""",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "key_takeaway": {
                             "type": "string",
-                            "description": "1-2 sentence semantic summary of this exchange"
+                            "description": "1-2 sentence semantic summary of this exchange (optional)"
                         },
                         "outcome": {
                             "type": "string",
                             "enum": ["worked", "failed", "partial", "unknown"],
-                            "description": "How helpful was your response based on user's reaction",
+                            "description": "Exchange outcome based on user's reaction",
                             "default": "unknown"
+                        },
+                        "memory_scores": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string",
+                                "enum": ["worked", "failed", "partial", "unknown"]
+                            },
+                            "description": "Per-memory scoring: {doc_id: outcome}. Score each cached memory individually."
                         },
                         "related": {
                             "type": "array",
                             "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
-                            "description": "Which results were helpful. Use positions (1, 2, 3) or doc_ids. Omit to score all.",
+                            "description": "(Deprecated) Use memory_scores instead. Which results were helpful.",
                             "default": None
                         }
                     },
@@ -1369,133 +1386,54 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                     except Exception as e:
                         logger.error(f"[MCP] Failed to load session file: {e}")
 
-                # Detect context type for action-effectiveness guidance (v0.2.1)
-                context_type = await memory.detect_context_type(
-                    system_prompts=system_prompts,
-                    recent_messages=recent_conv
-                )
-
-                # Analyze conversation for organic insights (Content KG)
+                # v0.3.0: Use unified context injection (ported from roampal-core)
                 try:
-                    org_context = await memory.analyze_conversation_context(
-                        current_message=query,
-                        recent_conversation=recent_conv,
-                        conversation_id=session_id
+                    context = await memory.get_context_for_injection(
+                        query=query,
+                        conversation_id=session_id,
+                        recent_conversation=recent_conv
                     )
 
-                    # Check action-effectiveness for tool guidance (Action-Effectiveness KG)
-                    action_stats = []
-                    available_actions = ["search_memory", "create_memory", "update_memory", "archive_memory"]
-                    collections_to_check = [None, "books", "working", "history", "patterns", "memory_bank"]  # Check all 5 tiers + wildcard
+                    # Cache doc_ids for scoring
+                    cached_doc_ids = context.get("doc_ids", [])
+                    if cached_doc_ids:
+                        _mcp_search_cache[session_id] = {
+                            "doc_ids": cached_doc_ids,
+                            "query": query,
+                            "source": "get_context_insights",
+                            "timestamp": datetime.now().isoformat()
+                        }
 
-                    for action in available_actions:
-                        # Check across all collections
-                        for collection in collections_to_check:
-                            stats = memory.get_action_effectiveness(context_type, action, collection)
-                            # Only surface stats if we have enough data (10+ uses)
-                            if stats and stats['total_uses'] >= 10:
-                                coll_suffix = f" on {collection}" if collection else ""
-                                action_stats.append({
-                                    'action': action,
-                                    'collection': collection,
-                                    'success_rate': stats['success_rate'],
-                                    'uses': stats['total_uses'],
-                                    'suffix': coll_suffix
-                                })
+                    # Format response
+                    user_facts = context.get("user_facts", [])
+                    memories = context.get("memories", [])
 
-                    # v0.2.6: Get directive insights using new helper methods
-                    matched_concepts = org_context.get('matched_concepts', []) if org_context else []
+                    text = f"Known Context for '{query}':\n\n"
 
-                    # Get routing recommendations from Routing KG
-                    routing = memory.get_tier_recommendations(matched_concepts)
+                    if user_facts:
+                        text += "**Memory Bank (always injected):**\n"
+                        for fact in user_facts:
+                            text += f"• {fact.get('content', '')}\n"
+                        text += "\n"
 
-                    # Get relevant memory_bank facts from Content KG
-                    relevant_facts = []
-                    if matched_concepts:
-                        try:
-                            relevant_facts = await memory.get_facts_for_entities(matched_concepts[:5], limit=2)
-                        except Exception as e:
-                            logger.warning(f"[MCP] Failed to get facts for entities: {e}")
-
-                    # Format insights
-                    has_actionable_insights = (
-                        org_context and (
-                            org_context.get('relevant_patterns') or
-                            org_context.get('past_outcomes') or
-                            org_context.get('proactive_insights')
-                        )
-                    )
-
-                    if not has_actionable_insights and not action_stats and not relevant_facts:
-                        text = f"No relevant patterns found in knowledge graph for '{query}'.\n\nThis appears to be a new type of query. The system will learn from your interactions and build patterns over time."
-                    else:
-                        response = f"═══ KNOWN CONTEXT (Topic: {context_type}) ═══\n\n"
-
-                        # v0.2.6: DIRECTIVE - Recommended actions first
-                        response += "📌 RECOMMENDED ACTIONS:\n"
-                        if routing and routing.get('top_collections'):
-                            collections = routing['top_collections'][:2]
-                            match_count = routing.get('match_count', 0)
-                            confidence = routing.get('confidence_level', 'exploration')
-                            if match_count > 0:
-                                response += f"  • search_memory(collections={collections}) - {match_count} patterns matched ({confidence} confidence)\n"
+                    if memories:
+                        text += "**Relevant Memories (top 3 by Wilson score):**\n"
+                        for mem in memories:
+                            coll = mem.get("collection", "unknown")
+                            content = mem.get("content") or mem.get("text", "")
+                            wilson = mem.get("wilson_score", 0)
+                            doc_id = mem.get("id", "")
+                            id_hint = f" [id:{doc_id}]" if doc_id else ""
+                            if wilson >= 0.7:
+                                text += f"• [{coll}]{id_hint} ({int(wilson*100)}% proven) {content}\n"
                             else:
-                                response += f"  • search_memory() - auto-routing will select collections\n"
-                        response += "  • record_response(outcome=...) after reply - required for learning\n\n"
+                                text += f"• [{coll}]{id_hint} {content}\n"
+                        text += "\n"
 
-                        # v0.2.6: Surface relevant memory_bank facts
-                        # v0.2.8: Full content, no truncation
-                        if relevant_facts:
-                            response += "💡 YOU ALREADY KNOW THIS (from memory_bank):\n"
-                            for fact in relevant_facts:
-                                content = fact.get('content', '')
-                                eff = fact.get('effectiveness')
-                                eff_str = f" ({int(eff['success_rate']*100)}% helpful)" if eff and eff.get('total_uses', 0) >= 3 else ""
-                                response += f"  • \"{content}\"{eff_str}\n"
-                            response += "\n"
+                    if not user_facts and not memories:
+                        text += "No relevant context found. This may be a new topic or first interaction.\n"
 
-                        if org_context and org_context.get('relevant_patterns'):
-                            response += "📋 PAST EXPERIENCE:\n"
-                            for pattern in org_context['relevant_patterns'][:3]:
-                                response += f"  • {pattern['insight']}\n"
-                                response += f"    Collection: {pattern['collection']}, Score: {pattern['score']:.2f}, Uses: {pattern['uses']}\n"
-                                response += f"    → {pattern['text']}\n\n"
-
-                        if org_context and org_context.get('past_outcomes'):
-                            response += "⚠️ PAST FAILURES TO AVOID:\n"
-                            for outcome in org_context['past_outcomes'][:2]:
-                                response += f"  • {outcome['insight']}\n\n"
-
-                        # Action-Effectiveness KG stats (v0.2.1 - informational only)
-                        if action_stats:
-                            # Sort by uses (most frequently used first)
-                            action_stats.sort(key=lambda x: x['uses'], reverse=True)
-                            top_stats = action_stats[:5]  # Show top 5 most-used
-
-                            response += "📊 TOOL STATS:\n"
-                            for stat in top_stats:
-                                suffix = stat.get('suffix', '')
-                                success_rate = int(stat['success_rate']*100)
-                                uses = stat['uses']
-                                response += f"  • {stat['action']}(){suffix}: {success_rate}% success ({uses} uses)\n"
-
-                            response += "\n"
-
-                        if org_context and org_context.get('proactive_insights'):
-                            response += "💡 SEARCH RECOMMENDATIONS:\n"
-                            for insight in org_context['proactive_insights'][:3]:
-                                rec = insight.get('recommendation', '')
-                                if rec:
-                                    response += f"  • {rec}\n"
-
-                        if org_context and org_context.get('topic_continuity'):
-                            for topic in org_context['topic_continuity'][:1]:
-                                response += f"\n🔗 {topic['insight']}\n"
-
-                        # v0.2.6: Explicit completion reminder (open loop)
-                        response += "\n═══ TO COMPLETE THIS INTERACTION ═══\n"
-                        response += "After responding → record_response(key_takeaway=\"...\", outcome=\"worked|failed|partial\")"
-                        text = response
+                    text += f"\n_Cached {len(cached_doc_ids)} doc_ids for outcome scoring._"
 
                 except Exception as e:
                     logger.error(f"[MCP] get_context_insights error: {e}", exc_info=True)
@@ -1510,47 +1448,70 @@ This closes the loop. Without it, the system can't learn what worked OR what did
 
             elif name == "record_response":
                 # Per architecture.md line 574-586: Store semantic summary, score CURRENT learning
+                # v0.3.0: Added memory_scores for per-memory scoring (matches roampal-core score_response)
                 key_takeaway = arguments.get("key_takeaway")
                 outcome = arguments.get("outcome", "unknown")  # Default to "unknown"
-                related = arguments.get("related", None)  # v0.2.9: Selective scoring
+                related = arguments.get("related", None)  # v0.2.9: Selective scoring (deprecated)
+                memory_scores = arguments.get("memory_scores", None)  # v0.3.0: Per-memory scoring {doc_id: outcome}
                 session_id = detect_mcp_client()
 
-                logger.info(f"[MCP] record_response: session={session_id}, outcome={outcome}, related={related}")
-                logger.info(f"[MCP] Takeaway: {key_takeaway[:100]}...")
+                logger.info(f"[MCP] record_response: session={session_id}, outcome={outcome}, memory_scores={bool(memory_scores)}, related={related}")
+                if key_takeaway:
+                    logger.info(f"[MCP] Takeaway: {key_takeaway[:100]}...")
 
                 # Get cached query from last search (for KG routing updates)
                 cached_query = ""
                 if session_id in _mcp_search_cache:
                     cached_query = _mcp_search_cache[session_id].get("query", "")
 
-                # Calculate initial score based on outcome (architecture.md line 576-577)
-                initial_scores = {
-                    "worked": 0.7,
-                    "failed": 0.2,
-                    "partial": 0.55,
-                    "unknown": 0.5
-                }
-                initial_score = initial_scores.get(outcome, 0.5)
-
-                # Store CURRENT semantic summary with initial score
-                doc_id = await memory.store(
-                    text=key_takeaway,
-                    collection="working",
-                    metadata={
-                        "role": "learning",
-                        "source": session_id,
-                        "score": initial_score,
-                        "query": cached_query,  # Enables KG routing updates
-                        "timestamp": datetime.now().isoformat(),
+                # v0.3.0: key_takeaway is now optional - can just score memories
+                doc_id = None
+                initial_score = 0.5
+                if key_takeaway:
+                    # Calculate initial score based on outcome (architecture.md line 576-577)
+                    initial_scores = {
+                        "worked": 0.7,
+                        "failed": 0.2,
+                        "partial": 0.55,
+                        "unknown": 0.5
                     }
-                )
-                logger.info(f"[MCP] Stored learning with doc_id={doc_id}, initial_score={initial_score}")
+                    initial_score = initial_scores.get(outcome, 0.5)
+
+                    # Store CURRENT semantic summary with initial score
+                    doc_id = await memory.store(
+                        text=key_takeaway,
+                        collection="working",
+                        metadata={
+                            "role": "learning",
+                            "source": session_id,
+                            "score": initial_score,
+                            "query": cached_query,  # Enables KG routing updates
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
+                    logger.info(f"[MCP] Stored learning with doc_id={doc_id}, initial_score={initial_score}")
 
                 # Score cached memories from last search (architecture.md line 578)
-                # v0.2.9: Support selective scoring via `related` parameter
+                # v0.3.0: memory_scores takes precedence over related (per-memory scoring)
+                # v0.2.9: Support selective scoring via `related` parameter (deprecated)
                 cached_memories_scored = 0
                 skipped_memories = 0
-                if outcome in ["worked", "failed", "partial"] and session_id in _mcp_search_cache:
+                per_memory_scored = 0
+
+                # v0.3.0: Per-memory scoring with individual outcomes (like roampal-core score_response)
+                if memory_scores:
+                    for mem_doc_id, mem_outcome in memory_scores.items():
+                        if mem_outcome in ["worked", "failed", "partial", "unknown"]:
+                            try:
+                                await memory.record_outcome(doc_id=mem_doc_id, outcome=mem_outcome)
+                                per_memory_scored += 1
+                                logger.debug(f"[MCP] Per-memory scored: {mem_doc_id} → {mem_outcome}")
+                            except Exception as e:
+                                logger.warning(f"[MCP] Failed to score memory {mem_doc_id}: {e}")
+                    logger.info(f"[MCP] Per-memory scoring: {per_memory_scored} memories with individual outcomes")
+
+                # Legacy scoring path (only if memory_scores not provided)
+                elif outcome in ["worked", "failed", "partial"] and session_id in _mcp_search_cache:
                     cached = _mcp_search_cache[session_id]
                     cached_doc_ids = cached.get("doc_ids", [])
                     positions = cached.get("positions", {})  # v0.2.9: Position -> doc_id mapping
@@ -1635,50 +1596,44 @@ This closes the loop. Without it, the system can't learn what worked OR what did
                     del _mcp_action_cache[session_id]
                     logger.debug(f"[MCP] Cleared action cache for {session_id}")
 
-                # Record to session file
-                result = await mcp_session_manager.record_exchange(
-                    session_id=session_id,
-                    user_msg=key_takeaway,  # Store semantic summary
-                    assistant_msg="",  # Not used in MCP mode
-                    doc_id=doc_id,
-                    outcome=outcome
-                )
+                # Record to session file (only if key_takeaway provided)
+                if key_takeaway:
+                    result = await mcp_session_manager.record_exchange(
+                        session_id=session_id,
+                        user_msg=key_takeaway,  # Store semantic summary
+                        assistant_msg="",  # Not used in MCP mode
+                        doc_id=doc_id,
+                        outcome=outcome
+                    )
 
-                # Build response text (v0.2.3: enriched summary)
+                # Build response text (v0.3.0: Handle scoring-only case)
                 client_name = get_client_display_name(session_id)
-                response_text = f"✓ Learning recorded for {client_name}\n"
-                response_text += f"Doc ID: {doc_id}\n"
-                response_text += f"Initial score: {initial_score} (outcome={outcome})\n"
 
-                # v0.2.9: Enhanced reporting for selective scoring
+                # v0.3.0: Different response based on what was done
+                if key_takeaway and per_memory_scored > 0:
+                    response_text = f"Scored (outcome={outcome}, {per_memory_scored} memories updated)"
+                    if doc_id:
+                        response_text += f"\nTakeaway stored: {doc_id}"
+                elif per_memory_scored > 0:
+                    response_text = f"Scored (outcome={outcome}, {per_memory_scored} memories updated)"
+                elif key_takeaway:
+                    response_text = f"✓ Learning recorded for {client_name}\n"
+                    response_text += f"Doc ID: {doc_id}\n"
+                    response_text += f"Initial score: {initial_score} (outcome={outcome})\n"
+                else:
+                    response_text = f"No action taken (no key_takeaway or memory_scores provided)"
+
+                # v0.2.9: Enhanced reporting for selective scoring (legacy path)
                 if cached_memories_scored > 0 or skipped_memories > 0:
                     if skipped_memories > 0:
-                        response_text += f"Scored {cached_memories_scored} memories (skipped {skipped_memories} unrelated)\n"
+                        response_text += f"\nScored {cached_memories_scored} memories (skipped {skipped_memories} unrelated)"
                     else:
-                        response_text += f"Scored {cached_memories_scored} cached memories\n"
+                        response_text += f"\nScored {cached_memories_scored} cached memories"
 
                 if actions_scored > 0:
-                    response_text += f"Updated {actions_scored} tool effectiveness stats\n"
+                    response_text += f"\nUpdated {actions_scored} tool effectiveness stats"
 
-                # v0.2.3: Add system learning summary for LLM context
-                response_text += "\n--- System Learning Summary ---\n"
-                response_text += f"Your takeaway stored in working memory (will promote to history if score stays ≥0.7)\n"
-                if outcome == "worked":
-                    response_text += "Outcome 'worked': High initial score (0.7) - this learning is on track for promotion\n"
-                elif outcome == "failed":
-                    response_text += "Outcome 'failed': Low initial score (0.2) - consider what went wrong for future\n"
-                elif outcome == "partial":
-                    response_text += "Outcome 'partial': Medium score (0.55) - needs more positive outcomes to promote\n"
-                else:
-                    response_text += "Outcome 'unknown': Neutral score (0.5) - will adjust based on future use\n"
-
-                if cached_memories_scored > 0:
-                    if skipped_memories > 0:
-                        response_text += f"Selective scoring: {cached_memories_scored} memories scored with '{outcome}', {skipped_memories} skipped (neutral)\n"
-                    else:
-                        response_text += f"The {cached_memories_scored} memories from your last search were also scored with '{outcome}'\n"
-
-                logger.info(f"[MCP] {client_name} recorded learning: {doc_id}")
+                logger.info(f"[MCP] {client_name} record_response: doc_id={doc_id}, per_memory={per_memory_scored}, cached={cached_memories_scored}")
 
                 # Apply cold-start injection if this is first tool call
                 response_text = await _inject_cold_start_if_needed(session_id, response_text, memory)

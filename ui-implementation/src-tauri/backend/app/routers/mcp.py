@@ -137,6 +137,13 @@ def load_custom_paths() -> List[str]:
 def save_custom_path(config_path: str):
     """Save a manually-added custom MCP client config path"""
     try:
+        # SECURITY: Validate path is within user's home directory
+        validated_path = Path(config_path).expanduser().resolve()
+        home_dir = Path.home().resolve()
+        if not str(validated_path).startswith(str(home_dir) + os.sep) and validated_path != home_dir:
+            logger.warning(f"[MCP] Rejected custom path outside home directory: {config_path}")
+            return  # Silently reject paths outside home directory
+
         paths = load_custom_paths()
         if config_path not in paths:
             paths.append(config_path)
@@ -237,6 +244,27 @@ async def scan_for_mcp_tools():
             Path.home() / ".local/share",
         ])
 
+    # =========================================================================
+    # CRITICAL: Check Claude Code CLI config at ~/.claude.json FIRST
+    # Claude Code CLI stores MCP servers in ~/.claude.json (mcpServers key at root)
+    # NOT in ~/.claude/mcp.json (that file is not used by Claude Code)
+    # =========================================================================
+    claude_code_config = Path.home() / ".claude.json"
+    if claude_code_config.exists():
+        try:
+            config = json.loads(claude_code_config.read_text(encoding='utf-8'))
+            if isinstance(config, dict) and "mcpServers" in config:
+                connected = "roampal" in config.get("mcpServers", {})
+                seen_tools["Claude Code"] = {
+                    "name": "Claude Code",
+                    "status": "connected" if connected else "available",
+                    "config_path": str(claude_code_config)
+                }
+                seen_paths.add(str(claude_code_config))
+                logger.info(f"[MCP] Found Claude Code CLI config at {claude_code_config} (connected={connected})")
+        except Exception as e:
+            logger.debug(f"[MCP] Error reading Claude Code config: {e}")
+
     # Helper function to get config file priority for deduplication
     def get_config_priority(config_path: Path, tool_name: str) -> int:
         """
@@ -247,6 +275,10 @@ async def scan_for_mcp_tools():
         """
         filename = config_path.name.lower()
         tool_lower = tool_name.lower()
+
+        # Claude Code CLI config at ~/.claude.json (highest priority)
+        if filename == ".claude.json" and config_path.parent == Path.home():
+            return 110  # Claude Code CLI's official MCP config
 
         # Known MCP-specific config files (highest priority)
         if tool_lower == "claude" and filename == "claude_desktop_config.json":
@@ -297,13 +329,9 @@ async def scan_for_mcp_tools():
         try:
             config = json.loads(config_path.read_text())
 
-            # Must be a dict with mcpServers key
+            # Must be a dict
             if not isinstance(config, dict):
                 logger.debug(f"[MCP] Skipped: {config_path.name} (not a dict)")
-                return
-
-            if "mcpServers" not in config:
-                logger.debug(f"[MCP] Skipped: {config_path.name} (no mcpServers key)")
                 return
 
             # Tool name = override or parent directory name
@@ -318,8 +346,20 @@ async def scan_for_mcp_tools():
                 if tool_name == "Claude" and ".claude" in str(config_path):
                     tool_name = "Claude Code"
 
-            # Check if roampal is configured
-            connected = "roampal" in config.get("mcpServers", {})
+            # Claude Code uses flat format (servers at root), others use mcpServers wrapper
+            is_claude_code = ".claude" in str(config_path) and config_path.name == "mcp.json"
+
+            if is_claude_code:
+                # Flat format: {"server-name": {...}}
+                # Check if roampal is configured (at root level)
+                connected = "roampal" in config
+            else:
+                # Standard format: {"mcpServers": {"server-name": {...}}}
+                if "mcpServers" not in config:
+                    logger.debug(f"[MCP] Skipped: {config_path.name} (no mcpServers key)")
+                    return
+                # Check if roampal is configured
+                connected = "roampal" in config.get("mcpServers", {})
 
             # Smart deduplication - prefer higher priority configs
             if tool_name in seen_tools:
@@ -417,11 +457,22 @@ async def connect_to_tool(request: ConnectRequest):
         logger.info(f"[MCP] Detected Claude Desktop connection - using {correct_config.name} instead of config.json")
         config_path = correct_config
 
+    # =========================================================================
+    # CRITICAL: Detect Claude Code CLI config at ~/.claude.json
+    # Claude Code CLI stores MCP servers in ~/.claude.json (mcpServers at root)
+    # NOT in ~/.claude/mcp.json (that file is not used)
+    # =========================================================================
+    is_claude_code_cli = config_path.name == ".claude.json" and config_path.parent == Path.home()
+
     # Create config file if it doesn't exist
     if not config_path.exists():
         try:
             config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text(json.dumps({"mcpServers": {}}, indent=2))
+            if is_claude_code_cli:
+                # Claude Code CLI uses mcpServers at root level
+                config_path.write_text(json.dumps({"mcpServers": {}}, indent=2), encoding='utf-8')
+            else:
+                config_path.write_text(json.dumps({"mcpServers": {}}, indent=2))
             logger.info(f"[MCP] Created new config file at {config_path}")
         except Exception as e:
             logger.error(f"[MCP] Failed to create config: {e}")
@@ -429,24 +480,50 @@ async def connect_to_tool(request: ConnectRequest):
 
     try:
         # Read existing config
-        config = json.loads(config_path.read_text())
-
-        # Add Roampal MCP server
-        if "mcpServers" not in config:
-            config["mcpServers"] = {}
+        config = json.loads(config_path.read_text(encoding='utf-8') if is_claude_code_cli else config_path.read_text())
 
         roampal_cmd = get_roampal_command()
 
-        # Check if roampal already exists (for informational message)
-        was_update = "roampal" in config["mcpServers"]
-        config["mcpServers"]["roampal"] = roampal_cmd
+        # Determine tool name
+        if is_claude_code_cli:
+            tool_name = "Claude Code"
+        elif ".claude" in str(config_path):
+            tool_name = "Claude Code"
+        else:
+            tool_name = config_path.parent.name
+
+        # =========================================================================
+        # Claude Code CLI: Write to mcpServers at root level of ~/.claude.json
+        # Claude Code mcp.json: Write flat format (roampal at root)
+        # Other tools: Write to mcpServers wrapper
+        # =========================================================================
+        # Check for Claude Code's mcp.json which uses flat format
+        is_claude_code_mcp = ".claude" in str(config_path) and config_path.name == "mcp.json"
+
+        if is_claude_code_mcp:
+            # Flat format: {"roampal": {...}} at root level
+            was_update = "roampal" in config
+            config["roampal"] = roampal_cmd
+            logger.info(f"[MCP] Writing to Claude Code mcp.json (flat format)")
+        elif is_claude_code_cli:
+            # Claude Code CLI: mcpServers at root level
+            if "mcpServers" not in config:
+                config["mcpServers"] = {}
+            was_update = "roampal" in config["mcpServers"]
+            config["mcpServers"]["roampal"] = roampal_cmd
+            logger.info(f"[MCP] Writing to Claude Code CLI config (mcpServers at root)")
+        else:
+            # Standard format: {"mcpServers": {"roampal": {...}}}
+            if "mcpServers" not in config:
+                config["mcpServers"] = {}
+            was_update = "roampal" in config["mcpServers"]
+            config["mcpServers"]["roampal"] = roampal_cmd
 
         # Write back
         # Save custom path for future scans
         save_custom_path(str(config_path))
-        config_path.write_text(json.dumps(config, indent=2))
+        config_path.write_text(json.dumps(config, indent=2), encoding='utf-8')
 
-        tool_name = config_path.parent.name
         if was_update:
             logger.info(f"[MCP] Updated Roampal connection for {tool_name}")
             return {
@@ -474,12 +551,37 @@ async def disconnect_from_tool(request: ConnectRequest):
         raise HTTPException(status_code=404, detail="Config file not found")
 
     try:
-        config = json.loads(config_path.read_text())
-        tool_name = config_path.parent.name
+        # =========================================================================
+        # Detect Claude Code CLI config at ~/.claude.json
+        # =========================================================================
+        is_claude_code_cli = config_path.name == ".claude.json" and config_path.parent == Path.home()
 
+        config = json.loads(config_path.read_text(encoding='utf-8'))
+
+        if is_claude_code_cli:
+            tool_name = "Claude Code"
+        elif ".claude" in str(config_path):
+            tool_name = "Claude Code"
+        else:
+            tool_name = config_path.parent.name
+
+        # Claude Code mcp.json uses flat format (servers at root), others use mcpServers wrapper
+        is_claude_code_mcp = ".claude" in str(config_path) and config_path.name == "mcp.json"
+
+        disconnected = False
+        if is_claude_code_mcp:
+            # Flat format: {"roampal": {...}} at root level
+            if "roampal" in config:
+                del config["roampal"]
+                disconnected = True
+
+        # Also check mcpServers wrapper (standard format and Claude Code CLI)
         if "mcpServers" in config and "roampal" in config["mcpServers"]:
             del config["mcpServers"]["roampal"]
-            config_path.write_text(json.dumps(config, indent=2))
+            disconnected = True
+
+        if disconnected:
+            config_path.write_text(json.dumps(config, indent=2), encoding='utf-8')
             logger.info(f"[MCP] Disconnected Roampal from {tool_name}")
             return {"success": True, "message": f"Disconnected from {tool_name}. Restart {tool_name} to remove Roampal access."}
         else:

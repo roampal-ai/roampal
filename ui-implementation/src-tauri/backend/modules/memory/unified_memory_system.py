@@ -39,6 +39,32 @@ from .context_service import ContextService
 
 logger = logging.getLogger(__name__)
 
+# v0.3.0: Cold start tag priorities - one fact per category (ported from roampal-core v0.2.7)
+TAG_PRIORITIES = ["identity", "preference", "goal", "project", "system_mastery", "agent_growth"]
+
+
+def _first_sentence(text: str, max_chars: int = 300) -> str:
+    """
+    Extract first sentence from text, capped at max_chars.
+
+    v0.3.0: Ported from roampal-core. Used for cold start truncation - prevents
+    massive facts from overwhelming context. Full facts still available via search.
+    """
+    if not text:
+        return ""
+    # Find first sentence ending
+    for end_char in ['. ', '.\n', '!', '?']:
+        idx = text.find(end_char)
+        if idx > 0:
+            first = text[:idx + 1].strip()
+            if len(first) <= max_chars:
+                return first
+            break
+    # No sentence ending found or sentence too long - truncate
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars - 3].rsplit(' ', 1)[0] + "..."
+
 
 def with_retry(max_attempts: int = 3, delay: float = 1.0):
     """Retry decorator with exponential backoff for async functions."""
@@ -178,6 +204,9 @@ class UnifiedMemorySystem:
         # Initialize collections
         await self._initialize_collections()
 
+        # v0.3.0: Health check for corrupted collections (auto-repairs working)
+        await self._health_check_collections()
+
         # Initialize services
         self._init_services()
 
@@ -210,6 +239,8 @@ class UnifiedMemorySystem:
         v0.2.10: ChromaDB 1.x added 'topic' column to collections table.
         Users upgrading from ChromaDB 0.4.x/0.5.x will have old schema.
         This safely adds missing columns without affecting existing data.
+
+        v0.3.0: Added transaction wrapper and validation to prevent corruption.
         """
         import sqlite3
 
@@ -220,9 +251,13 @@ class UnifiedMemorySystem:
             logger.debug("No existing ChromaDB - skipping migration")
             return
 
+        conn = None
         try:
             conn = sqlite3.connect(str(sqlite_path))
             cursor = conn.cursor()
+
+            # v0.3.0: Start transaction explicitly
+            cursor.execute("BEGIN TRANSACTION")
 
             # Columns added in ChromaDB 1.x that may be missing
             migrations_needed = []
@@ -239,7 +274,7 @@ class UnifiedMemorySystem:
             if 'topic' not in segments_columns:
                 migrations_needed.append(('segments', 'topic', 'TEXT'))
 
-            # Apply migrations
+            # Apply migrations within transaction
             for table, column, col_type in migrations_needed:
                 try:
                     cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
@@ -248,16 +283,139 @@ class UnifiedMemorySystem:
                     if "duplicate column" in str(e).lower():
                         pass  # Column already exists, safe to ignore
                     else:
+                        # v0.3.0: Rollback on any error
+                        cursor.execute("ROLLBACK")
                         raise
 
-            conn.commit()
-            conn.close()
-            logger.debug("ChromaDB schema migration completed")
+            # v0.3.0: Validate migration before commit
+            cursor.execute("PRAGMA table_info(collections)")
+            final_cols = {col[1] for col in cursor.fetchall()}
+            if 'topic' not in final_cols:
+                cursor.execute("ROLLBACK")
+                raise RuntimeError("Migration validation failed: 'topic' column not added to collections")
+
+            cursor.execute("COMMIT")
+            logger.debug("ChromaDB schema migration completed and validated")
 
         except Exception as e:
             logger.warning(f"ChromaDB schema migration failed (non-fatal): {e}")
-            # Non-fatal: if migration fails, ChromaDB may still work
-            # or will fail with a more specific error later
+            # v0.3.0: Ensure rollback on any error
+            if conn:
+                try:
+                    conn.execute("ROLLBACK")
+                except:
+                    pass
+        finally:
+            if conn:
+                conn.close()
+
+    async def _health_check_collections(self):
+        """
+        v0.3.0: Check health of all collections and repair if needed.
+
+        Detects corruption from failed migrations or version upgrades.
+        Can repair working collection by recreating it (temporary data, 24h TTL).
+
+        v0.3.0 FIX: Don't use query_texts for health check - it requires embedding
+        function and will fail if dimensions mismatch, causing false positives.
+        Use count() and peek() instead - these don't require embeddings.
+        """
+        logger.info("[HEALTH] Running collection health check...")
+        issues_found = []
+
+        for name, adapter in self.collections.items():
+            try:
+                # Test basic operations (count doesn't require embeddings)
+                count = adapter.collection.count()
+                logger.debug(f"[HEALTH] {name}: {count} items")
+
+                # v0.3.0 FIX #2: Skip peek on empty collections - they're not corrupt, just empty
+                # "Nothing found on disk" error was falsely triggering repair on empty working collection
+                if count == 0:
+                    logger.debug(f"[HEALTH] {name} is empty (count=0), skipping peek test")
+                    continue
+
+                # Test peek capability (doesn't require embeddings, unlike query)
+                # This catches actual corruption without triggering on embedding mismatches
+                try:
+                    adapter.collection.peek(limit=1)
+                except Exception as peek_error:
+                    # Only flag as issue if it's actual corruption, not dimension mismatch
+                    error_str = str(peek_error).lower()
+                    if "dimension" not in error_str and "embedding" not in error_str:
+                        issues_found.append({
+                            "collection": name,
+                            "error": f"Peek failed: {peek_error}",
+                            "recoverable": name == "working"  # Only working is easily recoverable
+                        })
+                        logger.warning(f"[HEALTH] {name} collection peek failed: {peek_error}")
+                    else:
+                        # Embedding dimension mismatch is not corruption - skip repair
+                        logger.debug(f"[HEALTH] {name} has embedding dimension mismatch (not corruption)")
+
+            except Exception as e:
+                # Only flag as issue if it's actual corruption
+                error_str = str(e).lower()
+                if "dimension" not in error_str and "embedding" not in error_str:
+                    issues_found.append({
+                        "collection": name,
+                        "error": str(e),
+                        "recoverable": name == "working"
+                    })
+                    logger.warning(f"[HEALTH] {name} collection check failed: {e}")
+                else:
+                    logger.debug(f"[HEALTH] {name} has embedding dimension mismatch (not corruption)")
+
+        if issues_found:
+            logger.warning(f"[HEALTH] Found {len(issues_found)} collection issues")
+
+            # Auto-repair working collection (it's temporary data anyway)
+            for issue in issues_found:
+                if issue["collection"] == "working" and issue["recoverable"]:
+                    logger.info("[HEALTH] Attempting to repair working collection...")
+                    try:
+                        await self._repair_working_collection()
+                        logger.info("[HEALTH] Working collection repaired successfully")
+                    except Exception as repair_error:
+                        logger.error(f"[HEALTH] Failed to repair working collection: {repair_error}")
+        else:
+            logger.info("[HEALTH] All collections healthy")
+
+        return issues_found
+
+    async def _repair_working_collection(self):
+        """
+        Repair corrupted working collection by recreating it.
+
+        Working memory is temporary (24h TTL), so data loss is acceptable.
+        This is better than leaving users with a broken app.
+        """
+        import shutil
+
+        working_adapter = self.collections.get("working")
+        if not working_adapter:
+            return
+
+        chromadb_path = self.data_dir / "chromadb"
+
+        try:
+            # Get ChromaDB client to delete collection properly
+            client = working_adapter.collection._client
+            client.delete_collection("roampal_working")
+            logger.info("[REPAIR] Deleted corrupted working collection")
+
+            # Recreate collection
+            from modules.memory.chromadb_adapter import ChromaDBAdapter
+            self.collections["working"] = ChromaDBAdapter(
+                persistence_directory=str(chromadb_path),
+                use_server=self.use_server
+            )
+            await self.collections["working"].initialize(collection_name="roampal_working")
+            logger.info("[REPAIR] Recreated working collection")
+
+        except Exception as e:
+            logger.error(f"[REPAIR] Failed to repair working collection: {e}")
+            raise
 
     def _init_services(self):
         """Initialize all extracted services."""
@@ -310,6 +468,7 @@ class UnifiedMemorySystem:
                 collection=self.collections["memory_bank"],
                 embed_fn=self._embed_text,
                 search_fn=self.search,
+                kg_service=self._kg_service,  # v0.3.0: Content graph population
                 config=self.config
             )
 
@@ -870,108 +1029,298 @@ Session type (1-2 words only):"""
         return facts
 
 
-    # ==================== Cold Start & Backup API ====================
+    # ==================== Cold Start & Context Injection ====================
 
-    async def get_cold_start_context(self, limit: int = 5) -> Tuple[Optional[str], List[str], List[Dict]]:
-        """Generate cold-start context from memory_bank, patterns, and history.
+    async def _build_cold_start_profile(self, mode: str = "internal") -> Tuple[Optional[str], List[str], List[Dict]]:
+        """
+        Build the cold start user profile injection.
+
+        v0.3.0: Ported from roampal-core. Lean but rich - one fact per tag category:
+        1. Get all facts from memory_bank, sorted by quality (importance * confidence)
+        2. Pick ONE highest-quality fact per tag category (identity, preference, goal, etc.)
+        3. Format as <roampal-user-profile> with one line per category
+
+        Note: We don't prompt LLM to ask for user's name - small models don't reliably
+        follow through on storing it. Users can share their name naturally.
+
+        Args:
+            mode: Kept for API compatibility but no longer affects behavior.
 
         Returns:
-            Tuple of (formatted_context, doc_ids, raw_context) for outcome scoring.
-            v0.2.12: Now returns doc_ids and raw context for selective outcome scoring.
+            Tuple of (formatted_profile, doc_ids, raw_facts) for outcome scoring.
         """
-        all_context = []
-        memory_bank_limit = max(3, limit - 2)
-
-        # STEP 1: Get memory_bank facts via search
-        try:
-            results = await self.search(
-                query="user identity name projects current work goals preferences",
-                collections=["memory_bank"],
-                limit=memory_bank_limit
-            )
-            for r in results:
-                all_context.append({
-                    "id": r.get("id", ""),
-                    "content": r.get("content") or r.get("text", ""),
-                    "source": "memory_bank"
-                })
-        except Exception as e:
-            logger.warning(f"[COLD-START] memory_bank search failed: {e}")
-
-        # STEP 2: Get top pattern
-        try:
-            pattern_results = await self.search(
-                query="proven solution effective approach",
-                collections=["patterns"],
-                limit=1
-            )
-            for r in pattern_results:
-                all_context.append({
-                    "id": r.get("id", ""),
-                    "content": r.get("content") or r.get("text", ""),
-                    "source": "patterns"
-                })
-        except Exception as e:
-            logger.debug(f"[COLD-START] patterns search failed: {e}")
-
-        # STEP 3: Get recent history
-        try:
-            history_results = await self.search(
-                query="recent conversation context",
-                collections=["history"],
-                limit=1
-            )
-            for r in history_results:
-                all_context.append({
-                    "id": r.get("id", ""),
-                    "content": r.get("content") or r.get("text", ""),
-                    "source": "history"
-                })
-        except Exception as e:
-            logger.debug(f"[COLD-START] history search failed: {e}")
-
-        if not all_context:
+        if not self._memory_bank_service:
             return None, [], []
 
-        # v0.2.12: Extract doc_ids for outcome scoring
-        doc_ids = [r.get("id") for r in all_context if r.get("id")]
-        formatted = self._format_cold_start_results(all_context)
-        return formatted, doc_ids, all_context
+        try:
+            # Get all facts from memory_bank, sorted by quality (importance first, then confidence)
+            all_memory_bank = self._memory_bank_service.list_all(include_archived=False)
+            logger.info(f"[COLD-START] Found {len(all_memory_bank)} total memory_bank facts")
 
-    def _format_cold_start_results(self, results: List[Dict]) -> Optional[str]:
-        """Format cold-start context with injection protection."""
-        if not results:
-            return None
+            sorted_facts = sorted(
+                all_memory_bank,
+                key=lambda f: (
+                    f.get("metadata", {}).get("importance", 0.5),
+                    f.get("metadata", {}).get("confidence", 0.5)
+                ),
+                reverse=True
+            )
 
-        # Filter suspicious content
-        safe_results = [
-            r for r in results
-            if not any(x in (r.get("content") or "").lower()
-                for x in ["ignore all previous", "ignore instructions"])
-        ][:10]
+            # Pick HIGHEST QUALITY fact for EACH tag category (one per tag)
+            all_facts = []
+            seen_tags = set()
+            for fact in sorted_facts:
+                tags_raw = fact.get("metadata", {}).get("tags", [])
+                if isinstance(tags_raw, str):
+                    try:
+                        tags = json.loads(tags_raw) if tags_raw else []
+                    except:
+                        tags = []
+                else:
+                    tags = tags_raw or []
 
-        if not safe_results:
-            return None
+                # Find which priority tag this fact matches (if any)
+                for tag in TAG_PRIORITIES:
+                    if tag in tags and tag not in seen_tags:
+                        all_facts.append(fact)
+                        seen_tags.add(tag)
+                        break  # One fact per tag
 
-        memory_bank_items = [r for r in safe_results if r.get("source") == "memory_bank"]
-        pattern_items = [r for r in safe_results if r.get("source") == "patterns"]
-        history_items = [r for r in safe_results if r.get("source") == "history"]
+                # Stop once we have one fact per tag category
+                if len(seen_tags) == len(TAG_PRIORITIES):
+                    break
 
-        sections = []
-        if memory_bank_items:
-            sections.append("[User Profile]:\n" + "\n".join([
-                f"- {(r.get('content') or '')[:250]}" for r in memory_bank_items
-            ]))
-        if pattern_items:
-            sections.append("[Proven Patterns]:\n" + "\n".join([
-                f"- {(r.get('content') or '')[:200]}" for r in pattern_items
-            ]))
-        if history_items:
-            sections.append("[Recent Context]:\n" + "\n".join([
-                f"- {(r.get('content') or '')[:200]}" for r in history_items
-            ]))
+            # Check if user has NO identity at all
+            identity_content = []
+            for fact in all_facts:
+                content = fact.get("text") or fact.get("content") or fact.get("metadata", {}).get("content", "")
+                tags_raw = fact.get("metadata", {}).get("tags", [])
+                if isinstance(tags_raw, str):
+                    try:
+                        tags = json.loads(tags_raw) if tags_raw else []
+                    except:
+                        tags = []
+                else:
+                    tags = tags_raw or []
+                if "identity" in tags:
+                    identity_content.append(content)
 
-        return "\n\n".join(sections)
+            logger.info(f"[COLD-START] Identity check: {len(identity_content)} identity-tagged facts found")
+            # Note: We no longer prompt LLM to ask for name - small models don't reliably follow through.
+            # If user shares their name naturally, they can store it. No forced identity prompts.
+
+            # Build narrative profile - one line per category (compact ~200 chars)
+            tag_labels = {
+                "identity": "Identity",
+                "preference": "Preference",
+                "goal": "Goal",
+                "project": "Project",
+                "system_mastery": "System Mastery",
+                "agent_growth": "Agent Growth"
+            }
+
+            # Group facts by their primary tag, keeping only FIRST fact per category
+            category_facts = {}
+            for fact in all_facts:
+                content = fact.get("text") or fact.get("content") or fact.get("metadata", {}).get("content", "")
+                tags_raw = fact.get("metadata", {}).get("tags", [])
+                if isinstance(tags_raw, str):
+                    try:
+                        tags = json.loads(tags_raw) if tags_raw else []
+                    except:
+                        tags = []
+                else:
+                    tags = tags_raw or []
+
+                for tag in TAG_PRIORITIES:
+                    if tag in tags and tag not in category_facts:
+                        category_facts[tag] = content
+                        break
+
+            # Build compact narrative
+            profile_parts = ["<roampal-user-profile>"]
+            for tag in TAG_PRIORITIES:
+                if tag in category_facts:
+                    profile_parts.append(f"{tag_labels[tag]}: {_first_sentence(category_facts[tag])}")
+            profile_parts.append("</roampal-user-profile>")
+
+            # Extract doc_ids for outcome scoring
+            doc_ids = [f.get("id") for f in all_facts if f.get("id")]
+            raw_facts = [{"id": f.get("id"), "content": f.get("text") or f.get("content", ""), "source": "memory_bank"} for f in all_facts]
+
+            logger.info(f"[COLD-START] {len(all_facts)} facts, {len(category_facts)} categories")
+            return "\n".join(profile_parts), doc_ids, raw_facts
+
+        except Exception as e:
+            logger.error(f"[COLD-START] Error building profile: {e}")
+            return None, [], []
+
+    async def get_context_for_injection(
+        self,
+        query: str,
+        conversation_id: str = None,
+        recent_conversation: List[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Get context to inject into LLM prompt for organic recall.
+
+        v0.3.0: Ported from roampal-core. Uses unified search across ALL collections
+        (except books), ranks by Wilson score, returns top 3 most relevant/proven memories.
+
+        Args:
+            query: The user's message
+            conversation_id: Current conversation ID
+            recent_conversation: Recent messages for continuity
+
+        Returns:
+            Dict with memories, doc_ids for scoring, and formatted injection
+        """
+        if not self.initialized:
+            await self.initialize()
+
+        result = {
+            "memories": [],
+            "user_facts": [],
+            "formatted_injection": "",
+            "doc_ids": []
+        }
+
+        # 0. Fetch always_inject memories (core identity - always included)
+        always_inject_memories = self._memory_bank_service.get_always_inject()
+        if always_inject_memories:
+            result["user_facts"] = always_inject_memories
+            # Add their doc_ids for scoring
+            for mem in always_inject_memories:
+                if mem.get("id"):
+                    result["doc_ids"].append(mem["id"])
+
+        # 1. Extract concepts for KG routing insight
+        concepts = self._kg_service.extract_concepts(query) if self._kg_service else []
+
+        # 2. Get KG recommendations (informational - we still search all)
+        kg_recs = self.get_tier_recommendations(concepts)
+
+        # 3. Unified search across conversational collections (books excluded - use search_memory explicitly)
+        all_collections = ["working", "patterns", "history", "memory_bank"]
+        search_results = await self.search(
+            query=query,
+            limit=5,
+            collections=all_collections
+        )
+        # SECURITY: Don't log user query content to protect privacy
+        logger.info(f"[CONTEXT INJECTION] Search returned {len(search_results)} results (query_len={len(query)})")
+
+        # 4. Apply Wilson scoring for proper ranking
+        scored_results = self._scoring_service.apply_scoring_to_results(search_results)
+
+        # 5. Filter empty memories and take top 3 across all collections
+        valid_results = [m for m in scored_results if m.get("content") or m.get("text")]
+        if len(valid_results) < len(scored_results):
+            logger.warning(f"[CONTEXT INJECTION] Filtered {len(scored_results) - len(valid_results)} empty results")
+        top_memories = valid_results[:3]
+        logger.info(f"[CONTEXT INJECTION] Top {len(top_memories)} memories after filtering")
+
+        # 6. Enrich with Action KG effectiveness stats
+        for mem in top_memories:
+            coll = mem.get("collection", "unknown")
+            eff = self.get_action_effectiveness("general", "search", coll)
+            if eff:
+                mem["effectiveness"] = eff.get("success_rate", 0)
+
+        result["memories"] = top_memories
+        result["relevant_memories"] = top_memories  # Alias for selective scoring
+        result["doc_ids"] = [m.get("id") for m in top_memories if m.get("id")]
+        result["formatted_injection"] = self._format_context_injection(result)
+
+        return result
+
+    def _format_context_injection(self, context: Dict[str, Any]) -> str:
+        """
+        Format context for injection into LLM prompt.
+
+        v0.3.0: Ported from roampal-core. Shows top 3 memories across all collections
+        with effectiveness stats. Extracts user name from identity-tagged memories.
+        """
+        parts = []
+        user_name = None
+
+        # Find identity-tagged facts in memory_bank (no always_inject required)
+        all_facts = self._memory_bank_service.list_all(include_archived=False)
+        for fact in all_facts:
+            # Check for identity tag
+            tags_raw = fact.get("metadata", {}).get("tags", [])
+            if isinstance(tags_raw, str):
+                try:
+                    tags = json.loads(tags_raw) if tags_raw else []
+                except:
+                    tags = []
+            else:
+                tags = tags_raw or []
+
+            if "identity" not in tags:
+                continue
+
+            content = fact.get("content") or fact.get("text") or fact.get("metadata", {}).get("text", "")
+            content_lower = content.lower()
+
+            # Look for name patterns
+            if "name is" in content_lower or "i'm " in content_lower or "i am " in content_lower:
+                # Try "name is X" pattern
+                match = re.search(r"name is (\w+)", content, re.IGNORECASE)
+                if match:
+                    user_name = match.group(1)
+                    break
+                # Try "I'm X" or "I am X" pattern
+                match = re.search(r"i[''`]?m (\w+)|i am (\w+)", content, re.IGNORECASE)
+                if match:
+                    user_name = match.group(1) or match.group(2)
+                    break
+
+        memories = context.get("memories", [])
+
+        if user_name or memories:
+            parts.append("═══ KNOWN CONTEXT ═══")
+
+            # Add user name simply if found
+            if user_name:
+                parts.append(f"User: {user_name}")
+
+            # Add memories
+            for mem in memories[:3]:
+                # Get content from various possible locations
+                content = mem.get("content") or mem.get("text") or mem.get("metadata", {}).get("text", "")
+                collection = mem.get("collection", "unknown")
+
+                # Get Wilson score and effectiveness
+                wilson = mem.get("wilson_score", 0)
+                effectiveness = mem.get("effectiveness", 0)
+
+                # Format with collection and score info
+                if wilson >= 0.7:
+                    parts.append(f"• {content} ({int(wilson*100)}% proven, {collection})")
+                elif effectiveness > 0:
+                    parts.append(f"• {content} ({int(effectiveness*100)}% effective, {collection})")
+                else:
+                    parts.append(f"• {content} ({collection})")
+
+            parts.append("═══ END CONTEXT ═══")
+            parts.append("")
+            formatted = "\n".join(parts)
+            logger.info(f"[CONTEXT INJECTION] Formatted {len(memories)} memories into {len(formatted)} chars")
+            return formatted
+
+        logger.info(f"[CONTEXT INJECTION] No user_name and no memories - returning empty")
+        return ""
+
+    # Legacy alias for backward compatibility
+    async def get_cold_start_context(self, limit: int = 5, mode: str = "internal") -> Tuple[Optional[str], List[str], List[Dict]]:
+        """Legacy wrapper - use _build_cold_start_profile() instead.
+
+        Args:
+            limit: Unused, kept for API compatibility
+            mode: "internal" for Desktop (create_memory), "mcp" for MCP server (add_to_memory_bank)
+        """
+        return await self._build_cold_start_profile(mode=mode)
 
     async def record_action_outcome(self, action) -> None:
         """Record action-level outcome with context awareness (Causal Learning)."""
@@ -1092,7 +1441,8 @@ Session type (1-2 words only):"""
 
         for problem_sig in list(kg.get("problem_solutions", {}).keys()):
             solutions = kg["problem_solutions"][problem_sig]
-            valid = [s for s in solutions if self._doc_exists(s.get("doc_id"))]
+            # Handle both formats: list of dicts with doc_id OR list of strings
+            valid = [s for s in solutions if self._doc_exists(s.get("doc_id") if isinstance(s, dict) else s)]
             if len(valid) < len(solutions):
                 cleaned += len(solutions) - len(valid)
                 if valid:
@@ -1162,6 +1512,11 @@ Session type (1-2 words only):"""
         if self._kg_service:
             return self._kg_service.knowledge_graph
         return {}
+
+    @property
+    def kg_path(self) -> Path:
+        """v0.3.0: Expose KG path for data management stats."""
+        return self.data_dir / "knowledge_graph.json"
 
     def get_outcome_stats(self, doc_id: str) -> Dict[str, Any]:
         """Get outcome stats for a document."""

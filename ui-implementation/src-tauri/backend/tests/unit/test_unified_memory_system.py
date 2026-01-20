@@ -5,7 +5,10 @@ Tests the refactored facade that coordinates all services.
 """
 
 import sys
-sys.path.insert(0, "C:/ROAMPAL-REFACTOR")
+from pathlib import Path
+backend_dir = Path(__file__).parent.parent.parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -402,11 +405,12 @@ class TestKGVisualization:
         ums = UnifiedMemorySystem(data_dir=str(tmp_path / "data"))
         ums.initialized = True
 
-        # Mock KG service
+        # Mock KG service with async methods
         ums._kg_service = MagicMock()
-        ums._kg_service.get_kg_entities = MagicMock(return_value=[
-            {"id": "concept1", "weight": 10}
-        ])
+        # get_kg_entities is async, so mock needs to return coroutine
+        async def mock_get_entities(limit=200):
+            return [{"id": "concept1", "weight": 10}]
+        ums._kg_service.get_kg_entities = mock_get_entities
         ums._kg_service.get_kg_relationships = MagicMock(return_value=[
             {"source": "c1", "target": "c2", "weight": 1}
         ])
@@ -414,12 +418,12 @@ class TestKGVisualization:
 
         return ums
 
-    def test_get_kg_entities(self, mock_ums):
+    @pytest.mark.asyncio
+    async def test_get_kg_entities(self, mock_ums):
         """Should return entities from KG service."""
-        entities = mock_ums.get_kg_entities()
+        entities = await mock_ums.get_kg_entities()
 
         assert len(entities) == 1
-        mock_ums._kg_service.get_kg_entities.assert_called_once()
 
     def test_get_kg_relationships(self, mock_ums):
         """Should return relationships from KG service."""

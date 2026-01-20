@@ -134,7 +134,8 @@ class ScoringService:
         self,
         raw_score: float,
         uses: int,
-        outcome_history: str = ""
+        outcome_history: str = "",
+        success_count: Optional[float] = None
     ) -> Tuple[float, float]:
         """
         Calculate learned score with Wilson score blending.
@@ -143,12 +144,17 @@ class ScoringService:
             raw_score: Raw score from metadata
             uses: Number of times memory was used
             outcome_history: JSON string of outcome history
+            success_count: v0.3.0 - Cumulative success count (preferred over parsing history)
 
         Returns:
             Tuple of (learned_score, wilson_score)
         """
-        # Count successes from outcome history
-        successes = self.count_successes_from_history(outcome_history)
+        # v0.3.0: Use success_count if available (no 10-entry cap)
+        if success_count is not None:
+            successes = success_count
+        else:
+            # Fallback: count from history (capped at 10, for backward compat)
+            successes = self.count_successes_from_history(outcome_history)
 
         # Fallback: estimate from raw score if no history
         if successes == 0 and uses > 0:
@@ -250,6 +256,7 @@ class ScoringService:
         raw_score = metadata.get("score", 0.5)
         uses = metadata.get("uses", 0)
         outcome_history = metadata.get("outcome_history", "")
+        success_count = metadata.get("success_count")  # v0.3.0: Cumulative successes
         importance = metadata.get("importance", 0.7)
         confidence = metadata.get("confidence", 0.7)
 
@@ -257,19 +264,27 @@ class ScoringService:
         try:
             importance = float(importance) if not isinstance(importance, (int, float)) else importance
             confidence = float(confidence) if not isinstance(confidence, (int, float)) else confidence
+            if success_count is not None:
+                success_count = float(success_count)
         except (ValueError, TypeError):
             importance = 0.7
             confidence = 0.7
+            success_count = None
 
-        # Calculate learned score with Wilson blending
+        # v0.3.0: Pass success_count for accurate Wilson calculation (no 10-entry cap)
         learned_score, wilson_score = self.calculate_learned_score(
-            raw_score, uses, outcome_history
+            raw_score, uses, outcome_history, success_count
         )
 
-        # Special case: memory_bank uses quality as learned score
+        # Special case: memory_bank uses 20% Wilson + 80% quality
+        # (persistent user facts prioritize declared importance/confidence over usage patterns)
+        # Cold start protection: only blend after 3+ uses (matches roampal-core)
         if collection == "memory_bank":
             quality = importance * confidence
-            learned_score = quality
+            if uses >= 3:
+                learned_score = 0.2 * wilson_score + 0.8 * quality
+            else:
+                learned_score = quality  # Not enough data - use quality only
 
         # Convert distance to similarity
         embedding_similarity = 1.0 / (1.0 + distance)

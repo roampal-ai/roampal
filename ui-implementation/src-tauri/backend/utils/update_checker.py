@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 UPDATE_CHECK_URL = "https://roampal.ai/updates/latest.json"
-CURRENT_VERSION = "0.2.12"
+CURRENT_VERSION = "0.3.0"
 
 
 def parse_version(version_str: str) -> tuple:

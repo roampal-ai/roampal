@@ -98,56 +98,18 @@ class OutcomeDetector:
             if llm_marks:
                 return await self._analyze_with_marks(conv_text, llm_marks)
 
-            # v0.2.12: Build memory section if surfaced_memories provided (fallback to inference)
-            memory_section = ""
-            if surfaced_memories:
-                memory_lines = []
-                for pos in sorted(surfaced_memories.keys()):
-                    content = surfaced_memories[pos][:200]  # Truncate for prompt size
-                    memory_lines.append(f"{pos}. {content}")
-                memory_section = f"""
+            # v0.3.0: Simplified prompt - just detect outcome, no memory tracking
+            prompt = f"""Based on how the user responded, grade this exchange.
 
-SURFACED MEMORIES (assistant had access to these):
-{chr(10).join(memory_lines)}
-
-Which memory NUMBERS were actually USED or REFERENCED in the assistant's response?
-Only include memories that directly influenced the answer. Return empty list if none were used.
-"""
-
-            prompt = f"""Evaluate if the assistant's response was helpful. Judge both user feedback AND response quality.
-
-"worked": ENTHUSIASTIC satisfaction or clear success
-  • "thanks!", "perfect!", "awesome!", "that worked!"
-  • User moves to NEW topic (indicates previous was resolved)
-  • NOT worked: "yea pretty good", "okay", follow-up questions
-
-"failed": Dissatisfaction, criticism, or confusion
-  • "no", "nah", "wrong", "didn't work"
-  • Criticism: "why are you...", "stop doing..."
-  • Repeated questions about SAME issue (solution didn't work)
-  • Follow-up questions expressing confusion
-
-"partial": Lukewarm (positive but not enthusiastic)
-  • "yea pretty good", "okay", "sure", "I guess", "kinda"
-  • Helped somewhat but incomplete
-
-"unknown": No clear signal yet
-  • No user response after answer
-  • Pure neutral: "hm", "noted"
-
-CRITICAL: Follow-up questions are NOT success signals. User continuing conversation ≠ satisfaction.
-
-CONVERSATION:
 {conv_text}
-{memory_section}
-Return JSON only:
-{{
-    "outcome": "worked|failed|partial|unknown",
-    "confidence": 0.0-1.0,
-    "indicators": ["signals"],
-    "reasoning": "brief why",
-    "used_positions": [1, 3]
-}}"""
+
+Grade the USER'S REACTION (not the assistant's quality):
+- worked = user satisfied (thanks, great, perfect, got it)
+- failed = user unhappy/correcting (no, wrong, didn't work)
+- partial = lukewarm (ok, I guess, sure)
+- unknown = no clear signal
+
+Return JSON: {{"outcome": "worked|failed|partial|unknown"}}"""
 
             # Call LLM
             response = await self.llm_service.generate_response(prompt, format="json")
@@ -164,12 +126,12 @@ Return JSON only:
             # Parse the extracted JSON
             result = json.loads(json_match.group(0))
 
-            # Validate structure
-            if all(k in result for k in ["outcome", "confidence", "indicators", "reasoning"]):
-                # v0.2.12: Ensure used_positions is always present (default to empty list)
-                if "used_positions" not in result:
-                    result["used_positions"] = []
-                # v0.2.12 Fix #7: Add empty upvote/downvote for consistency
+            # Validate structure - only outcome is required, fill defaults for rest
+            if "outcome" in result:
+                result.setdefault("confidence", 0.8)
+                result.setdefault("indicators", [])
+                result.setdefault("reasoning", "")
+                result.setdefault("used_positions", [])
                 result["upvote"] = []
                 result["downvote"] = []
                 return result
@@ -184,9 +146,10 @@ Return JSON only:
         conv_text: str,
         llm_marks: Dict[int, str]
     ) -> Optional[Dict[str, Any]]:
-        """v0.2.12 Fix #7: Causal scoring using main LLM's attribution marks.
+        """v0.3.0: Detect overall outcome from user reaction.
 
-        Simplified prompt - just detect outcome, then combine with marks for upvote/downvote.
+        Note: Per-memory scoring now uses direct emoji→outcome mapping in agent_chat.py.
+        This method only determines the overall outcome for logging/key_takeaway.
         """
         import re
         import json
@@ -203,17 +166,13 @@ Answer:
 - YES = "thanks!", "perfect!", user moved on to new topic
 - NO = "wrong", "didn't work", user frustrated or corrected
 - KINDA = "okay", "I guess", lukewarm
+- UNKNOWN = no clear signal
 
 The assistant marked memories as: {marks_display}
-(👍=helpful, 👎=wrong/misleading, ➖=unused)
-
-SCORING RULES:
-If YES: upvote 👍 memories, ignore 👎 and ➖
-If NO: downvote 👎 memories, ignore 👍 and ➖
-If KINDA: slight upvote 👍, slight downvote 👎
+(👍=definitely helped, 🤷=kinda helped, 👎=misleading, ➖=unused)
 
 Return JSON only:
-{{"outcome": "yes/no/kinda/unknown", "upvote": [1], "downvote": [2], "reasoning": "brief"}}"""
+{{"outcome": "yes/no/kinda/unknown", "reasoning": "brief"}}"""
 
         try:
             response = await self.llm_service.generate_response(prompt, format="json")
@@ -230,19 +189,19 @@ Return JSON only:
             raw_outcome = result.get("outcome", "unknown").lower()
             normalized_outcome = outcome_map.get(raw_outcome, raw_outcome)
 
-            # Build complete result
+            # Build complete result (v0.3.0: upvote/downvote no longer needed, using direct emoji→outcome)
             return {
                 "outcome": normalized_outcome,
                 "confidence": 0.8 if normalized_outcome != "unknown" else 0.0,
-                "indicators": ["llm_marks_causal"],
-                "reasoning": result.get("reasoning", "Causal scoring with main LLM marks"),
-                "used_positions": [],  # Not used in causal mode
-                "upvote": result.get("upvote", []),
-                "downvote": result.get("downvote", [])
+                "indicators": ["llm_marks_direct"],
+                "reasoning": result.get("reasoning", "Overall outcome from user reaction"),
+                "used_positions": [],  # Not used - direct scoring via emoji
+                "upvote": [],  # Not used - direct scoring via emoji
+                "downvote": []  # Not used - direct scoring via emoji
             }
 
         except Exception as e:
-            logger.warning(f"LLM causal scoring failed: {e}, falling back to inference mode")
+            logger.warning(f"LLM outcome detection failed: {e}, falling back to inference mode")
             return None
 
     def _format_conversation(self, conversation: List[Dict[str, Any]]) -> str:

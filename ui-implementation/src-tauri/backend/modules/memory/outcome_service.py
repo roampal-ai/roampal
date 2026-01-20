@@ -50,7 +50,7 @@ class OutcomeService:
     async def record_outcome(
         self,
         doc_id: str,
-        outcome: Literal["worked", "failed", "partial"],
+        outcome: Literal["worked", "failed", "partial", "unknown"],
         failure_reason: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
@@ -97,11 +97,6 @@ class OutcomeService:
             logger.info(f"[KG] Learned routing pattern for books, but skipping score update (static reference material)")
             return None
 
-        # SAFEGUARD: Memory bank is user identity/facts, not scorable patterns
-        # But we still updated KG routing above so system learns to route to memory_bank
-        if doc_id.startswith("memory_bank_"):
-            logger.info(f"[KG] Learned routing pattern for memory_bank, but skipping score update (persistent user facts)")
-            return None
 
         if not doc:
             logger.warning(f"Document {doc_id} not found")
@@ -111,12 +106,14 @@ class OutcomeService:
         metadata = doc.get("metadata", {})
         current_score = metadata.get("score", 0.5)
         uses = metadata.get("uses", 0)
+        success_count = metadata.get("success_count", 0.0)  # v0.3.0: Track cumulative successes
 
         # Time-weighted score update
         time_weight = self._calculate_time_weight(metadata.get("last_used"))
-        score_delta, new_score, uses = self._calculate_score_update(
+        score_delta, new_score, uses, success_delta = self._calculate_score_update(
             outcome, current_score, uses, time_weight
         )
+        success_count += success_delta  # v0.3.0: Accumulate successes (no cap)
 
         # Update context tracking
         if outcome == "worked" and context:
@@ -144,6 +141,7 @@ class OutcomeService:
         metadata.update({
             "score": new_score,
             "uses": uses,
+            "success_count": success_count,  # v0.3.0: Cumulative successes for Wilson score
             "last_outcome": outcome,
             "last_used": datetime.now().isoformat(),
             "outcome_history": json.dumps(outcome_history)
@@ -202,21 +200,36 @@ class OutcomeService:
         Calculate score delta and new values.
 
         Returns:
-            Tuple of (score_delta, new_score, new_uses)
+            Tuple of (score_delta, new_score, new_uses, success_delta)
         """
         if outcome == "worked":
             score_delta = 0.2 * time_weight
             new_score = min(1.0, current_score + score_delta)
             uses += 1
+            success_delta = 1.0  # v0.3.0: Full success
         elif outcome == "failed":
             score_delta = -0.3 * time_weight
             new_score = max(0.0, current_score + score_delta)
-        else:  # partial
+            uses += 1  # v0.3.0: Fix - failed should increment uses
+            success_delta = 0.0  # v0.3.0: No success
+        elif outcome == "partial":
             score_delta = 0.05 * time_weight
             new_score = min(1.0, current_score + score_delta)
             uses += 1
+            success_delta = 0.5  # v0.3.0: Half success
+        elif outcome == "unknown":
+            # v0.3.0: unknown = surfaced but not used (all collections)
+            # Weak negative signal: 0.25 success creates gradual drift for noise
+            score_delta = 0.0  # Don't change raw score
+            new_score = current_score
+            uses += 1
+            success_delta = 0.25
+        else:
+            # Guard - invalid outcomes don't affect score
+            logger.warning(f"Unexpected outcome '{outcome}' - no score change")
+            return 0.0, current_score, uses, 0.0
 
-        return score_delta, new_score, uses
+        return score_delta, new_score, uses, success_delta
 
     async def _update_kg_with_outcome(
         self,
@@ -233,22 +246,8 @@ class OutcomeService:
         if not self.kg_service:
             return
 
-        # Update routing patterns
-        # Extract collection name from doc_id (handles memory_bank correctly)
-        # doc_id format: collection_uuid or collection_name_uuid
-        if doc_id.startswith("memory_bank_"):
-            collection_name = "memory_bank"
-        elif doc_id.startswith("books_"):
-            collection_name = "books"
-        elif doc_id.startswith("working_"):
-            collection_name = "working"
-        elif doc_id.startswith("history_"):
-            collection_name = "history"
-        elif doc_id.startswith("patterns_"):
-            collection_name = "patterns"
-        else:
-            collection_name = doc_id.split("_")[0] if "_" in doc_id else "unknown"
-        await self.kg_service.update_kg_routing(problem_text, collection_name, outcome)
+        # NOTE: update_kg_routing already called at start of record_outcome for ALL docs
+        # This method handles additional KG updates like concept relationships
 
         if outcome == "worked" and problem_text and solution_text:
             # Extract concepts
@@ -344,7 +343,7 @@ class OutcomeService:
             outcome_history_json: JSON string of outcome history
 
         Returns:
-            Weighted success count (worked=1, partial=0.5)
+            Weighted success count (worked=1, partial=0.5, unknown=0.25)
         """
         if not outcome_history_json or outcome_history_json == "[]":
             return 0
@@ -358,6 +357,8 @@ class OutcomeService:
                     successes += 1.0
                 elif outcome == "partial":
                     successes += 0.5
+                elif outcome == "unknown":
+                    successes += 0.25  # v0.3.0: weak negative signal
             return successes
         except json.JSONDecodeError:
             return 0

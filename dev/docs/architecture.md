@@ -6,7 +6,7 @@ Roampal is an intelligent chatbot with persistent memory and learning capabiliti
 
 ## Architecture Refactor (v0.2.7)
 
-**IMPORTANT**: In v0.2.7, the monolithic `UnifiedMemorySystem` (4,746 lines) was refactored into a **facade pattern** with **8 extracted services**. v0.2.8 completed API compatibility and stabilized the architecture. v0.2.9 added Ghost Registry for book deletion, `sort_by`/`related` MCP parameters, and critical bug fixes. v0.2.10 added ChromaDB error handling (ghost entries), schema migration for older data, and fixed memory promotion to run on startup. v0.2.11 fixed critical KG performance (O(n×m) → O(n+m), 25x faster), added message virtualization, and optimized store subscriptions. Line number references throughout this document may point to the pre-refactor monolith.
+**IMPORTANT**: In v0.2.7, the monolithic `UnifiedMemorySystem` (4,746 lines) was refactored into a **facade pattern** with **8 extracted services**. v0.2.8 completed API compatibility and stabilized the architecture. v0.2.9 added Ghost Registry for book deletion, `sort_by`/`related` MCP parameters, and critical bug fixes. v0.2.10 added ChromaDB error handling (ghost entries), schema migration for older data, and fixed memory promotion to run on startup. v0.2.11 fixed critical KG performance (O(n×m) → O(n+m), 25x faster), added message virtualization, and optimized store subscriptions. **v0.3.0** added per-memory scoring (`memory_scores` dict), 4-emoji attribution (👍🤷👎➖), `success_count` tracking for accurate Wilson scoring (no 10-entry cap), time-weighted score updates, patterns demotion (score < 0.4), optional `key_takeaway`, and surfaced memories UI display. Line number references throughout this document may point to the pre-refactor monolith.
 
 ### New Architecture
 
@@ -175,9 +175,9 @@ The system learns that "what worked before" matters more than "what sounds relat
   - When limit=5: Working fetches 15, Memory_bank fetches 15, Books fetches 15 (equal depth)
   - Ensures memory_bank facts compete fairly with conversation context
 - **Promotion**: Valuable items promoted automatically via:
-  - Working → History: score ≥0.7 AND uses ≥2
+  - Working → History: score ≥0.7 AND uses ≥2 (resets uses=0, success_count=0)
   - Triggers: Every 30 minutes (background task), Every 20 messages (auto-promotion), On conversation switch
-  - History → Patterns: score ≥0.9 AND uses ≥3
+  - History → Patterns: score ≥0.9 AND uses ≥3 AND success_count ≥5 (v0.2.9+)
 - **Use Case**: Active problem-solving context
 
 #### History Collection
@@ -188,8 +188,9 @@ The system learns that "what worked before" matters more than "what sounds relat
 
 #### Patterns Collection
 - **Purpose**: Proven solutions and successful patterns
-- **Retention**: Permanent
+- **Retention**: Permanent (but can demote)
 - **Source**: Promoted from history when consistently successful
+- **Demotion (v0.3.0)**: Patterns → History if score < 0.4 (solution no longer reliable)
 - **Use Case**: Quick retrieval of known solutions
 
 #### Memory Bank Collection (NEW - 2025-10-01)
@@ -713,29 +714,52 @@ The 4 techniques implemented are **production-proven** (used by Google, Anthropi
 - Tracks `last_outcome` metadata: "worked", "failed", "partial", "unknown"
 - Score evolves over time as memory is used and rated
 
-**Score Adjustments:**
-- ✅ `worked`: +0.2 (capped at 1.0)
-- ❌ `failed`: -0.3 (minimum 0.0)
-- ⚠️ `partial`: +0.05 (small boost)
-- ❓ `unknown`: No change
+**Score Adjustments (v0.3.0):**
+- ✅ `worked`: +0.2 × time_weight (capped at 1.0), success_delta=1.0
+- ❌ `failed`: -0.3 × time_weight (minimum 0.0), success_delta=0.0
+- ⚠️ `partial`: +0.05 × time_weight (small boost), success_delta=0.5
+- ❓ `unknown`: No score change, but uses+=1, success_delta=0.25 (weak negative signal for noise drift)
+
+**Time-Weighted Scoring (v0.3.0):**
+- Score deltas are multiplied by a time weight based on memory age
+- Formula: `time_weight = 1.0 / (1 + age_days / 30)`
+- Fresh memories (0 days): full weight (1.0)
+- 30-day old memories: half weight (0.5)
+- 90-day old memories: quarter weight (0.25)
+- This prevents stale memories from being over-penalized or over-rewarded
 
 **Uses Counter (Wilson Scoring):**
-- `uses` is incremented on ALL outcomes (worked, failed, partial)
+- `uses` is incremented on ALL outcomes (worked, failed, partial, unknown)
+- v0.3.0 fix: `failed` now correctly increments uses (was a bug in v0.2.x)
 - This provides accurate denominator for Wilson score confidence intervals
-- Partial outcomes count as 0.5 success for accurate Wilson calculation
-- Example: 5 worked + 2 partial + 3 failed = 6.0 successes / 10 uses
-- Wilson formula: `(successes + 1) / (uses + 2)` - more uses = higher confidence
+
+**Success Count Tracking (v0.3.0):**
+- New `success_count` metadata field tracks cumulative successes
+- Replaces parsing `outcome_history` JSON (which was capped at 10 entries)
+- Calculation: `success_count += success_delta` for each outcome
+- Example: 5 worked + 2 partial + 3 failed + 2 unknown = (5×1.0 + 2×0.5 + 3×0.0 + 2×0.25) = 6.5 successes / 12 uses
+- Wilson formula uses `success_count` for accurate long-term confidence intervals
+
+**Wilson Score Lower Bound:**
+- Formula: `p̃ = (p + z²/2n - z√(p(1-p)/n + z²/4n²)) / (1 + z²/n)`
+- Where: p = success_count/uses, n = uses, z = 1.96 (95% confidence)
+- Examples:
+  - 1/1 success (100%) → Wilson ≈ 0.20 (low confidence, new memory)
+  - 90/100 success (90%) → Wilson ≈ 0.84 (high confidence, proven)
+  - 0/0 untested → Wilson = 0.5 (neutral)
 
 **Technical Implementation:**
-- [unified_memory_system.py:2296-2424](modules/memory/unified_memory_system.py#L2296-L2424) - `record_outcome()` method
-- Score updates logged: `Score update [working]: 0.50 → 0.70 (outcome=worked, delta=+0.20)`
+- [outcome_service.py](modules/memory/outcome_service.py) - `record_outcome()` method
+- [scoring_service.py](modules/memory/scoring_service.py) - Wilson score calculation
+- Score updates logged: `Score update [working]: 0.50 → 0.70 (outcome=worked, delta=+0.20, time_weight=0.95)`
 
 **Example Evolution:**
 ```
-Creation: score=0.5 (neutral baseline)
-After 1st use (worked): score=0.7 (+0.2)
-After 2nd use (worked): score=0.9 (+0.2)
-After 3rd use (failed): score=0.6 (-0.3)
+Creation: score=0.5, uses=0, success_count=0 (neutral baseline)
+After 1st use (worked): score=0.7 (+0.2), uses=1, success_count=1.0
+After 2nd use (worked): score=0.9 (+0.2), uses=2, success_count=2.0
+After 3rd use (failed): score=0.6 (-0.3), uses=3, success_count=2.0
+After 4th use (unknown): score=0.6 (no change), uses=4, success_count=2.25
 ```
 
 ### Learning Mechanisms
@@ -883,7 +907,8 @@ exchange_doc_id = await memory.store(
 - ✅ **Metadata preserved**: Both `query` and `response` stored separately in metadata for relationship building
 
 **Promotion Impact:**
-- Exchanges with `score >= 0.7` and `uses >= 2` promote from working → history as complete Q&A pairs
+- Exchanges with `score >= 0.7` and `uses >= 2` promote from working → history (resets uses=0, success_count=0)
+- History → patterns requires `score >= 0.9` AND `uses >= 3` AND `success_count >= 5` (must prove itself fresh)
 - No conversation filter skipping during promotion (unified_memory_system.py:1359, 1599)
 - Full context maintained through entire decay lifecycle: working → history → patterns
 
@@ -926,7 +951,7 @@ async def analyze(
 **Parameters:**
 - `conversation`: Recent turns for outcome analysis
 - `surfaced_memories` (v0.2.12): `{position: content}` - memories shown to main LLM, used for selective scoring
-- `llm_marks` (v0.2.12): `{position: emoji}` - main LLM's attribution marks (👍👎➖)
+- `llm_marks` (v0.2.12→v0.3.0): `{position: emoji}` - main LLM's attribution marks (👍🤷👎➖)
 
 **Returns:**
 - `used_positions`: Inferred from response analysis (Fix #5 fallback)
@@ -959,40 +984,47 @@ async def analyze(
 - The PREVIOUS exchange that the user is reacting to
 - Any retrieved memories (working/history/patterns) that were used in that response
 
-**v0.2.12 Enhancements - Selective & Causal Scoring:**
+**v0.3.0 Scoring Architecture (Simplified):**
 
-The internal system now has parity with MCP's selective scoring, plus causal attribution:
+The internal system uses a two-tier approach: main LLM attribution (primary) + outcome detector (fallback).
 
-1. **Selective Scoring (Fix #5):** OutcomeDetector identifies which memories were actually USED in the response, not just surfaced. Only used memories get scored.
-   - Cache structure: `{position_map: {1: doc_id, ...}, content_map: {1: "content preview", ...}}`
-   - OutcomeDetector returns `used_positions: [1, 3]`
-   - Only those positions get the outcome score; unused memories stay neutral
-
-2. **Causal Attribution (Fix #7):** Main LLM marks memories as helpful/unhelpful at response time:
-   - Main LLM adds hidden annotation: `<!-- MEM: 1👍 2👎 3➖ -->`
+1. **Primary: 4-Emoji Attribution** - Main LLM marks each memory with 👍🤷👎➖ at response time:
+   - Main LLM adds hidden annotation: `<!-- MEM: 1👍 2🤷 3👎 4➖ -->` (v0.3.0: 4 emojis)
    - Parsed and stripped before showing response to user
    - Passed to OutcomeDetector which combines marks with outcome detection
-   - Scoring matrix:
+   - **v0.3.0 4-Emoji System:**
+     - 👍 (helpful) → worked outcome for this memory
+     - 🤷 (partial) → partial outcome for this memory (v0.3.0 NEW)
+     - 👎 (unhelpful) → failed outcome for this memory
+     - ➖ (no_impact) → unknown outcome for this memory
+   - Scoring matrix (v0.3.0 direct emoji→outcome mapping):
      ```
-                     | YES (worked) | KINDA (partial) | NO (failed) |
-     ----------------|--------------|-----------------|-------------|
-     👍 (helpful)    | upvote       | slight_up       | neutral     |
-     👎 (unhelpful)  | neutral      | slight_down     | downvote    |
-     ➖ (no_impact)  | neutral      | neutral         | neutral     |
+     Emoji     | Direct Outcome | Score Effect           | Wilson Effect
+     ----------|----------------|------------------------|---------------
+     👍        | worked         | +0.2 × time_weight     | success_delta=1.0
+     🤷        | partial        | +0.05 × time_weight    | success_delta=0.5
+     👎        | failed         | -0.3 × time_weight     | success_delta=0.0
+     ➖        | unknown        | no score change        | success_delta=0.25
      ```
-   - **Key insight:** A positive exchange can still downvote bad memories if LLM marked them 👎
+   - **Key insight:** Each memory gets individually scored based on its emoji mark
 
-3. **Fallback behavior:** If main LLM doesn't include annotation, falls back to Fix #5 (infer usage) → Fix #4 (score all)
+2. **Fallback: Simplified Outcome Detector** - If main LLM doesn't provide emoji marks:
+   - OutcomeDetector LLM only answers: "was the user happy?" (worked/failed/partial/unknown)
+   - **v0.3.0 Simplification**: Removed `used_positions` inference - too complex, unreliable on small models
+   - Prompt is now ~50 words: "Grade the USER'S REACTION (not the assistant's quality)"
+   - All cached memories get the overall outcome (simple, predictable)
+   - Returns only `{"outcome": "worked|failed|partial|unknown"}` - defaults filled for backward compat
 
-**Scoring Rules:**
-- `worked` → +0.2 to score
-- `failed` → -0.3 to score
-- `partial` → +0.05 to score
-- `unknown` → no change
+**Scoring Rules (v0.3.0):**
+- `worked` → +0.2 × time_weight, success_delta=1.0
+- `failed` → -0.3 × time_weight, success_delta=0.0, uses+=1 (fixed in v0.3.0)
+- `partial` → +0.05 × time_weight, success_delta=0.5
+- `unknown` → no score change, success_delta=0.25, uses+=1 (weak negative signal)
 
-**Automatic Promotion/Deletion** (threshold-based):
-- score ≥ 0.7 AND uses ≥ 2 → working → history
-- score ≥ 0.9 AND uses ≥ 3 → history → patterns
+**Automatic Promotion/Demotion/Deletion** (threshold-based, v0.3.0):
+- score ≥ 0.7 AND uses ≥ 2 → working → history (resets uses=0, success_count=0)
+- score ≥ 0.9 AND uses ≥ 3 AND success_count ≥ 5 → history → patterns
+- score < 0.4 → patterns → history (demotion)
 - score < 0.2 → deleted (or score < 0.1 for items < 7 days old)
 
 ### MCP (External LLM) Memory Scoring Flow
@@ -1047,10 +1079,11 @@ The internal system now has parity with MCP's selective scoring, plus causal att
   - Caches ALL doc_ids for Action KG tracking (v0.2.6 - unified with internal system, includes books/memory_bank)
   - **Caches search query** for KG routing updates (stores in `last_search_query_cache[session_id]`)
 - `record_response` tool:
-  - **Parameters:** `key_takeaway` (semantic summary, required) + `outcome` (explicit scoring, optional, defaults to "unknown")
-  - **Storage:** Stores semantic summary to ChromaDB with **initial score calculated from outcome** (worked=0.7, failed=0.2, partial=0.55, unknown=0.5)
+  - **Parameters:** `key_takeaway` (semantic summary, optional in v0.3.0) + `outcome` (optional, defaults to "unknown") + `memory_scores` (v0.3.0 NEW: per-memory scoring dict)
+  - **Storage:** If key_takeaway provided, stores semantic summary to ChromaDB with **initial score calculated from outcome** (worked=0.7, failed=0.2, partial=0.55, unknown=0.5)
   - **Scores CURRENT learning:** Unlike internal system (scores previous), MCP scores the learning being recorded immediately
-  - **Scores retrieved memories:** Also scores all cached memories from the last search with the same outcome (upvote helpful memories, downvote bad advice)
+  - **Per-memory scoring (v0.3.0):** If `memory_scores` dict provided, scores each memory individually with its own outcome
+  - **Scores retrieved memories:** If no memory_scores, scores all cached memories from the last search with the same outcome
   - **Metadata includes cached query:** Retrieves last search query from cache and stores as `metadata["query"]`
   - **Why query caching:** Enables KG routing to learn "query X → collection Y worked" even though MCP stores semantic summaries, not verbatim transcripts
   - **Scoring:** Uses explicit outcome directly - no automatic detection, no internal LLM call
@@ -1176,62 +1209,42 @@ else:
 - **New formula**: `score = 1.0 / (1.0 + distance)` → Always positive (e.g., 0.0087)
 - **Best practice**: Use stored metadata scores when available
 
-#### Outcome Detection (Updated 2025-10-06)
-**Philosophy: LLM-Only Detection with Strict Satisfaction Criteria**
+#### Outcome Detection (Updated 2026-01-20)
+**Philosophy: Simple Prompt, Single Job**
 
-The system uses **LLM-only** outcome detection that distinguishes between enthusiastic satisfaction and lukewarm responses.
+**v0.3.0 Simplification**: The outcome detector now has ONE job - determine if user is happy. No memory tracking, no complex criteria. LLMs naturally understand human satisfaction.
 
-**Key Design (2025-10-06):**
-- **LLM-only** - No heuristic fallbacks
-- **Degree-based** - Distinguishes enthusiastic vs lukewarm positive feedback
-- **Critical insight** - Follow-up questions ≠ success (often indicate confusion/criticism)
-- **Structured JSON output** - Returns `{outcome, confidence, indicators, reasoning}` for automated score updates
+**Key Design:**
+- **Single question** - "Was the user happy?" (not "evaluate response quality")
+- **Minimal prompt** - ~50 words total, works on small models
+- **Grade USER reaction** - Explicitly stated: "(not the assistant's quality)"
+- **Simple JSON output** - Returns only `{"outcome": "worked|failed|partial|unknown"}`
 
-**Outcome Categories:**
-
-**"worked"** - ENTHUSIASTIC satisfaction or clear success
-- "thanks!", "perfect!", "awesome!", "that worked!"
-- User moves to NEW topic (indicates previous was resolved)
-- NOT worked: "yea pretty good", "okay", follow-up questions
-
-**"failed"** - Dissatisfaction, criticism, or confusion
-- "no", "nah", "wrong", "didn't work"
-- Criticism: "why are you...", "stop doing..."
-- Repeated questions about SAME issue (solution didn't work)
-- Follow-up questions expressing confusion
-
-**"partial"** - Lukewarm (positive but not enthusiastic)
-- "yea pretty good", "okay", "sure", "I guess", "kinda"
-- Helped somewhat but incomplete
-
-**"unknown"** - No clear signal yet
-- No user response after answer
-- Pure neutral: "hm", "noted"
-
-**CRITICAL Principle:** Follow-up questions are NOT success signals. User continuing conversation ≠ satisfaction.
-
-**Prompt Structure:**
+**v0.3.0 Prompt:**
 ```
-"worked": ENTHUSIASTIC satisfaction or clear success
-  • [explicit examples]
-  • NOT worked: "yea pretty good", "okay", follow-up questions
+Based on how the user responded, grade this exchange.
 
-"failed": Dissatisfaction, criticism, or confusion
-  • [explicit examples including criticism patterns]
+{conversation}
 
-"partial": Lukewarm (positive but not enthusiastic)
-  • [explicit lukewarm examples]
+Grade the USER'S REACTION (not the assistant's quality):
+- worked = user satisfied (thanks, great, perfect, got it)
+- failed = user unhappy/correcting (no, wrong, didn't work)
+- partial = lukewarm (ok, I guess, sure)
+- unknown = no clear signal
 
-CRITICAL: Follow-up questions are NOT success signals.
-
-Return JSON: {outcome, confidence, indicators, reasoning}
+Return JSON: {"outcome": "worked|failed|partial|unknown"}
 ```
+
+**Why Simplified (v0.3.0):**
+- **Old prompt issue**: "Judge both user feedback AND response quality" confused small models
+- **Result**: Local LLMs evaluated assistant quality instead of user reaction → false "failed" on "ty"
+- **Fix**: Focus ONLY on user reaction, let LLM use natural language understanding
 
 **Issues Fixed:**
 - **2025-10-04**: Heuristic regex matched "unhelpful" → false positive
 - **2025-10-05**: Analyzed outcomes before user feedback → false positives
 - **2025-10-06**: Was too lenient - any positive word → "worked"
-- **2025-10-06**: Now requires ENTHUSIASTIC satisfaction, not just polarity
+- **2026-01-20**: Prompt confused small LLMs ("ty" → "failed" because "generic response")
 **Additional Safety Improvements (2025-10-04):**
 1. **Book & Memory Bank Safeguards** ([outcome_service.py:90-104](modules/memory/outcome_service.py#L90-L104))
    - **KG routing updates FIRST** - Books/memory_bank searches update Routing KG patterns (learning which queries → those collections)
@@ -1557,7 +1570,7 @@ Complements the routing KG with a **content-based entity graph** that indexes re
 - ✅ Persistence: Saved atomically with routing KG [_save_kg_sync():212-238](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L212-L238)
 - ✅ Visualization: Blue (routing), Green (content), Purple (both), Orange (action) nodes in KG UI
 
-**Dual Graph Architecture:**
+**Triple File Architecture:**
 - **Routing KG**: Learns which collections to search based on query patterns
   - Data source: User search queries + outcome feedback
   - Purpose: Optimize search routing (blue nodes)
@@ -1568,6 +1581,10 @@ Complements the routing KG with a **content-based entity graph** that indexes re
   - Purpose: Map entity relationships - who you are, what you do (green nodes)
   - Storage: `content_graph.json`
   - Implementation: [content_graph.py](../ui-implementation/src-tauri/backend/modules/memory/content_graph.py), [unified_memory_system.py:149-154](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L149-L154)
+- **Memory Relationships**: Links between memories discovered during promotion/scoring
+  - Data source: Promotion service detecting related memories
+  - Purpose: Memory clustering (related, evolved-from, conflicts-with)
+  - Storage: `memory_relationships.json`
 
 **Key Difference:**
 - **Routing KG**: "benjamin_graham" query → route to books collection (routing decision)
@@ -1618,12 +1635,13 @@ memory_bank searches receive entity quality boosting based on Content KG:
 - Fixed: `collections=["all"]` bug - now passes `None` to trigger hybrid KG routing
 - **Hybrid Routing** (v0.2.0): LLM can override OR use KG's learned patterns
 - External LLMs (Claude Desktop) benefit from automatic intelligent routing
-- **External LLM Outcome Judgment** (v0.2.0 - [main.py:960-1048](../ui-implementation/src-tauri/backend/main.py#L960-L1048)):
-  - `record_response` tool requires TWO parameters: `key_takeaway` (required) + `outcome` (required)
+- **External LLM Outcome Judgment** (v0.2.0→v0.3.0 - [main.py:960-1048](../ui-implementation/src-tauri/backend/main.py#L960-L1048)):
+  - `record_response` tool: `key_takeaway` (optional in v0.3.0), `outcome` (optional), `memory_scores` (v0.3.0 NEW)
   - **Key Principle**: External LLM judges its own previous response based on user feedback
   - When user provides feedback, external LLM passes `outcome: "worked"/"failed"/"partial"/"unknown"`
-  - Server scores the **PREVIOUS** learning (not the current one being recorded)
-  - Example: `record_response({key_takeaway: "User thanked me for explaining IRAs. I provided retirement account details.", outcome: "worked"})`
+  - v0.3.0: Can use `memory_scores` for per-memory attribution: `{doc_id: outcome}`
+  - Server scores memories and optionally stores new learning
+  - Example: `record_response({key_takeaway: "User thanked me...", memory_scores: {"history_abc": "worked", "patterns_xyz": "failed"}})`
     - Scores the previous learning (from last turn)
     - Stores current learning summary to working memory
 - **Why External LLM Judges**: Each AI (internal or external) evaluates its own conversation quality for consistency
@@ -1839,15 +1857,22 @@ Handles all chat interactions and orchestrates memory operations.
 - Token-by-token streaming via WebSocket connection (migrated from SSE for chat)
 - **Note**: SSE (Server-Sent Events) still used for model download progress tracking where one-way updates are appropriate
 - WebSocket events:
-  - `type: "stream_start"` - Streaming begins (no message created yet)
-  - `type: "token"` - Text chunks as generated (creates assistant message on first token)
+  - `type: "stream_start"` - Streaming begins (v0.3.0: marks existing placeholder as streaming, or no-op if none exists)
+  - `type: "token"` - Text chunks as generated (updates placeholder or creates assistant message on first token)
   - `type: "thinking_start"` - LLM entered thinking mode (v0.2.5: shows "Thinking..." status)
   - `type: "thinking_end"` - LLM exited thinking mode (v0.2.5: resumes "Streaming..." status)
   - `type: "tool_start"` - Tool execution begins
   - `type: "tool_complete"` - Tool execution finished
-  - `type: "stream_complete"` - Streaming done with citations, memory_updated flag, timestamp
+  - `type: "stream_complete"` - Streaming done with citations, memory_updated flag, timestamp, surfaced_memories (v0.3.0)
   - `type: "validation_error"` - Model validation failed (removes user message, no assistant message created)
-- Frontend uses lazy message creation: assistant message created on first token, not on stream_start
+
+**Surfaced Memories Display (v0.3.0):**
+- `stream_complete` event includes `surfaced_memories` field showing which memories were injected into LLM context
+- Format: `[{doc_id, content, collection, age}]`
+- Frontend displays "context: N memories" expandable section below response
+- Different from "searched" - surfaced memories are those actually used in context injection
+- Stored on message as `surfacedMemories` for later viewing
+- Frontend message creation (v0.3.0): `sendMessage()` creates placeholder, `stream_start` marks it as streaming, tokens update it. Falls back to lazy creation on first token if no placeholder exists.
 - 2-minute timeout prevents model hangs (DeepSeek-R1/Qwen)
 - Clean, single-purpose status flow (no redundant thinking blocks)
 - Validation errors never enter conversation history (clean architecture, no transient flags)
@@ -2295,7 +2320,7 @@ The prompting system builds structured, secure prompts with personality, memory 
 - Updates without restart (cache invalidation on file change)
 
 **4. Recent Conversation History** ([agent_chat.py:1281-1287](../app/routers/agent_chat.py))
-- Last 6 messages (3 exchanges) from current conversation
+- Last 8 messages (4 exchanges) from current conversation
 - Format: `[Recent Conversation]` followed by `USER: {content}` and `ASSISTANT: {content}`
 - Long messages truncated to 500 characters
 - No pre-search memory results (LLM controls memory via tools)
@@ -2443,7 +2468,7 @@ Regex: `\[MEMORY_BANK_ARCHIVE:\s*match="((?:[^"\\]|\\.)*)"\]`
 2. Backend executes via `_execute_tool_and_continue(chain_depth=0)`
 3. Tool results returned to LLM with tools still enabled
 4. LLM can call follow-up tools (e.g., `create_memory`) → `chain_depth=1`
-5. Process repeats up to `MAX_CHAIN_DEPTH=3` to prevent infinite loops
+5. Process repeats up to `MAX_CHAIN_DEPTH=5` to prevent infinite loops (increased from 3 in v0.3.0)
 6. Final response generated after all tools complete
 
 **Key Components**:
@@ -2452,10 +2477,10 @@ Regex: `\[MEMORY_BANK_ARCHIVE:\s*match="((?:[^"\\]|\\.)*)"\]`
 - `tool_events` array - Collects tool execution metadata for UI persistence
 - **Tool continuation policy** (line 2220): `tools=None` on continuation - prevents recursive tool calls after results are provided
 
-**Safety Limits (Updated 2025-11-19)**:
-- `MAX_CHAIN_DEPTH=3` - Maximum recursion depth (prevents infinite chaining across LLM calls)
+**Safety Limits (Updated v0.3.0)**:
+- `MAX_CHAIN_DEPTH=5` - Maximum recursion depth (increased from 3 in v0.3.0 for models like Qwen)
 - `MAX_TOOLS_PER_BATCH=10` - Maximum tools per LLM response (prevents runaway expansion within single response)
-- Combined protection: Max 3 chains × 10 tools = 30 total tool executions per user message
+- Combined protection: Max 5 chains × 10 tools = 50 total tool executions per user message
 - Warning logged when truncation occurs: `[TOOL] Truncating X tool calls to 10`
 
 **Tool Execution Flow (Updated 2025-11-19 - Multi-Tool Chaining with Batch Limits)**:
@@ -2797,6 +2822,13 @@ if "context" in error_msg.lower() and ("overflow" in error_msg.lower() or "lengt
     user_msg = "**Context Length Error:** LM Studio loaded this model with only 4096 context..."
 ```
 
+**Pre-flight Context Check (v0.3.0)** ([agent_chat.py](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py)):
+- Estimates token usage BEFORE sending to LLM (prevents silent truncation)
+- At 90% context usage: Auto-truncates history from 8 to 2 messages
+- Shows inline warning to user: `*⚠️ Context limit reached (95% full). Trimmed history from 8 to 2 messages to prevent model barfing.*`
+- At 70% context usage: Logs info for monitoring
+- Small models (7B-14B) benefit most since system prompt + context injection + tools = ~2300 tokens baseline
+
 **UI Behavior** ([ModelContextSettings.tsx](../ui-implementation/src/components/ModelContextSettings.tsx)):
 - **Per-model controls**: Each model checks its own `provider` field, not the global provider dropdown
 - LM Studio models: slider disabled, grayed out, "LM Studio manages context internally" message
@@ -3005,11 +3037,12 @@ Roampal functions as a native MCP server, enabling external LLMs (Claude Desktop
    - User's current message serves as feedback for previous response
    - **Different from internal system**: Internal uses automatic LLM-based detection ([agent_chat.py:743-822](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py#L743-L822)), MCP relies on external LLM's explicit `outcome` parameter
 
-2. **Two-Parameter Design** (v0.2.0)
-   - `record_response(key_takeaway, outcome)` requires TWO parameters
-   - `key_takeaway`: Semantic summary of current exchange (1-2 sentences)
-   - `outcome`: External LLM's judgment of PREVIOUS response ("worked", "failed", "partial", "unknown")
-   - External LLM must call tool after EVERY response with both parameters
+2. **Flexible Parameter Design** (v0.2.0→v0.3.0)
+   - `record_response(key_takeaway?, outcome?, memory_scores?)` - all parameters optional in v0.3.0
+   - `key_takeaway`: Semantic summary of current exchange (1-2 sentences) - optional if only scoring
+   - `outcome`: Fallback outcome for all memories ("worked", "failed", "partial", "unknown")
+   - `memory_scores` (v0.3.0 NEW): Per-memory scoring dict `{doc_id: outcome}` for granular attribution
+   - Valid calls: key_takeaway only, memory_scores only, or both
 
 3. **Unified Learning**
    - All exchanges stored in same ChromaDB collections
@@ -3132,10 +3165,11 @@ MCP and Internal prompts use different approaches based on system differences:
 - Automatic outcome detection - LLM doesn't need to call anything for scoring
 - Prompt explains what happens automatically, not what LLM must do
 - Section 8: "Outcome Scoring - Automatic"
-- **v0.2.12 Memory Attribution:** Main LLM adds `<!-- MEM: 1👍 2👎 3➖ -->` annotation for causal scoring
-  - 👍 = memory helped me answer well
-  - 👎 = memory was wrong/misleading
-  - ➖ = memory not used
+- **v0.2.12→v0.3.0 Memory Attribution:** Main LLM adds `<!-- MEM: 1👍 2🤷 3👎 4➖ -->` annotation for causal scoring
+  - 👍 = memory helped me answer well (worked)
+  - 🤷 = memory somewhat helpful (partial) - v0.3.0 NEW
+  - 👎 = memory was wrong/misleading (failed)
+  - ➖ = memory not used (unknown)
   - Annotation stripped before showing response to user
   - Parsed by `parse_memory_marks()` and passed to OutcomeDetector
 
@@ -3146,31 +3180,44 @@ MCP and Internal prompts use different approaches based on system differences:
 
 #### Available MCP Tools (6)
 
-**1. record_response** (v0.2.9 - Selective Scoring with `related` parameter)
+**1. record_response** (v0.2.9→v0.3.0 - Per-Memory Scoring)
 ```json
 {
   "name": "record_response",
-  "description": "Store semantic learning summary with initial score based on explicit outcome",
+  "description": "Store semantic learning summary and/or score memories with per-memory outcomes",
   "parameters": {
-    "key_takeaway": "string (required) - 1-2 sentence summary of current exchange",
-    "outcome": "enum (optional, default: 'unknown') - worked|failed|partial|unknown - explicit outcome for THIS response",
-    "related": "array (optional) - v0.2.9: Which search results to score. Accepts positions (1, 2, 3) or doc_ids. Omit to score all."
+    "key_takeaway": "string (optional in v0.3.0) - 1-2 sentence summary of current exchange. Required if storing new learning.",
+    "outcome": "enum (optional, default: 'unknown') - worked|failed|partial|unknown - fallback outcome when memory_scores not provided",
+    "related": "array (deprecated) - v0.2.9 legacy: Which search results to score. Use memory_scores instead.",
+    "memory_scores": "object (optional, v0.3.0 NEW) - Per-memory scoring: {doc_id: outcome}. Direct control over each memory's outcome."
   },
-  "behavior": [
-    "1. Receives key_takeaway (semantic summary) and outcome from external LLM",
-    "2. Stores CURRENT key_takeaway to working memory with initial score based on outcome (worked=0.7, failed=0.2, partial=0.55, unknown=0.5)",
-    "3. v0.2.9: If `related` specified, only scores those memories (resolves positions 1→doc_id using cached position map)",
-    "4. If `related` omitted, scores ALL previously SEARCHED memories (backwards compatible)",
+  "behavior_v0.3.0": [
+    "1. If key_takeaway provided: Store to working memory with initial score based on outcome",
+    "2. If memory_scores provided: Score each memory individually with its specified outcome",
+    "3. If only related provided (legacy): Score specified positions with global outcome",
+    "4. If nothing provided for scoring: Score ALL previously searched memories with global outcome",
     "5. Updates KG routing patterns with query → collection → outcome",
-    "6. Clears search cache",
-    "7. Records to session file for tracking"
+    "6. Clears search cache"
   ],
-  "returns_v0.2.9": "Enriched summary including selective scoring stats (scored N, skipped M unrelated)",
-  "selective_scoring_v0.2.9": {
-    "why": "Prevents learning pollution when LLM retrieves 5 memories but only uses 2",
-    "positional_indexing": "related=[1, 3] - Uses position numbers shown in search results (small-LLM friendly)",
-    "doc_id_indexing": "related=['history_abc123'] - Uses doc_ids for smart models",
-    "fallback": "Invalid positions/ids → falls back to score all (safe default)"
+  "scoring_precedence_v0.3.0": [
+    "memory_scores > related > score_all",
+    "If memory_scores: each doc_id gets its own outcome (most precise)",
+    "If related: specified positions get global outcome",
+    "If neither: all cached memories get global outcome (backward compatible)"
+  ],
+  "memory_scores_v0.3.0": {
+    "why": "Per-memory attribution matching internal 4-emoji system capability",
+    "format": "{\"history_abc123\": \"worked\", \"patterns_xyz789\": \"failed\", \"working_def456\": \"unknown\"}",
+    "outcomes": "worked|failed|partial|unknown - each memory scored independently",
+    "use_case": "LLM found memory 1 helpful, memory 2 misleading, didn't use memory 3"
+  },
+  "key_takeaway_optional_v0.3.0": {
+    "why": "Allows scoring-only calls without storing new learning",
+    "scenarios": [
+      "key_takeaway + memory_scores: Store learning AND score memories",
+      "key_takeaway only: Store learning, score cached with global outcome",
+      "memory_scores only: Just score memories, don't store new learning"
+    ]
   }
 }
 ```
@@ -3650,6 +3697,22 @@ DELETE /api/model/context/{model_name} # Reset to default context size
   - Updates `ROAMPAL_LLM_PROVIDER`, `ROAMPAL_LLM_LMSTUDIO_MODEL` (LM Studio)
   - Persists to .env file with asyncio file locking
 
+**v0.3.0 Model Switching Fixes** (Added 2026-01-16)
+- **Switch lock** (`_switch_lock`): Prevents concurrent model switches from corrupting shared state. Rapid clicking or automated testing no longer causes race conditions.
+- **State validation**: After successful switch, validates `llm_client.model_name` matches expected value. Auto-corrects if mismatch detected.
+- **Unified model name matching** (`_model_names_match()`): Robust function to match registry names (`llama3.3:70b`) with provider IDs (`llama-3.3-70b-instruct`). Uses 3 strategies:
+  1. Direct normalization (`:` → `-`)
+  2. GGUF filename stem extraction
+  3. Component + size matching (prevents `7b` matching `70b`)
+- **Ghost model detection**: New `GET /api/model/ghost-models` and `DELETE /api/model/ghost-models/{id}` endpoints to detect and remove orphaned models that appear in LM Studio but have no matching registry entry.
+- **Download cleanup**: On download failure, partial `.gguf` files are automatically deleted via `finally` block with `download_success` flag.
+- **Provider-specific timeouts**: Health check timeout is 90s for LM Studio (larger models need more time to load from disk), 30s for Ollama.
+- **Better error messages**: Timeout errors now show "Model load timed out. Try a smaller model or pre-load it in LMSTUDIO." instead of raw exception text.
+
+**Model UI Updates** (v0.3.0)
+- `qwen2.5:7b` description updated to "Good tool calling (may struggle with 20+ tools)" - 7B models may output tool JSON as text when many MCP tools are loaded.
+- Removed "recommended" badge from 7B - use 14B+ for production with many tools.
+
 **Model Installation** ([model_switcher.py:262-657](../app/routers/model_switcher.py)) (Updated 2025-10-28)
 - **Multi-provider support**: Ollama and LM Studio installation workflows
 - **Ollama**: SSE streaming with real-time progress updates, parses download percentage/speed/size
@@ -4034,17 +4097,23 @@ ROAMPAL_REQUIRE_AUTH=false
 - System automatically detects environment and chooses appropriate data location
 - Implementation: [settings.py:18-48](../ui-implementation/src-tauri/backend/config/settings.py)
 
-**Priority Order:**
+**Priority Order (v0.3.0 - Data Path Isolation):**
 1. **Environment Variable Override** (Advanced users)
    - If `ROAMPAL_DATA_DIR` is set → uses custom path
    - Allows explicit control over data location
 
-2. **Development Mode** (Auto-detected)
+2. **ROAMPAL_DEV Flag (v0.3.0 NEW - Dev/Prod Isolation)**
+   - If `ROAMPAL_DEV=true` → uses `Roampal_DEV` subfolder
+   - Tauri sets this automatically based on debug/release build
+   - Prevents dev builds from corrupting production data
+   - Windows: `%APPDATA%\Roaming\Roampal_DEV\data\`
+
+3. **Development Mode** (Auto-detected)
    - Checks if `ui-implementation/` folder exists
    - If YES → uses `PROJECT_ROOT/data/`
    - For developers running from source
 
-3. **Production Mode** (Auto-created)
+4. **Production Mode** (Auto-created)
    - If no `ui-implementation/` folder → bundled .exe detected
    - Windows: `%APPDATA%\Roaming\Roampal\data\`
    - macOS: `~/Library/Application Support/Roampal/data/`
@@ -5370,7 +5439,7 @@ POST /api/data/clear/history          # Clear history
 POST /api/data/clear/patterns         # Clear patterns
 POST /api/data/clear/books            # Clear books
 POST /api/data/clear/sessions         # Delete all session files
-POST /api/data/clear/knowledge-graph  # Clear knowledge_graph.json
+POST /api/data/clear/knowledge-graph  # Clear all KG files (knowledge_graph.json, content_graph.json, memory_relationships.json)
 ```
 
 **Safety Features**:
@@ -5405,7 +5474,10 @@ POST /api/data/clear/knowledge-graph  # Clear knowledge_graph.json
   - Batched deletion prevents errors on large collections (e.g., 221 books)
   - Preserves collection schema (collections remain, just emptied)
 - Session files deleted from `data/sessions/*.json`
-- Knowledge graph cleared by overwriting `data/knowledge_graph.json` with `{}`
+- Knowledge graph cleared by emptying all 3 KG files:
+  - `knowledge_graph.json` (routing patterns, action effectiveness)
+  - `content_graph.json` (entity relationships for visualization)
+  - `memory_relationships.json` (memory links: related, evolution, conflicts)
 - Stats endpoint aggregates counts from all memory collections + file system
 
 **Impact**:
@@ -6391,7 +6463,7 @@ ConnectedChat.tsx (main container)
 
 | Component | File Location | Key Sections | Purpose |
 |-----------|--------------|--------------|---------|
-| **TerminalMessageThread** | ui-implementation/src/components/TerminalMessageThread.tsx | 3: react-window VariableSizeList import<br>10-25: ThinkingDots component (animated)<br>28-72: CitationsBlock component (inline)<br>209-230: MessageRow virtualized renderer<br>341-389: Chronological event timeline rendering<br>391-458: Fallback static rendering<br>500-535: Processing indicator with ThinkingDots | Main message list renderer with react-window virtualization for smooth scrolling in long conversations (v0.2.11), chronological timeline support and inline components |
+| **TerminalMessageThread** | ui-implementation/src/components/TerminalMessageThread.tsx | TanStack Virtual useVirtualizer (v0.3.0)<br>10-25: ThinkingDots component (animated)<br>28-72: CitationsBlock component (inline)<br>MessageRow virtualized renderer<br>Chronological event timeline rendering<br>Processing indicator with ThinkingDots | Main message list renderer with TanStack Virtual (migrated from react-window in v0.3.0) for smooth 5000+ message scrolling, ResizeObserver auto-measurement |
 | **ThinkingDots** | (inline in TerminalMessageThread.tsx:10-25) | Blue animated "Thinking." → "Thinking.." → "Thinking..." (400ms cycle) | Processing status indicator during LLM thinking phase (v0.2.5) |
 | **ToolExecutionDisplay** | ui-implementation/src/components/ToolExecutionDisplay.tsx | 4-10: TypeScript interfaces<br>16-66: Component implementation<br>28-63: Status icon rendering | Tool execution status badges with running/completed/failed states |
 | **EnhancedChatMessage** | ui-implementation/src/components/EnhancedChatMessage.tsx | 7-34: Message interface<br>56-80: Assistant name fetching<br>134-139: Thinking block integration<br>142-148: Tool execution integration | Legacy message wrapper (being replaced by direct rendering in TerminalMessageThread) |
@@ -7542,4 +7614,187 @@ Works seamlessly with existing context window system:
 2. Tool indicators disappeared during streaming - toolExecutions explicitly preserved at 3 update points (lines 581, 604, 745)
 3. archive_memory indicator disappeared - Messages with tools but no text content are preserved (lines 732-748)
 4. Backend memory flag conditional - Changed to memory_updated: True on ALL responses (agent_chat.py:830)
+
+---
+
+## v0.3.0 Bug Fixes (2026-01-16)
+
+### Duplicate Prompts Race Condition (FIXED)
+
+**Location**: `app/routers/agent_chat.py:3526-3556`
+
+**Issue**: Users saw duplicate responses when sending messages quickly, creating a "ghost" effect where two AI responses appeared for a single prompt.
+
+**Root Cause**:
+- WebSocket handler created new streaming task BEFORE properly cancelling existing task
+- Race condition: old task continued sending tokens while new task started
+- Both tasks wrote to same WebSocket, interleaving their outputs
+- Made worse by LLM latency - old task could run for several seconds after "cancellation"
+
+**Fix Implemented**:
+```python
+# v0.3.0: Cancel existing task FIRST, await completion, THEN create new task
+existing_task = _active_tasks.get(conversation_id)
+if existing_task and not existing_task.done():
+    existing_task.cancel()
+    try:
+        # Wait for cancellation to complete (with timeout)
+        await asyncio.wait_for(asyncio.shield(existing_task), timeout=2.0)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+        pass  # Expected
+```
+
+**Key Insight**: `task.cancel()` doesn't wait for cancellation - must `await` the task to ensure it's fully stopped before creating a new one.
+
+---
+
+### Data Deletion Silent Failure (FIXED)
+
+**Location**: `src/components/MemoryBankModal.tsx:113-175`
+
+**Issue**: Delete button in Memory Bank did nothing - no feedback, no error, no action.
+
+**Root Cause**:
+- Frontend fetch calls had no error handling
+- Failed API calls (500 errors) were silently swallowed
+- User had no way to know operation failed
+- Common with corrupted SQLite databases from version upgrades
+
+**Fix Implemented**:
+```typescript
+// v0.3.0: Add error handling and Toast feedback
+const handleDelete = async (id: string) => {
+  try {
+    const response = await fetch(`http://127.0.0.1:23816/memory-bank/${id}`, {
+      method: 'DELETE'
+    });
+    if (response.ok) {
+      setToast({ message: 'Memory permanently deleted', type: 'success' });
+      fetchData();
+    } else {
+      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      setToast({ message: `Failed to delete: ${error.detail}`, type: 'error' });
+    }
+  } catch (error) {
+    setToast({ message: 'Network error - check backend', type: 'error' });
+  }
+};
+```
+
+**Added**: Toast component for success/error feedback on all memory operations.
+
+---
+
+### ChromaDB Migration Corruption (FIXED)
+
+**Location**: `modules/memory/unified_memory_system.py:232-307`
+
+**Issue**: Users upgrading from v0.2.3 or earlier had corrupted working memories, causing app crashes.
+
+**Root Cause**:
+- ChromaDB 1.x migration added `topic` column to SQLite schema
+- Migration wasn't wrapped in transaction - partial failures left DB corrupted
+- No validation that migration succeeded before continuing
+- Corrupted state persisted across restarts
+
+**Fix Implemented**:
+```python
+# v0.3.0: Transaction wrapper with validation
+cursor.execute("BEGIN TRANSACTION")
+try:
+    # Apply migrations
+    for table, column, col_type in migrations_needed:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+
+    # Validate before commit
+    cursor.execute("PRAGMA table_info(collections)")
+    if 'topic' not in {col[1] for col in cursor.fetchall()}:
+        cursor.execute("ROLLBACK")
+        raise RuntimeError("Migration validation failed")
+
+    cursor.execute("COMMIT")
+except Exception:
+    cursor.execute("ROLLBACK")
+    raise
+```
+
+---
+
+### Collection Health Check & Auto-Repair (NEW)
+
+**Location**: `modules/memory/unified_memory_system.py:309-396`
+
+**Issue**: Corrupted collections from failed migrations caused permanent app breakage with no recovery path.
+
+**Solution**: Startup health check with auto-repair for working collection.
+
+**Implementation**:
+```python
+async def _health_check_collections(self):
+    """
+    v0.3.0: Check health of all collections on startup.
+    Auto-repairs working collection if corrupted (temporary data, acceptable loss).
+    """
+    for name, adapter in self.collections.items():
+        try:
+            # Test query capability (most common failure mode)
+            adapter.collection.query(query_texts=["health check"], n_results=1)
+        except Exception as e:
+            if name == "working":
+                await self._repair_working_collection()  # Recreate it
+            else:
+                logger.error(f"Collection {name} corrupted - manual repair needed")
+```
+
+**Key Design Decisions**:
+- Only auto-repairs `working` collection (24h TTL, temporary data)
+- Other collections require manual intervention (valuable historical data)
+- Health check runs at startup, before services initialize
+- Logs clear diagnostic information for debugging
+
+---
+
+### Routing KG Patterns Never Persisted (FIXED)
+
+**Location**: `modules/memory/knowledge_graph_service.py:753-768`
+
+**Issue**: Routing patterns in `knowledge_graph.json` were always empty (0 patterns) despite active use. The system appeared to learn routing but lost all patterns on every KG visualization poll.
+
+**Root Cause**:
+- `get_kg_entities()` called `reload_kg()` to sync with MCP process changes
+- `reload_kg()` wiped in-memory patterns (loaded from empty disk file)
+- Routing patterns added by `update_kg_routing()` during the 5-second debounce window were lost
+- If UI polled KG visualization while patterns were pending save, they were destroyed forever
+
+**Fix Implemented**:
+```python
+# v0.3.0 FIX: Flush pending saves BEFORE reload to prevent race condition
+if self._kg_save_pending:
+    async with self._kg_save_lock:
+        if self._kg_save_task and not self._kg_save_task.done():
+            self._kg_save_task.cancel()
+            try:
+                await self._kg_save_task
+            except asyncio.CancelledError:
+                pass
+    # Immediate save of pending changes
+    await self._save_kg()
+    self._kg_save_pending = False
+    logger.info("[KG] Flushed pending save before reload")
+
+# Now safe to reload from disk
+self.reload_kg()
+```
+
+**Key Insight**: The debounced save pattern (batch writes for performance) conflicts with reload-on-read pattern (sync with external process). Must flush pending writes before reload.
+
+**Note**: Bug existed since v0.2.0 service extraction but went unnoticed until v0.3.0 KG audit.
+
+---
+
+**Files Modified**:
+- `app/routers/agent_chat.py` - Task cancellation (lines 3526-3556)
+- `src/components/MemoryBankModal.tsx` - Toast feedback (lines 113-175, 496-503)
+- `modules/memory/unified_memory_system.py` - Migration safety (232-307), health check (309-396)
+- `modules/memory/knowledge_graph_service.py` - KG flush-before-reload (lines 753-768)
 

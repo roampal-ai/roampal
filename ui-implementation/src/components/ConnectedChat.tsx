@@ -1092,7 +1092,6 @@ export const ConnectedChat: React.FC = () => {
         { name: 'qwen2.5:72b', description: 'Massive Qwen - Superior tool calling', size: '41GB', tokens: 32768, agentCapable: true, license: 'Qwen License' },
         { name: 'qwen2.5:32b', description: 'Powerful Qwen - Excellent tools', size: '20GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
         { name: 'qwen2.5:14b', description: 'Larger Qwen - Great tool performance', size: '9.0GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
-        { name: 'qwen2.5:7b', description: 'Best-in-class tool calling', size: '4.7GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0', badge: 'recommended' },
 
         // Mistral Family
         { name: 'mixtral:8x7b', description: 'MoE architecture with native tools', size: '26GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
@@ -1103,13 +1102,14 @@ export const ConnectedChat: React.FC = () => {
     // Lightweight & Tool-Capable - Smaller models that still support tools
     {
       category: 'Lightweight & Tool-Capable',
-      description: 'Smaller models (<7B) may struggle with complex reasoning, memory scoring, and reliable tool calling. May output tool JSON as text instead of invoking tools. ⚠️ Use qwen2.5:7b or larger for production.',
+      description: 'Smaller models (≤8B) may struggle with complex reasoning and reliable tool calling when many tools are loaded. May output tool JSON as text instead of invoking tools. ⚠️ Use qwen2.5:14b or larger for production.',
       icon: 'chat-bubble-left-right',
       models: [
         // Small but capable - with warnings
-        { name: 'llama3.1:8b', description: '⚠️ Unreliable tool calling - Use qwen2.5:7b instead', size: '4.7GB', tokens: 131072, agentCapable: true, license: 'Meta License' },
+        { name: 'qwen2.5:7b', description: '⚠️ Tool calling may be unreliable', size: '4.7GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
+        { name: 'llama3.1:8b', description: '⚠️ Unreliable tool calling', size: '4.7GB', tokens: 131072, agentCapable: true, license: 'Meta License' },
         { name: 'qwen2.5:3b', description: '⚠️ May have inconsistent tool calling', size: '1.9GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
-        { name: 'llama3.2:3b', description: '⚠️ May output tool JSON as text', size: '2.0GB', tokens: 131072, agentCapable: true, license: 'Meta License' },
+        { name: 'llama3.2:3b', description: '⚠️ May output JSON instead of calling tools', size: '2.0GB', tokens: 131072, agentCapable: true, license: 'Meta License' },
 
       ]
     }
@@ -1144,7 +1144,7 @@ export const ConnectedChat: React.FC = () => {
       // Llama 3 Series (Tool Support)
       'llama3.3:70b': '43GB • Meta latest 70B • Native tools',
       'llama3.1:8b': '4.7GB ⚠️ Unreliable tools • Use qwen2.5:7b',
-      'llama3.2:3b': '2.0GB ⚠️ May hallucinate tool calls',
+      'llama3.2:3b': '2.0GB ⚠️ May output JSON instead of calling tools',
 
       // Qwen3 Series (Native Hermes tools)
       'qwen3:32b': '20GB • Alibaba flagship • Native tools',
@@ -1154,7 +1154,7 @@ export const ConnectedChat: React.FC = () => {
       'qwen2.5:72b': '41GB • Massive Qwen • Superior tools',
       'qwen2.5:32b': '20GB • Powerful Qwen • Excellent tools',
       'qwen2.5:14b': '9.0GB • Larger Qwen • Great tools',
-      'qwen2.5:7b': '4.7GB • Best-in-class tool calling',
+      'qwen2.5:7b': '4.7GB ⚠️ Tool calling may be unreliable',
       'qwen2.5:3b': '1.9GB • Efficient with tool support',
 
 
@@ -1746,7 +1746,10 @@ export const ConnectedChat: React.FC = () => {
         preview: [c.snippet || c.title || c.text || ''],
       })),
       streaming: msg.streaming || false,
-      toolExecutions: msg.toolExecutions || undefined
+      toolExecutions: msg.toolExecutions || undefined,
+      events: msg.events || undefined,
+      _lastTextEndIndex: msg._lastTextEndIndex,
+      _toolArrivedFirst: msg._toolArrivedFirst
     };
   });
   // Sidebar now reads sessions directly from store - no transformation needed here
@@ -1775,13 +1778,14 @@ export const ConnectedChat: React.FC = () => {
   };
 
   const handleSessionSelect = async (sessionId: string) => {
+    // Block switching while processing to prevent content loss
+    if (isProcessing) {
+      console.log('[handleSessionSelect] Blocked - processing in progress');
+      return;
+    }
     console.log('Session selected:', sessionId);
-    // Save current session before loading new one
-    // TODO: Save current session
-    // const { saveCurrentSession, loadSession } = useChatStore.getState();
-    // saveCurrentSession();
-    // Load session from the V2 store
-    await useChatStore.getState().loadSession(sessionId);
+    // Use switchConversation for proper abort handling and state cleanup
+    await useChatStore.getState().switchConversation(sessionId);
   };
 
   const handleSessionDelete = async (sessionId: string) => {
@@ -1820,37 +1824,9 @@ export const ConnectedChat: React.FC = () => {
       {/* Header */}
       <header className="h-14 px-4 flex items-center justify-between bg-black/50 backdrop-blur-lg border-b border-zinc-800 flex-shrink-0">
         <div className="flex items-center gap-3">
-          {/* Roampal Logo - Compass with memory trail */}
-          <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-            {/* Compass circle */}
-            <circle cx="16" cy="16" r="13" stroke="#4A90E2" strokeWidth="1.5" opacity="0.3" />
-
-            {/* Compass cardinal points */}
-            <line x1="16" y1="4" x2="16" y2="8" stroke="#4A90E2" strokeWidth="1.5" strokeLinecap="round" />
-            <line x1="16" y1="24" x2="16" y2="28" stroke="#4A90E2" strokeWidth="1.5" strokeLinecap="round" />
-            <line x1="4" y1="16" x2="8" y2="16" stroke="#4A90E2" strokeWidth="1.5" strokeLinecap="round" />
-            <line x1="24" y1="16" x2="28" y2="16" stroke="#4A90E2" strokeWidth="1.5" strokeLinecap="round" />
-
-            {/* Compass needle - north (blue) */}
-            <path
-              d="M 16 16 L 20 10 L 16 14 Z"
-              fill="#4A90E2"
-            />
-
-            {/* Compass needle - south (green for memory) */}
-            <path
-              d="M 16 16 L 12 22 L 16 18 Z"
-              fill="#10B981"
-              opacity="0.7"
-            />
-
-            {/* Center pivot */}
-            <circle cx="16" cy="16" r="2" fill="#F59E0B" />
-            <circle cx="16" cy="16" r="1" fill="#FBBF24" />
-          </svg>
-          <span className="text-xl font-light tracking-wide text-zinc-100">
-            Roampal
-          </span>
+          {/* Roampal Logo */}
+          <img src="/logo.png" alt="Roampal" width="32" height="32" className="rounded-lg" />
+          <span className="text-xl font-medium text-zinc-100">Roampal</span>
           {/* Removed ProcessingIndicator from header - should be in chat area */}
         </div>
         <div className="flex items-center gap-3">
@@ -1859,7 +1835,7 @@ export const ConnectedChat: React.FC = () => {
       </header>
 
       {/* Main content with draggable panels */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden bg-black">
         {/* Left Sidebar - draggable with collapse support */}
         {!leftPane.isCollapsed && (
           <div
@@ -1894,21 +1870,23 @@ export const ConnectedChat: React.FC = () => {
           </div>
         )}
 
-        {/* Resize handle for LEFT sidebar - always visible for consistency */}
-        <div
-          onMouseDown={leftPane.onMouseDown}
-          onDoubleClick={() => leftPane.toggleCollapsed()}
-          className={`relative flex-shrink-0 h-full cursor-col-resize group ${leftPane.isResizing ? 'bg-blue-500' : 'hover:bg-zinc-600'
-            } transition-colors`}
-          style={{ width: '5px', backgroundColor: leftPane.isResizing ? '#3B82F6' : '#27272A' }}
-          title="Drag to resize • Double-click to toggle sidebar"
-        >
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col gap-1 pointer-events-none">
-            <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
-            <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
-            <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
+        {/* Resize handle for LEFT sidebar - only visible when sidebar is expanded */}
+        {!leftPane.isCollapsed && (
+          <div
+            onMouseDown={leftPane.onMouseDown}
+            onDoubleClick={() => leftPane.toggleCollapsed()}
+            className={`relative flex-shrink-0 h-full cursor-col-resize group ${leftPane.isResizing ? 'bg-blue-500' : 'hover:bg-zinc-600'
+              } transition-colors`}
+            style={{ width: '5px', backgroundColor: leftPane.isResizing ? '#3B82F6' : '#27272A' }}
+            title="Drag to resize • Double-click to toggle sidebar"
+          >
+            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col gap-1 pointer-events-none">
+              <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
+              <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
+              <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
+            </div>
           </div>
-        </div>
+        )}
         {/* Main chat column */}
         <main
           className="relative flex-1 flex flex-col h-full min-w-0 bg-black"
@@ -2136,7 +2114,7 @@ export const ConnectedChat: React.FC = () => {
           <div className="relative flex-1 min-h-0">
             <div
               ref={messagesContainerRef}
-              className="h-full overflow-y-auto overflow-x-hidden"
+              className="h-full overflow-hidden"
               onScroll={handleScroll}
             >
               {/* v0.2.9: Three-way conditional - loading → no models → chat */}
@@ -2228,21 +2206,23 @@ export const ConnectedChat: React.FC = () => {
           </div>
         </main>
 
-        {/* Resize handle between chat and right memory panel - made wider for easier grabbing */}
-        <div
-          onMouseDown={rightPane.onMouseDown}
-          onDoubleClick={() => rightPane.toggleCollapsed()}
-          className={`relative flex-shrink-0 h-full cursor-col-resize group ${rightPane.isResizing ? 'bg-blue-500' : 'hover:bg-zinc-600'
-            } transition-colors`}
-          style={{ width: '5px', backgroundColor: rightPane.isResizing ? '#3B82F6' : '#27272A' }}
-          title="Drag to resize • Double-click to collapse"
-        >
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col gap-1 pointer-events-none">
-            <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
-            <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
-            <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
+        {/* Resize handle between chat and right memory panel - only visible when panel is expanded */}
+        {!rightPane.isCollapsed && (
+          <div
+            onMouseDown={rightPane.onMouseDown}
+            onDoubleClick={() => rightPane.toggleCollapsed()}
+            className={`relative flex-shrink-0 h-full cursor-col-resize group ${rightPane.isResizing ? 'bg-blue-500' : 'hover:bg-zinc-600'
+              } transition-colors`}
+            style={{ width: '5px', backgroundColor: rightPane.isResizing ? '#3B82F6' : '#27272A' }}
+            title="Drag to resize • Double-click to collapse"
+          >
+            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col gap-1 pointer-events-none">
+              <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
+              <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
+              <div className="w-1 h-1 bg-zinc-500 rounded-full group-hover:bg-zinc-300" />
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Right Memory Panel - separate and independent */}
         {!rightPane.isCollapsed ? (
@@ -2820,7 +2800,7 @@ export const ConnectedChat: React.FC = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <p className="text-xs text-zinc-500">
-                      {selectedProvider === 'lmstudio'
+                      {viewProvider === 'lmstudio'
                         ? 'Models are downloaded from HuggingFace and imported to LM Studio. Larger models provide better quality but require more VRAM.'
                         : 'Models are downloaded from Ollama Hub. Larger models provide better quality but require more VRAM.'}
                     </p>

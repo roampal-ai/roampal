@@ -147,6 +147,7 @@ async def get_collection_memories(
                 'content': item.get('content', item.get('text', '')),
                 'metadata': metadata,
                 'score': metadata.get('score', item.get('score', 0.5)),
+                'uses': metadata.get('uses', 0),  # v0.3.0: Flatten uses for frontend
                 'collection': collection_type,
                 'timestamp': metadata.get('timestamp', metadata.get('upload_timestamp'))  # Flatten timestamp for frontend
             }
@@ -492,6 +493,38 @@ async def get_concept_definition(
                             "failure_together": failure,
                             "success_rate": success_rate
                         })
+
+            # v0.3.0 FIX: Also check context_action_effectiveness for action patterns
+            # Action patterns have format "action@context->collection" (displayed) but stored as "context|action|collection"
+            if not pattern and '@' in concept_id:
+                # Convert display format to storage key format
+                # "action@context->collection" -> "context|action|collection"
+                # "action@context" -> "context|action|*"
+                if '->' in concept_id:
+                    action_context, collection = concept_id.split('->', 1)
+                else:
+                    action_context = concept_id
+                    collection = '*'
+
+                if '@' in action_context:
+                    action_type, context_type = action_context.split('@', 1)
+                    action_key = f"{context_type}|{action_type}|{collection}"
+
+                    action_stats = kg.get('context_action_effectiveness', {}).get(action_key)
+                    if action_stats:
+                        # Found in action effectiveness
+                        outcome_breakdown["worked"] = action_stats.get("successes", 0)
+                        outcome_breakdown["failed"] = action_stats.get("failures", 0)
+                        outcome_breakdown["partial"] = action_stats.get("partials", 0)
+                        total_searches = action_stats.get("total_uses", 0)
+                        best_collection = collection if collection != '*' else None
+                        collections_breakdown = {
+                            collection if collection != '*' else 'all': {
+                                "total": action_stats.get("successes", 0) + action_stats.get("failures", 0),
+                                "successes": action_stats.get("successes", 0),
+                                "failures": action_stats.get("failures", 0)
+                            }
+                        }
 
         return {
             "concept": concept_id,

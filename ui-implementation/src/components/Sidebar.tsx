@@ -62,6 +62,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Subscribe to sessions from store - this automatically re-renders when sessions change
   const storeSessions = useChatStore(state => state.sessions);
+  // Block session switching while processing
+  const isProcessing = useChatStore(state => state.isProcessing);
 
   // Transform store sessions to Sidebar's format
   // Safety check: ensure storeSessions is an array
@@ -182,8 +184,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   className="relative w-full h-8 flex items-center rounded-md hover:bg-zinc-900 transition-colors group"
                 >
                   <button
-                    onClick={() => onSelectChat(session.id)}
-                    className="flex-1 h-full px-3 flex items-center gap-2 min-w-0"
+                    onClick={() => !isProcessing && onSelectChat(session.id)}
+                    disabled={isProcessing}
+                    className={`flex-1 h-full px-3 flex items-center gap-2 min-w-0 ${isProcessing ? 'cursor-not-allowed opacity-50' : ''}`}
                   >
                     <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 bg-${SHARD_COLORS[session.shard]}-500`} />
                     <span className="flex-1 text-sm text-zinc-300 text-left truncate min-w-0">

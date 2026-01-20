@@ -379,6 +379,21 @@ class RoutingService:
                 # Update last_used timestamp
                 pattern["last_used"] = datetime.now().isoformat()
 
+                # FIX v0.3.0: Recalculate success_rate to prevent stale values
+                # Without this, success_rate could remain at old values (e.g., 71%)
+                # even when successes=0 and failures=0, because only update_kg_routing
+                # recalculated it, and that's only called when feedback is recorded.
+                best_rate = 0.0
+                for coll_stats in collections_used.values():
+                    total_with_feedback = coll_stats.get("successes", 0) + coll_stats.get("failures", 0)
+                    if total_with_feedback > 0:
+                        rate = coll_stats["successes"] / total_with_feedback
+                    else:
+                        rate = 0.5  # Neutral baseline
+                    if rate > best_rate:
+                        best_rate = rate
+                pattern["success_rate"] = best_rate if best_rate > 0 else 0.5
+
     # =========================================================================
     # Tier Recommendations (for get_context_insights)
     # =========================================================================

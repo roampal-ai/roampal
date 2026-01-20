@@ -53,45 +53,42 @@ export const MemoryCitation: React.FC<MemoryCitationProps> = ({ message, citatio
   const [hoveredCitation, setHoveredCitation] = useState<number | null>(null);
   const citationRefs = useRef<{ [key: number]: HTMLElement | null }>({});
 
-  // Parse message to add citation superscripts
-  const parsedMessage = React.useMemo(() => {
-    if (citations.length === 0) return message;
+  // SECURITY: Parse message to add citation superscripts using React elements (not dangerouslySetInnerHTML)
+  const parsedMessageElements = React.useMemo(() => {
+    if (citations.length === 0) return [message];
 
-    // Replace [n] with styled superscripts
-    let parsed = message;
-    citations.forEach((citation) => {
-      const pattern = new RegExp(`\\[${citation.citation_id}\\]`, 'g');
-      parsed = parsed.replace(
-        pattern,
-        `<sup class="citation-link" data-citation-id="${citation.citation_id}">[${citation.citation_id}]</sup>`
-      );
+    // Build a regex to match all citation patterns [n]
+    const citationIds = citations.map(c => c.citation_id);
+    const pattern = new RegExp(`(\\[(?:${citationIds.join('|')})\\])`, 'g');
+
+    // Split message by citation patterns, keeping delimiters
+    const parts = message.split(pattern);
+
+    return parts.map((part, index) => {
+      // Check if this part is a citation reference like [1], [2], etc.
+      const match = part.match(/^\[(\d+)\]$/);
+      if (match) {
+        const citationId = parseInt(match[1]);
+        if (citationIds.includes(citationId)) {
+          return (
+            <sup
+              key={`citation-${index}`}
+              className="citation-link text-blue-400 cursor-pointer hover:text-blue-300"
+              data-citation-id={citationId}
+              onMouseEnter={() => setHoveredCitation(citationId)}
+              onMouseLeave={() => setHoveredCitation(null)}
+            >
+              [{citationId}]
+            </sup>
+          );
+        }
+      }
+      // Regular text - render safely as text node
+      return <span key={`text-${index}`}>{part}</span>;
     });
-
-    return parsed;
   }, [message, citations]);
 
-  useEffect(() => {
-    // Add hover listeners to citation links
-    const handleCitationHover = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.classList.contains('citation-link')) {
-        const citationId = parseInt(target.dataset.citationId || '0');
-        setHoveredCitation(citationId);
-      }
-    };
-
-    const handleCitationLeave = () => {
-      setHoveredCitation(null);
-    };
-
-    document.addEventListener('mouseover', handleCitationHover);
-    document.addEventListener('mouseout', handleCitationLeave);
-
-    return () => {
-      document.removeEventListener('mouseover', handleCitationHover);
-      document.removeEventListener('mouseout', handleCitationLeave);
-    };
-  }, []);
+  // SECURITY: Removed useEffect document event listeners - hover now handled directly on React elements
 
   if (citations.length === 0) {
     return <div className="text-zinc-300 whitespace-pre-wrap">{message}</div>;
@@ -99,11 +96,10 @@ export const MemoryCitation: React.FC<MemoryCitationProps> = ({ message, citatio
 
   return (
     <div className="space-y-2">
-      {/* Message with inline citations */}
-      <div
-        className="text-zinc-300 whitespace-pre-wrap"
-        dangerouslySetInnerHTML={{ __html: parsedMessage }}
-      />
+      {/* Message with inline citations - SECURITY: Using React elements instead of dangerouslySetInnerHTML */}
+      <div className="text-zinc-300 whitespace-pre-wrap">
+        {parsedMessageElements}
+      </div>
 
       {/* Hover tooltip */}
       {hoveredCitation !== null && (

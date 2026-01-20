@@ -11,6 +11,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { apiFetch } from '../utils/fetch';
 import { ROAMPAL_CONFIG } from '../config/roampal';
+import { Toast } from './Toast';
 
 interface Memory {
   id: string;
@@ -35,9 +36,9 @@ interface MemoryBankModalProps {
   onClose: () => void;
 }
 
-// Fixed height for virtualized list items (approximate)
-const ITEM_HEIGHT = 90;
-const ITEM_WITH_TAGS_HEIGHT = 110;
+// Fixed height for virtualized list items
+// v0.3.0: Single consistent height for uniform spacing (accommodates 3 lines + tags + date)
+const ITEM_HEIGHT = 140;
 
 export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClose }) => {
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -48,6 +49,10 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+
+  // v0.3.0: Toast state for user feedback
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Virtualization refs
   const listRef = useRef<List>(null);
@@ -116,10 +121,15 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
         })
       });
       if (response.ok) {
+        setToast({ message: 'Memory archived', type: 'success' });
         fetchData();
+      } else {
+        const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        setToast({ message: `Failed to archive: ${error.detail || response.statusText}`, type: 'error' });
       }
     } catch (error) {
       console.error('Failed to archive memory:', error);
+      setToast({ message: 'Failed to archive memory. Please try again.', type: 'error' });
     }
   };
 
@@ -129,25 +139,38 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
         method: 'POST'
       });
       if (response.ok) {
+        setToast({ message: 'Memory restored', type: 'success' });
         fetchData();
+      } else {
+        const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        setToast({ message: `Failed to restore: ${error.detail || response.statusText}`, type: 'error' });
       }
     } catch (error) {
       console.error('Failed to restore memory:', error);
+      setToast({ message: 'Failed to restore memory. Please try again.', type: 'error' });
     }
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm('Permanently delete this memory? This cannot be undone.')) return;
 
+    setDeletingId(id);
     try {
       const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory-bank/delete/${id}`, {
         method: 'DELETE'
       });
       if (response.ok) {
+        setToast({ message: 'Memory permanently deleted', type: 'success' });
         fetchData();
+      } else {
+        const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        setToast({ message: `Failed to delete: ${error.detail || response.statusText}`, type: 'error' });
       }
     } catch (error) {
       console.error('Failed to delete memory:', error);
+      setToast({ message: 'Failed to delete memory. Please try again.', type: 'error' });
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -170,16 +193,9 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
 
   const allTags = Array.from(new Set(memories.flatMap(m => m.tags)));
 
-  // Calculate item size based on whether it has tags
-  const getItemSize = useCallback((index: number) => {
-    const memory = filteredMemories[index];
-    return memory?.tags?.length > 0 ? ITEM_WITH_TAGS_HEIGHT : ITEM_HEIGHT;
-  }, [filteredMemories]);
-
-  const getArchivedItemSize = useCallback((index: number) => {
-    const memory = archivedMemories[index];
-    return memory?.tags?.length > 0 ? ITEM_WITH_TAGS_HEIGHT : ITEM_HEIGHT;
-  }, [archivedMemories]);
+  // Fixed item size for consistent spacing
+  const getItemSize = useCallback(() => ITEM_HEIGHT, []);
+  const getArchivedItemSize = useCallback(() => ITEM_HEIGHT, []);
 
   // Active memory row renderer
   const ActiveMemoryRow = useCallback(({ index, style }: { index: number; style: React.CSSProperties }) => {
@@ -187,9 +203,9 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
     if (!memory) return null;
 
     return (
-      <div style={{ ...style, paddingBottom: 4 }}>
-        <div className="p-4 bg-zinc-800 border border-zinc-700 rounded-lg hover:border-zinc-600 transition-colors mx-1">
-          <div className="flex justify-between items-start mb-3">
+      <div style={style} className="pb-2 px-1">
+        <div className="h-full p-4 bg-zinc-800 border border-zinc-700 rounded-lg hover:border-zinc-600 transition-colors flex flex-col">
+          <div className="flex justify-between items-start flex-1">
             <div className="flex-1">
               <p className="text-sm text-zinc-200 mb-2 line-clamp-3">{memory.text}</p>
               {memory.tags.length > 0 && (
@@ -222,7 +238,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
               </button>
             </div>
           </div>
-          <div className="flex gap-4 text-xs text-zinc-500">
+          <div className="flex gap-4 text-xs text-zinc-500 mt-auto pt-2">
             <span>{new Date(memory.created_at).toLocaleDateString()}</span>
           </div>
         </div>
@@ -236,9 +252,9 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
     if (!memory) return null;
 
     return (
-      <div style={{ ...style, paddingBottom: 4 }}>
-        <div className="p-4 bg-zinc-800/50 border border-zinc-700/50 rounded-lg mx-1">
-          <div className="flex justify-between items-start mb-3">
+      <div style={style} className="pb-2 px-1">
+        <div className="h-full p-4 bg-zinc-800/50 border border-zinc-700/50 rounded-lg flex flex-col">
+          <div className="flex justify-between items-start flex-1">
             <div className="flex-1">
               <p className="text-sm text-zinc-400 mb-2 line-clamp-3">{memory.text}</p>
               {memory.tags.length > 0 && (
@@ -271,7 +287,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
               </button>
             </div>
           </div>
-          <div className="flex gap-4 text-xs text-zinc-600">
+          <div className="flex gap-4 text-xs text-zinc-600 mt-auto pt-2">
             <span>Archived: {new Date(memory.archived_at!).toLocaleDateString()}</span>
             {memory.archived_reason && <span>Reason: {memory.archived_reason}</span>}
           </div>
@@ -476,6 +492,15 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
           )}
         </div>
       </div>
+
+      {/* v0.3.0: Toast for user feedback */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
     </div>
   );
 };

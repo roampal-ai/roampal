@@ -5,7 +5,10 @@ Tests the extracted promotion/demotion logic.
 """
 
 import sys
-sys.path.insert(0, "C:/ROAMPAL-REFACTOR")
+from pathlib import Path
+backend_dir = Path(__file__).parent.parent.parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 
 import json
 import pytest
@@ -160,13 +163,13 @@ class TestHistoryToPatternsPromotion:
 
     @pytest.mark.asyncio
     async def test_promotes_history_to_patterns(self, service, mock_collections):
-        """Should promote history memory with very high score."""
+        """Should promote history memory with very high score and success_count >= 5."""
         result = await service.handle_promotion(
             doc_id="history_test123",
             collection="history",
             score=0.95,  # >= HIGH_VALUE_THRESHOLD (0.9)
             uses=5,
-            metadata={"text": "test pattern"}
+            metadata={"text": "test pattern", "success_count": 5.0}  # v0.2.9: requires success_count >= 5
         )
 
         mock_collections["patterns"].upsert_vectors.assert_called_once()

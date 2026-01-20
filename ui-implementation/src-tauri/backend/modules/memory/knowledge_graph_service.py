@@ -14,6 +14,7 @@ Responsibilities:
 """
 
 import asyncio
+import copy
 import json
 import logging
 import math
@@ -150,15 +151,20 @@ class KnowledgeGraphService:
         Do not remove content graph save - it's required for entity tracking.
         """
         # Save routing KG
+        # v0.3.0 FIX: Deep copy before serialization to prevent
+        # "dictionary changed size during iteration" race condition
         lock_path = str(self.kg_path) + ".lock"
         try:
+            kg_snapshot = copy.deepcopy(self.knowledge_graph)
+            logger.info(f"[KG SAVE] Saving routing KG with {len(kg_snapshot.get('routing_patterns', {}))} patterns to {self.kg_path}")
             with FileLock(lock_path, timeout=10):
                 self.kg_path.parent.mkdir(exist_ok=True, parents=True)
                 # Write to temp file first then rename (atomic operation)
                 temp_path = self.kg_path.with_suffix('.tmp')
                 with open(temp_path, 'w') as f:
-                    json.dump(self.knowledge_graph, f, indent=2)
+                    json.dump(kg_snapshot, f, indent=2)
                 temp_path.replace(self.kg_path)
+            logger.info(f"[KG SAVE] Successfully saved routing KG")
         except PermissionError as e:
             logger.error(f"Permission denied saving routing KG: {e}")
         except Exception as e:
@@ -182,9 +188,11 @@ class KnowledgeGraphService:
         to _kg_save_task. Without this, multiple coroutines could both
         cancel the task and create new ones simultaneously.
         """
+        logger.info("[KG DEBOUNCE] _debounced_save_kg called")
         async with self._kg_save_lock:  # FIX: Serialize access
             # Cancel existing pending save task
             if self._kg_save_task and not self._kg_save_task.done():
+                logger.info("[KG DEBOUNCE] Cancelling existing save task")
                 self._kg_save_task.cancel()
                 try:
                     await self._kg_save_task
@@ -194,14 +202,18 @@ class KnowledgeGraphService:
             # Create new delayed save task
             async def delayed_save():
                 try:
+                    logger.info(f"[KG DEBOUNCE] Waiting {self.config.kg_debounce_seconds}s before save...")
                     await asyncio.sleep(self.config.kg_debounce_seconds)
+                    logger.info("[KG DEBOUNCE] Sleep done, calling _save_kg()")
                     await self._save_kg()
                     self._kg_save_pending = False
+                    logger.info("[KG DEBOUNCE] Save completed successfully")
                 except asyncio.CancelledError:
-                    pass
+                    logger.info("[KG DEBOUNCE] Save task was cancelled")
 
             self._kg_save_pending = True
             self._kg_save_task = asyncio.create_task(delayed_save())
+            logger.info("[KG DEBOUNCE] Created new delayed save task")
 
     async def debounced_save_kg(self):
         """Public alias for debounced KG save (used by OutcomeService)."""
@@ -236,6 +248,12 @@ class KnowledgeGraphService:
             }
 
         stats = self.knowledge_graph["routing_patterns"][collection]
+        # v0.3.0 fix: Migrate old routing patterns missing keys
+        for key in ["successes", "failures", "partials"]:
+            if key not in stats:
+                stats[key] = 0
+        if "total" not in stats:
+            stats["total"] = stats["successes"] + stats["failures"] + stats["partials"]
         stats["total"] += 1
 
         if outcome == "worked":
@@ -384,6 +402,7 @@ class KnowledgeGraphService:
             return
 
         concepts = self.extract_concepts(query)
+        logger.info(f"[KG UPDATE] query='{query[:30]}', concepts={concepts[:3] if concepts else []}, current_patterns={len(self.knowledge_graph.get('routing_patterns', {}))}")
 
         # Build relationships between concepts
         self.build_concept_relationships(concepts)
@@ -729,9 +748,26 @@ class KnowledgeGraphService:
         - Content KG: Entity relationships from memory_bank content
         - Entities in both graphs get source="both" (purple nodes in UI)
 
-        NOTE: Reloads KG from disk to pick up changes from MCP process.
+        NOTE: Reloads KG from disk to pick up changes from MCP process,
+        but only AFTER flushing any pending saves to prevent data loss.
         """
-        # Reload KG from disk to pick up changes from MCP process
+        # v0.3.0 FIX: Flush pending saves BEFORE reload to prevent race condition
+        # Bug: reload_kg() was wiping in-memory patterns added by update_kg_routing()
+        # during the 5-second debounce window, causing patterns to never persist.
+        if self._kg_save_pending:
+            async with self._kg_save_lock:
+                if self._kg_save_task and not self._kg_save_task.done():
+                    self._kg_save_task.cancel()
+                    try:
+                        await self._kg_save_task
+                    except asyncio.CancelledError:
+                        pass
+            # Immediate save of pending changes
+            await self._save_kg()
+            self._kg_save_pending = False
+            logger.info("[KG] Flushed pending save before reload")
+
+        # Now safe to reload from disk
         self.reload_kg()
 
         entities_map: Dict[str, Dict[str, Any]] = {}
@@ -942,6 +978,10 @@ class KnowledgeGraphService:
     def get_failure_patterns(self) -> Dict[str, List[Dict[str, str]]]:
         """Get all tracked failure patterns."""
         return self.knowledge_graph.get("failure_patterns", {})
+
+    def get_routing_patterns(self) -> Dict[str, Dict[str, Any]]:
+        """Get all routing patterns (concept -> collection effectiveness stats)."""
+        return self.knowledge_graph.get("routing_patterns", {})
 
     def add_problem_solution(
         self,

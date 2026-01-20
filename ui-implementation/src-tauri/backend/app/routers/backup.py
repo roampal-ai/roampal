@@ -5,6 +5,7 @@ Supports selective export with granular control
 """
 import logging
 import json
+import os
 import zipfile
 import shutil
 import tempfile
@@ -97,10 +98,16 @@ def _backup_knowledge(zipf: zipfile.ZipFile) -> int:
     """Backup knowledge graph and outcomes. Returns count of files backed up."""
     count = 0
 
-    # Knowledge graph
+    # Knowledge graph (routing patterns)
     kg_file = Path(DATA_PATH) / "knowledge_graph.json"
     if kg_file.exists():
         zipf.write(kg_file, "knowledge_graph.json")
+        count += 1
+
+    # Content graph (entity relationships - v0.3.0)
+    cg_file = Path(DATA_PATH) / "content_graph.json"
+    if cg_file.exists():
+        zipf.write(cg_file, "content_graph.json")
         count += 1
 
     # Memory relationships
@@ -114,6 +121,13 @@ def _backup_knowledge(zipf: zipfile.ZipFile) -> int:
     if outcomes_db.exists():
         zipf.write(outcomes_db, "outcomes.db")
         count += 1
+
+    # MCP sessions (key takeaways - v0.3.0)
+    mcp_sessions_dir = Path(DATA_PATH) / "mcp_sessions"
+    if mcp_sessions_dir.exists():
+        for file in mcp_sessions_dir.glob("*.jsonl"):
+            zipf.write(file, f"mcp_sessions/{file.name}")
+            count += 1
 
     return count
 
@@ -300,11 +314,19 @@ async def estimate_export_size(
 
             for file_path in [
                 Path(DATA_PATH) / "knowledge_graph.json",
+                Path(DATA_PATH) / "content_graph.json",  # v0.3.0
                 Path(DATA_PATH) / "memory_relationships.json",
                 Path(DATA_PATH) / "outcomes.db"
             ]:
                 if file_path.exists():
                     size_bytes += file_path.stat().st_size
+                    file_count += 1
+
+            # v0.3.0: Include MCP sessions (key takeaways)
+            mcp_sessions_dir = Path(DATA_PATH) / "mcp_sessions"
+            if mcp_sessions_dir.exists():
+                for f in mcp_sessions_dir.glob("*.jsonl"):
+                    size_bytes += f.stat().st_size
                     file_count += 1
 
             breakdown["knowledge_mb"] = round(size_bytes / (1024**2), 2)
@@ -398,6 +420,12 @@ async def restore_from_backup(file: UploadFile = File(...)) -> RestoreResponse:
         extract_dir.mkdir()
 
         with zipfile.ZipFile(upload_path, 'r') as zipf:
+            # SECURITY: Validate all ZIP member paths to prevent directory traversal
+            for member in zipf.namelist():
+                member_path = (extract_dir / member).resolve()
+                # Ensure extracted path stays within extract_dir
+                if not str(member_path).startswith(str(extract_dir.resolve()) + os.sep) and member_path != extract_dir.resolve():
+                    raise ValueError(f"Invalid backup: contains path traversal attempt in '{member}'")
             zipf.extractall(extract_dir)
 
         # Validate backup structure
@@ -485,11 +513,20 @@ async def restore_from_backup(file: UploadFile = File(...)) -> RestoreResponse:
             logger.info(f"Restored {restored_items['books']} book files")
 
         # 4. Restore knowledge graph and outcomes
-        for filename in ["knowledge_graph.json", "memory_relationships.json", "outcomes.db"]:
+        for filename in ["knowledge_graph.json", "content_graph.json", "memory_relationships.json", "outcomes.db"]:
             src_file = extract_dir / filename
             if src_file.exists():
                 dest_file = Path(DATA_PATH) / filename
                 shutil.copy2(src_file, dest_file)
+                restored_items["knowledge_files"] += 1
+
+        # v0.3.0: Restore MCP sessions (key takeaways)
+        mcp_sessions_src = extract_dir / "mcp_sessions"
+        if mcp_sessions_src.exists():
+            mcp_sessions_dest = Path(DATA_PATH) / "mcp_sessions"
+            mcp_sessions_dest.mkdir(parents=True, exist_ok=True)
+            for file in mcp_sessions_src.glob("*.jsonl"):
+                shutil.copy2(file, mcp_sessions_dest / file.name)
                 restored_items["knowledge_files"] += 1
 
         logger.info(f"Restored {restored_items['knowledge_files']} knowledge files")
