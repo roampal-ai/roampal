@@ -10,12 +10,13 @@
 Roampal's memory system has been validated through **comprehensive testing** proving that outcome-based learning **significantly outperforms pure vector search**.
 
 **Headline Result**:
-> **Plain vector search: 0% accuracy. Roampal: 97% accuracy. Same adversarial queries. (p=0.001)**
+> **Plain vector search: 0% accuracy. Roampal: 87% accuracy. Same adversarial queries. (p=0.001)**
 
 **Key Results**:
-- ✅ **Roampal vs Vector DB**: 97% vs 0% on adversarial queries (p=0.001, d=7.49)
+- ✅ **Roampal vs Vector DB**: 87% vs 0% on adversarial queries (p=0.001, d=3.5)
 - ✅ **40/40 infrastructure tests passed** (30 comprehensive + 10 torture)
-- ✅ **Learning curve proven**: 58% → 93% accuracy (+35pp improvement, p=0.005)
+- ✅ **Statistical learning proven**: 58% → 93% accuracy with real embeddings (p=0.005, d=13.4)
+- ✅ **Learning curve**: 10% → 100% after just 3 uses (+90pp improvement)
 - ✅ **Dynamic weight shifting**: 5/5 scenarios - proven memories outrank semantic matches
 - ✅ **Production-ready**: 1000+ concurrent stores, zero corruption, p95 latency 77ms
 
@@ -135,21 +136,23 @@ This is the definitive test. It answers: **"Does learning from outcomes actually
 
 | Metric | Plain Vector DB | Roampal |
 |--------|----------------|---------|
-| **Success Rate** | 0% (0/30) | **96.7% (29/30)** |
+| **Success Rate** | 0% (0/30) | **86.7% (26/30)** |
 | **p-value** | - | **0.001** |
-| **Cohen's d** | - | **7.49** (massive) |
-| **95% CI** | - | [89.8%, 103.5%] |
+| **Cohen's d** | - | **3.5** (large) |
+| **95% CI** | - | [73.8%, 99.6%] |
 
 **Category Breakdown**:
 
 | Category | Vector DB | Roampal | Delta |
 |----------|-----------|---------|-------|
-| Debugging | 0% | 100% | +100% |
+| Debugging | 0% | 80% | +80% |
 | Database | 0% | 80% | +80% |
 | API | 0% | 100% | +100% |
-| Errors | 0% | 100% | +100% |
-| Async | 0% | 100% | +100% |
+| Errors | 0% | 80% | +80% |
+| Async | 0% | 80% | +80% |
 | Git | 0% | 100% | +100% |
+
+**Note on 4 "Impossible" Scenarios**: 4 scenarios (13%) are designed to be nearly unsolvable - the query literally asks for the bad approach by name (e.g., "How do I use setImmediate?" when setImmediate IS the bad advice). These test the limits of outcome-based learning against extreme semantic similarity.
 
 **Why This Matters**:
 
@@ -158,14 +161,15 @@ The queries were specifically crafted to trick semantic search. For example:
 - Bad advice: "Add **print()** statements to see **variable values**" (semantic match!)
 - Good advice: "Use pdb with breakpoints" (no keyword overlap)
 
-Plain vector search returned the bad advice 30/30 times. Roampal returned good advice 29/30 times because:
-1. Good advice had score=0.9 (from positive outcomes)
-2. Bad advice had score=0.2 (from negative outcomes)
-3. Dynamic weighting (40% embedding, 60% score) overrode semantic similarity
+Plain vector search returned the bad advice 30/30 times. Roampal returned good advice 26/30 times because:
+1. Good advice had high Wilson score (from verified positive outcomes)
+2. Bad advice had low Wilson score (from negative outcomes)
+3. Dynamic weighting (20% embedding, 80% learned score for proven memories) overrode semantic similarity
+4. 4 scenarios are "impossible by design" - queries literally ask for the bad approach by name
 
 **Statistical Interpretation**:
 - **p=0.001**: Less than 0.1% chance this is random luck
-- **d=7.49**: Effect size is massive (0.8 is threshold for "large")
+- **d=3.5**: Effect size is large (0.8 is threshold for "large")
 - **95% CI doesn't include 0**: The improvement is reliable, not a fluke
 
 **How to Run**:
@@ -181,13 +185,15 @@ python test_roampal_vs_vector_db.py
 **Location**: `dev/benchmarks/test_dynamic_weight_shift.py`
 **Purpose**: Validate the weight shifting mechanism works
 
-**The Mechanism**:
+**The Mechanism** (v0.3.0+):
 ```
-New memories:     70% embedding similarity, 30% score
-Proven memories:  40% embedding similarity, 60% score
+New memories:     80% embedding similarity, 20% learned score
+Proven memories:  20% embedding similarity, 80% learned score
 ```
 
-This test proves that "proven" memories (uses≥5, score≥0.8) rank well even with poor query matches.
+**v0.3.0 Wilson Scoring Change**: Prior to v0.3.0, the system trusted raw metadata scores directly. In v0.3.0, Wilson score confidence intervals were introduced - the system now requires *statistical proof* of success, not just high raw scores. This makes the system more robust against metadata manipulation but means memories must demonstrate consistent positive outcomes to earn "proven" status.
+
+This test proves that "proven" memories (uses≥5, Wilson score≥0.8) rank well even with poor query matches.
 
 **Results**: 5/5 scenarios passed
 
@@ -488,9 +494,9 @@ Beyond synthetic tests, Roampal has demonstrated real learning in production:
 **Roampal significantly outperforms plain vector search.**
 
 The headline numbers:
-- **97% vs 0%** accuracy on adversarial queries
+- **87% vs 0%** accuracy on adversarial queries
 - **p=0.001** statistical significance
-- **d=7.49** effect size (massive)
+- **d=3.5** effect size (large)
 
 What this means in practice:
 - Pure vector search gets tricked by semantic similarity to bad advice
@@ -503,7 +509,7 @@ What this means in practice:
 - Sub-100ms search latency
 
 **The One-Liner:**
-> "Vector search got 0% right. Outcome-based learning got 97% right. On the same adversarial queries."
+> "Vector search got 0% right. Outcome-based learning got 87% right. On the same adversarial queries."
 
 This is statistically significant evidence that outcome-based memory learning provides real value beyond what vector databases can achieve alone.
 

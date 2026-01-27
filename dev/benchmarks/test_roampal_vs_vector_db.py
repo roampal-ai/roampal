@@ -521,6 +521,7 @@ async def run_treatment_scenario(scenario: Dict, data_dir: str, embedding_servic
             pass
 
     # Simulate multiple retrievals to reach "proven" status
+    # v0.3.0: Must set success_count to match uses for Wilson scoring
     adapter = system.collections.get("working")
     if adapter:
         try:
@@ -528,6 +529,7 @@ async def run_treatment_scenario(scenario: Dict, data_dir: str, embedding_servic
             if result and result.get("metadatas"):
                 meta = result["metadatas"][0]
                 meta["uses"] = 5  # Proven threshold
+                meta["success_count"] = 5.0  # v0.3.0: Wilson score needs matching successes
                 adapter.collection.update(ids=[good_id], metadatas=[meta])
         except:
             pass

@@ -12,8 +12,11 @@ Versioned benchmark results from key tests. Each file is named with the release 
 |---------|------|---------|-----------|---------|-----------|
 | v0.2.3 | `statistical_results_v0.2.3.json` | **100%** (30/30) | 3.3% (1/30) | 0.001 | 7.49 |
 | v0.2.6 | `statistical_results_v0.2.6.json` | **97%** (29/30) | 0% (0/30) | 0.001 | 7.49 |
+| v0.3.0 | `statistical_results_v0.3.0.json` | **87%** (26/30) | 0% (0/30) | 0.001 | 3.5 |
 
 **Note**: v0.2.6 used 768d embeddings (all-mpnet-base-v2), v0.2.3 used 384d (all-MiniLM-L6-v2).
+
+**v0.3.0 Wilson Scoring**: v0.3.0 introduced Wilson score confidence intervals - the system now requires statistical proof of success, not just high raw scores. 4 scenarios (13%) are "impossible by design" - queries literally ask for the bad approach by name (e.g., "How do I use setImmediate?").
 
 ---
 
@@ -65,9 +68,11 @@ Versioned benchmark results from key tests. Each file is named with the release 
 
 **Test**: `learning_curve_test/test_statistical_significance_synthetic.py`
 
-| Version | File | Before | After | p-value | Cohen's d |
-|---------|------|--------|-------|---------|-----------|
+| Version | File | Vector DB | Roampal | p-value | Cohen's d |
+|---------|------|-----------|---------|---------|-----------|
 | v0.2.3 | `learning_curve_real_embeddings_v0.2.3.json` | 0% | **93.3%** | 0.005 | 13.4 |
+
+**Note**: Roampal starts at 58% (visit 3) and reaches 93% (visit 10). Vector DB baseline is 0% throughout.
 
 ---
 

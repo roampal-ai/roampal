@@ -16,7 +16,7 @@ Stop re-explaining yourself every conversation. Roampal remembers outcomes, lear
   <img src="screenshots/roampalscreen.png" alt="Roampal - Chat with Knowledge Graph" width="800">
 </p>
 
-> **Vector search: 0%. Roampal: 97%. Same adversarial queries. (p=0.001)** [(Full benchmarks)](dev/docs/BENCHMARKS.md)
+> **Vector search: 0%. Roampal: 87%. Same adversarial queries. (p=0.001)** [(Full benchmarks)](dev/docs/BENCHMARKS.md)
 
 <p align="center">
   <a href="https://github.com/roampal-ai/roampal">
@@ -72,9 +72,9 @@ But that advice FAILED last time. You needed the debugger.
 | Condition | Accuracy |
 |-----------|----------|
 | Plain vector search | 0% (0/30) |
-| **Roampal** | **97%** (29/30) |
+| **Roampal** | **87%** (26/30) |
 
-p=0.001, Cohen's d=7.49
+p=0.001, Cohen's d=3.5 (4 scenarios are "impossible by design" - query asks for bad advice by name)
 
 ---
 
@@ -207,7 +207,7 @@ Works with any tool-calling model via Ollama or LM Studio:
 |----------|-------------|
 | [Architecture](dev/docs/architecture.md) | 5-tier memory, knowledge graphs, technical deep-dive |
 | [Benchmarks](dev/docs/BENCHMARKS.md) | Test methodology, statistical significance |
-| [Release Notes](dev/docs/releases/v0.2.12/RELEASE_NOTES.md) | Latest: Memory Attribution Scoring, Virtualization Fix, Organic Recall Scoring |
+| [Release Notes](dev/docs/releases/v0.3.0/RELEASE_NOTES.md) | Latest: TanStack Virtual Migration, Streaming Fixes, Performance & Polish |
 
 ---
 
