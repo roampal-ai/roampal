@@ -16,7 +16,7 @@ Versioned benchmark results from key tests. Each file is named with the release 
 
 **Note**: v0.2.6 used 768d embeddings (all-mpnet-base-v2), v0.2.3 used 384d (all-MiniLM-L6-v2).
 
-**v0.3.0 Wilson Scoring**: v0.3.0 introduced Wilson score confidence intervals - the system now requires statistical proof of success, not just high raw scores. 4 scenarios (13%) are "impossible by design" - queries literally ask for the bad approach by name (e.g., "How do I use setImmediate?").
+**v0.3.0 Note**: v0.3.0 added "unknown" outcome scoring (unused memories drift down via success_delta=0.25). Wilson scoring itself was introduced in v0.2.5. 4 scenarios (13%) are "impossible by design" - queries literally ask for the bad approach by name (e.g., "How do I use setImmediate?").
 
 ---
 

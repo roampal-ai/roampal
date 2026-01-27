@@ -191,7 +191,7 @@ New memories:     80% embedding similarity, 20% learned score
 Proven memories:  20% embedding similarity, 80% learned score
 ```
 
-**v0.3.0 Wilson Scoring Change**: Prior to v0.3.0, the system trusted raw metadata scores directly. In v0.3.0, Wilson score confidence intervals were introduced - the system now requires *statistical proof* of success, not just high raw scores. This makes the system more robust against metadata manipulation but means memories must demonstrate consistent positive outcomes to earn "proven" status.
+**Wilson Scoring (v0.2.5+)**: Wilson score confidence intervals were introduced in v0.2.5 - the system requires *statistical proof* of success, not just high raw scores. v0.3.0 added "unknown" outcome scoring where unused memories drift down (success_delta=0.25), enabling natural selection over time.
 
 This test proves that "proven" memories (uses≥5, Wilson score≥0.8) rank well even with poor query matches.
 
