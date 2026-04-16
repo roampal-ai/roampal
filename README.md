@@ -8,7 +8,7 @@
 
 **Memory that learns what works.**
 
-*Not just what's similar—what actually helped. Say it worked. Say it didn't. The AI remembers.*
+*Say it worked. Say it didn't. The AI remembers.*
 
 Stop re-explaining yourself every conversation. Roampal remembers outcomes, learns from feedback, and gets smarter over time—all 100% private and local.
 
@@ -48,21 +48,6 @@ Your AI starts learning about you immediately.
 - [Pricing](#pricing)
 
 ---
-
-## Why Roampal?
-
-**The Problem**: You ask your AI "How do I debug this?" It suggests `print()` statements—the same advice that didn't help last time. Why? Because vector search matches **keywords**, not **what actually worked**.
-
-**Why Vector Search Fails**:
-```
-Query: "How do I print and see variable values while debugging?"
-   ↓
-Vector DB returns: "Add print() statements to see variable values"
-   ↓
-But that advice FAILED last time. You needed the debugger.
-```
-
-**Roampal's Solution**: Track outcomes. When advice works, boost it (+0.2). When it fails, penalize it (-0.3). After a few conversations, the system **knows** debugger > print statements—for YOU.
 
 ### Benchmark Results
 
