@@ -175,21 +175,14 @@ class TestScoringService:
         assert emb_w == 0.7
         assert learn_w == 0.3
 
-    def test_dynamic_weights_memory_bank_high_quality(self, service):
-        """High quality memory_bank should use quality-based weights."""
+    def test_dynamic_weights_memory_bank_uses_standard_tiers(self, service):
+        """v0.3.1: memory_bank uses same 5-tier system as other collections."""
         emb_w, learn_w = service.get_dynamic_weights(
             0, 0.5, "memory_bank", importance=0.95, confidence=0.9
         )
-        assert emb_w == 0.45
-        assert learn_w == 0.55
-
-    def test_dynamic_weights_memory_bank_normal(self, service):
-        """Normal memory_bank should be balanced."""
-        emb_w, learn_w = service.get_dynamic_weights(
-            0, 0.5, "memory_bank", importance=0.7, confidence=0.7
-        )
-        assert emb_w == 0.5
-        assert learn_w == 0.5
+        # Should get NEW/UNKNOWN tier weights (not special memory_bank weights)
+        assert emb_w == service.config.embedding_weight_new
+        assert learn_w == service.config.learned_weight_new
 
     def test_calculate_final_score_basic(self, service):
         """Should calculate final score correctly."""
@@ -241,8 +234,8 @@ class TestScoringConsistency:
     def service(self):
         return ScoringService()
 
-    def test_memory_bank_quality_scoring_cold_start(self, service):
-        """Memory bank with <3 uses should use quality only (cold start protection)."""
+    def test_memory_bank_uses_standard_scoring(self, service):
+        """v0.3.1: Memory bank uses same scoring as all collections (no special case)."""
         metadata = {
             "score": 0.5,
             "uses": 0,
@@ -250,12 +243,11 @@ class TestScoringConsistency:
             "confidence": 0.8,
         }
         result = service.calculate_final_score(metadata, distance=0.5, collection="memory_bank")
-        # quality = 0.9 * 0.8 = 0.72
-        # uses < 3, so no Wilson blend - quality only
-        assert abs(result["learned_score"] - 0.72) < 0.01
+        # uses=0: learned_score = raw_score = 0.5 (standard path)
+        assert abs(result["learned_score"] - 0.5) < 0.01
 
-    def test_memory_bank_quality_scoring_with_uses(self, service):
-        """Memory bank with 3+ uses should blend 20% Wilson + 80% quality."""
+    def test_memory_bank_with_uses_standard_wilson(self, service):
+        """v0.3.1: Memory bank with uses should use standard Wilson (no quality override)."""
         metadata = {
             "score": 0.5,
             "uses": 5,
@@ -265,12 +257,8 @@ class TestScoringConsistency:
             "success_count": 4.5,  # 4 worked + 0.5 partial
         }
         result = service.calculate_final_score(metadata, distance=0.5, collection="memory_bank")
-        # quality = 0.9 * 0.8 = 0.72
-        # wilson calculated from success_count/uses
-        # learned_score = 0.2 * wilson + 0.8 * 0.72
-        # Wilson lower bound is conservative (~0.55 for 4.5/5)
-        # learned_score = 0.2 * 0.55 + 0.8 * 0.72 ≈ 0.67
-        assert result["learned_score"] > 0.65  # Blended should reflect good outcomes
+        # uses >= 3: learned_score = wilson_score (standard path, not quality override)
+        assert result["learned_score"] == result["wilson_score"]
 
 
 if __name__ == "__main__":

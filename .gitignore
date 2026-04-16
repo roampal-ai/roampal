@@ -41,6 +41,9 @@ server*.log
 *.swo
 .claude/
 
+# Private planning docs
+dev/docs/PRODUCT_VISION.md
+
 # OS
 .DS_Store
 Thumbs.db

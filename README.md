@@ -13,10 +13,10 @@
 Stop re-explaining yourself every conversation. Roampal remembers outcomes, learns from feedback, and gets smarter over time—all 100% private and local.
 
 <p align="center">
-  <img src="screenshots/roampalscreen.png" alt="Roampal - Chat with Knowledge Graph" width="800">
+  <img src="screenshots/whatwebeenupto.png" alt="Roampal - AI Chat with Persistent Memory" width="800">
 </p>
 
-> **Vector search: 0%. Roampal: 87%. Same adversarial queries. (p=0.001)** [(Full benchmarks)](dev/docs/BENCHMARKS.md)
+> **85.8% non-adversarial on LoCoMo (1,986 questions). +23 pts over raw ingestion. Absorbs 1,135 poison memories losing only 4 pts.** [(Paper)](https://github.com/roampal-ai/roampal-labs)
 
 <p align="center">
   <a href="https://github.com/roampal-ai/roampal">
@@ -66,68 +66,38 @@ But that advice FAILED last time. You needed the debugger.
 
 ### Benchmark Results
 
-*Tests measure the retrieval system, not LLM generation. Real embeddings, synthetic scenarios.*
+*LoCoMo dataset (1,986 questions, 5 categories, corrected ground truths). Evaluated with [roampal-labs](https://github.com/roampal-ai/roampal-labs). Dual-graded by local 20B + MiniMax M2.7.*
 
-**Roampal vs Vector DB** (30 adversarial coding scenarios):
-| Condition | Accuracy |
-|-----------|----------|
-| Plain vector search | 0% (0/30) |
-| **Roampal** | **87%** (26/30) |
+| Metric | Result |
+|--------|--------|
+| **Non-adversarial accuracy (MiniMax-regraded)** | **85.8%** |
+| **Overall (all 5 categories)** | **76.6%** |
+| **vs raw ingestion baseline** | **+23 pts** (76.6% vs 53.0%, p<0.0001) |
+| **Poison resilience** | **-4.2 pts** after 1,135 adversarial memories |
+| **No-memory baseline** | 6.0% (model has zero LoCoMo knowledge) |
+| **Architecture vs model** | Architecture: +23 pts. Model swap (GPT-4o-mini): 1.5-2.5 pts |
 
-p=0.001, Cohen's d=3.5 (4 scenarios are "impossible by design" - query asks for bad advice by name)
-
----
-
-**4-Way Comparison** (what each component adds):
-| Approach | Accuracy | Improvement |
-|----------|----------|-------------|
-| RAG Baseline | 10% | - |
-| + Reranker | 20% | +10 pts |
-| **+ Outcomes** | **50%** | **+40 pts** |
-
-Outcome learning beats rerankers **4×**.
-
----
-
-**Learning Curve** (how fast it learns):
-| Maturity | Uses | Accuracy |
-|----------|------|----------|
-| Cold Start | 0 | 0% |
-| Early | 3 | 50% |
-| Mature | 20 | **60%** |
-
-3 uses → 50% accuracy. Training domains reach 100%.
+- System learns through natural conversation, not transcript ingestion
+- Absorbs 1,135 poison memories with spoofed trust signals, retaining 72.4% accuracy
+- Wilson scoring hurts retrieval at every stage (p<0.001) — removed from ranking
 
 <details>
-<summary>Full 4-Way Comparison (MRR, nDCG@5)</summary>
+<summary>Component-level retrieval ablation</summary>
 
-**200 adversarial tests across 5 maturity levels × 10 scenarios**
+| Config | Hit@1 Clean | Hit@1 Poison | p-value |
+|--------|-------------|--------------|---------|
+| **TagCascade + cosine** | **27.3%** | **29.0%** | **baseline** |
+| Overlap + cosine | 25.8% | 28.0% | p=0.0003 |
+| Pure CE | 25.4% | 28.4% | — |
+| TagCascade + Wilson | 23.0% | 25.0% | p<0.0001 |
 
-| Condition | Top-1 | MRR | nDCG@5 |
-|-----------|-------|-----|--------|
-| RAG Baseline | 10% | 0.550 | 0.668 |
-| Reranker Only | 20% | 0.600 | 0.705 |
-| **Outcomes Only** | **50%** | **0.750** | **0.815** |
-| Full Roampal | 44% | 0.720 | 0.793 |
+- Cross-encoder: +17.8 Hit@1 over cosine (p<0.0001)
+- Tag routing (two-lane): +6.1 Hit@1 clean, +7.5 poison (p<0.0001)
+- Wilson: -4.3 Hit@1 in every configuration
+- Nursery slot: zero benefit (p=1.0)
 
-*Note: Full Roampal includes cross-domain holdout (nutrition, crypto) where no training occurred - training domains alone achieve 100%.*
+Full methodology in [roampal-labs](https://github.com/roampal-ai/roampal-labs)
 
-**Statistical Significance**:
-- Cold→Mature: p=0.005** (highly significant)
-- Full vs RAG (MRR): p=0.015*
-- Full vs Reranker (MRR): p=0.037*
-
-</details>
-
-<details>
-<summary>More benchmarks</summary>
-
-- **Finance** (100 scenarios): 0% → 100%
-- **Token efficiency**: 63% fewer tokens (20 vs 55-93)
-- **Latency**: p95 < 100ms
-- **Infrastructure**: 40/40 tests pass, 1000 concurrent stores
-
-[Full methodology →](dev/docs/BENCHMARKS.md)
 </details>
 
 ---
@@ -159,7 +129,7 @@ Connect Roampal to **Claude Desktop, Cursor**, and other MCP-compatible tools.
 Settings → Integrations → Connect → Restart your tool
 ```
 
-**6 tools available**: `search_memory`, `add_to_memory_bank`, `update_memory`, `archive_memory`, `get_context_insights`, `record_response`
+**7 tools available**: `search_memory`, `add_to_memory_bank`, `update_memory`, `archive_memory`, `get_context_insights`, `record_response`, `score_memories`
 
 [Full MCP documentation →](dev/docs/architecture.md#mcp-integration)
 
@@ -180,9 +150,9 @@ Settings → Integrations → Connect → Restart your tool
 ```
 
 **Core Technology:**
+- TagCascade Retrieval: Tag-routed search + cross-encoder reranking (ONNX)
 - Outcome-Based Learning: Memories adapt based on feedback
-- Triple Knowledge Graphs: Routing + Content + Action-Effectiveness
-- Hybrid Search: BM25 + Vector + Cross-Encoder reranking
+- Sidecar LLM: Background model summarizes exchanges, extracts facts and tags
 
 [Architecture deep-dive →](dev/docs/architecture.md)
 
@@ -206,8 +176,8 @@ Works with any tool-calling model via Ollama or LM Studio:
 | Document | Description |
 |----------|-------------|
 | [Architecture](dev/docs/architecture.md) | 5-tier memory, knowledge graphs, technical deep-dive |
-| [Benchmarks](dev/docs/BENCHMARKS.md) | Test methodology, statistical significance |
-| [Release Notes](dev/docs/releases/v0.3.0/RELEASE_NOTES.md) | Latest: TanStack Virtual Migration, Streaming Fixes, Performance & Polish |
+| [Benchmarks](dev/docs/releases/v0.3.1/RELEASE_NOTES.md#benchmark-evidence) | LoCoMo evaluation, TagCascade results |
+| [Release Notes](dev/docs/releases/v0.3.1/RELEASE_NOTES.md) | Latest: TagCascade Retrieval, Sidecar LLM, ONNX CE, Two-Lane Injection |
 
 ---
 
@@ -224,7 +194,7 @@ Works with any tool-calling model via Ollama or LM Studio:
 - **Discord**: https://discord.gg/F87za86R3v
 - **Email**: roampal@protonmail.com
 - **GitHub**: https://github.com/roampal-ai/roampal/issues
-- **Author**: [Logan Teague](https://www.linkedin.com/in/logan-teague-6909901a5//)
+- **Author**: [Logan Teague](https://www.linkedin.com/in/logan-teague-6909901a5/)
 
 ---
 

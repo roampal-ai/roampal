@@ -39,7 +39,6 @@ class MemoryBankService:
         collection: Any,
         embed_fn: Callable[[str], Awaitable[List[float]]],
         search_fn: Optional[Callable] = None,
-        kg_service: Optional[Any] = None,
         config: Optional[MemoryConfig] = None
     ):
         """
@@ -49,13 +48,11 @@ class MemoryBankService:
             collection: Memory bank collection adapter
             embed_fn: Async function to embed text
             search_fn: Optional search function for queries
-            kg_service: KnowledgeGraphService for content graph population
             config: Memory configuration
         """
         self.collection = collection
         self.embed_fn = embed_fn
         self.search_fn = search_fn
-        self.kg_service = kg_service
         self.config = config or MemoryConfig()
 
     async def store(
@@ -115,19 +112,6 @@ class MemoryBankService:
             vectors=[embedding],
             metadatas=[metadata]
         )
-
-        # v0.3.0: Populate content graph with entities from this memory
-        if self.kg_service:
-            try:
-                quality_score = importance * confidence
-                self.kg_service.add_entities_from_text(
-                    text=text,
-                    doc_id=doc_id,
-                    collection="memory_bank",
-                    quality_score=quality_score
-                )
-            except Exception as e:
-                logger.warning(f"Failed to add entities to content graph: {e}")
 
         logger.info(f"Stored memory_bank item: {text[:50]}... (tags: {tags})")
         return doc_id
@@ -189,23 +173,6 @@ class MemoryBankService:
             }]
         )
 
-        # v0.3.0: Update content graph - remove old entities, add new ones
-        if self.kg_service:
-            try:
-                # Remove old entity mentions
-                self.kg_service.remove_entity_mention(doc_id)
-                # Add new ones from updated text
-                importance = old_metadata.get("importance", 0.7)
-                confidence = old_metadata.get("confidence", 0.7)
-                self.kg_service.add_entities_from_text(
-                    text=new_text,
-                    doc_id=doc_id,
-                    collection="memory_bank",
-                    quality_score=importance * confidence
-                )
-            except Exception as e:
-                logger.warning(f"Failed to update content graph: {e}")
-
         logger.info(f"Updated memory_bank item {doc_id}: {reason}")
         return doc_id
 
@@ -234,13 +201,6 @@ class MemoryBankService:
         metadata["archived_at"] = datetime.now().isoformat()
 
         self.collection.update_fragment_metadata(doc_id, metadata)
-
-        # v0.3.0: Remove entity mentions from content graph
-        if self.kg_service:
-            try:
-                self.kg_service.remove_entity_mention(doc_id)
-            except Exception as e:
-                logger.warning(f"Failed to remove entities from content graph: {e}")
 
         logger.info(f"Archived memory_bank item {doc_id}: {reason}")
         return True
@@ -330,14 +290,6 @@ class MemoryBankService:
         """
         try:
             self.collection.delete_vectors([doc_id])
-
-            # v0.3.0: Remove entity mentions from content graph
-            if self.kg_service:
-                try:
-                    self.kg_service.remove_entity_mention(doc_id)
-                except Exception as e:
-                    logger.warning(f"Failed to remove entities from content graph: {e}")
-
             logger.info(f"User permanently deleted memory: {doc_id}")
             return True
         except Exception as e:

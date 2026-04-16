@@ -3,12 +3,16 @@ Data Management API Router
 
 Provides endpoints for clearing/deleting user data collections.
 All operations are destructive and permanent.
+
+v0.3.1: Added memory summarization/migration endpoints.
 """
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Dict
 from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import StreamingResponse
 import json
 
 # Ghost registry for clearing ghost IDs after collection nuke (v0.2.9)
@@ -16,6 +20,9 @@ from modules.memory.ghost_registry import get_ghost_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data", tags=["data-management"])
+
+# v0.3.1: Cancel flag for migration summarization
+_cancel_flags: Dict[str, bool] = {}
 
 
 @router.get("/stats")
@@ -31,7 +38,7 @@ async def get_data_stats(request: Request):
             "patterns": {"count": 0},
             "books": {"count": 221},
             "sessions": {"count": 67},
-            "knowledge_graph": {"nodes": 45, "edges": 23}
+            "outcomes": {"exists": true}
         }
     """
     memory = request.app.state.memory
@@ -42,7 +49,13 @@ async def get_data_stats(request: Request):
 
     try:
         # Get ChromaDB collection counts
-        for collection_name in ["memory_bank", "working", "history", "patterns", "books"]:
+        for collection_name in [
+            "memory_bank",
+            "working",
+            "history",
+            "patterns",
+            "books",
+        ]:
             if collection_name in memory.collections:
                 adapter = memory.collections[collection_name]
                 count = await adapter.get_collection_count()
@@ -51,17 +64,16 @@ async def get_data_stats(request: Request):
                 if collection_name == "memory_bank":
                     try:
                         results = adapter.collection.get(
-                            where={"status": "active"},
-                            include=[]
+                            where={"status": "active"}, include=[]
                         )
                         active_count = len(results.get("ids", []))
                         archived_count = count - active_count
                         stats[collection_name] = {
                             "count": count,
                             "active": active_count,
-                            "archived": archived_count
+                            "archived": archived_count,
                         }
-                    except:
+                    except Exception:
                         stats[collection_name] = {"count": count}
                 else:
                     stats[collection_name] = {"count": count}
@@ -79,57 +91,11 @@ async def get_data_stats(request: Request):
         outcomes_db = memory.data_dir / "outcomes.db"
         stats["outcomes"] = {"exists": outcomes_db.exists()}
 
-        # Parse knowledge graph data from multiple sources
-        nodes = 0
-        edges = 0
-
-        # 1. Count from knowledge_graph.json (outcome routing patterns)
-        kg_path = memory.kg_path
-        if kg_path and kg_path.exists():
-            try:
-                with open(kg_path, 'r', encoding='utf-8') as f:
-                    kg_data = json.load(f)
-                nodes += len(kg_data.get("routing_patterns", {}))
-                nodes += len(kg_data.get("problem_solutions", {}))
-                nodes += len(kg_data.get("solution_patterns", {}))
-            except:
-                pass
-
-        # 2. Count from content_graph.json (concept visualization - what UI shows)
-        content_graph_path = memory.data_dir / "content_graph.json"
-        if content_graph_path.exists():
-            try:
-                with open(content_graph_path, 'r', encoding='utf-8') as f:
-                    cg_data = json.load(f)
-                # Count unique entities from content graph
-                nodes += len(cg_data.get("entities", {}))
-                # Count entity relationships as edges
-                edges += len(cg_data.get("relationships", {}))
-            except:
-                pass
-
-        # 3. Count edges from memory_relationships.json (document relationships)
-        rel_path = memory.data_dir / "memory_relationships.json"
-        if rel_path.exists():
-            try:
-                with open(rel_path, 'r', encoding='utf-8') as f:
-                    rel_data = json.load(f)
-                edges += len(rel_data.get("related", {}))
-                edges += len(rel_data.get("evolution", {}))
-                edges += len(rel_data.get("conflicts", {}))
-            except:
-                pass
-
-        stats["knowledge_graph"] = {
-            "nodes": nodes,
-            "edges": edges
-        }
-
         return stats
 
     except Exception as e:
         logger.error(f"Error fetching data stats: {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to get stats: {str(e)}")
+        logger.error(f"Failed to get stats: {e}"); raise HTTPException(500, "Failed to get stats")
 
 
 @router.post("/clear/memory_bank")
@@ -156,7 +122,7 @@ async def clear_memory_bank(request: Request):
                 batch_size = 100
                 all_ids = all_docs["ids"]
                 for i in range(0, len(all_ids), batch_size):
-                    batch = all_ids[i:i + batch_size]
+                    batch = all_ids[i : i + batch_size]
                     adapter.collection.delete(ids=batch)
 
         logger.info(f"Cleared memory_bank collection ({count_before} entries deleted)")
@@ -164,14 +130,14 @@ async def clear_memory_bank(request: Request):
         return {
             "status": "success",
             "collection": "memory_bank",
-            "deleted_count": count_before
+            "deleted_count": count_before,
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error clearing memory_bank: {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to clear memory_bank: {str(e)}")
+        logger.error(f"Failed to clear memory_bank: {e}"); raise HTTPException(500, "Failed to clear memory_bank")
 
 
 @router.post("/clear/working")
@@ -195,7 +161,7 @@ async def clear_working_memory(request: Request):
                 batch_size = 100
                 all_ids = all_docs["ids"]
                 for i in range(0, len(all_ids), batch_size):
-                    batch = all_ids[i:i + batch_size]
+                    batch = all_ids[i : i + batch_size]
                     adapter.collection.delete(ids=batch)
 
         logger.info(f"Cleared working memory ({count_before} entries deleted)")
@@ -203,14 +169,14 @@ async def clear_working_memory(request: Request):
         return {
             "status": "success",
             "collection": "working",
-            "deleted_count": count_before
+            "deleted_count": count_before,
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error clearing working memory: {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to clear working memory: {str(e)}")
+        logger.error(f"Failed to clear working memory: {e}"); raise HTTPException(500, "Failed to clear working memory")
 
 
 @router.post("/clear/history")
@@ -234,7 +200,7 @@ async def clear_history(request: Request):
                 batch_size = 100
                 all_ids = all_docs["ids"]
                 for i in range(0, len(all_ids), batch_size):
-                    batch = all_ids[i:i + batch_size]
+                    batch = all_ids[i : i + batch_size]
                     adapter.collection.delete(ids=batch)
 
         logger.info(f"Cleared history collection ({count_before} entries deleted)")
@@ -242,14 +208,14 @@ async def clear_history(request: Request):
         return {
             "status": "success",
             "collection": "history",
-            "deleted_count": count_before
+            "deleted_count": count_before,
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error clearing history: {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to clear history: {str(e)}")
+        logger.error(f"Failed to clear history: {e}"); raise HTTPException(500, "Failed to clear history")
 
 
 @router.post("/clear/patterns")
@@ -273,7 +239,7 @@ async def clear_patterns(request: Request):
                 batch_size = 100
                 all_ids = all_docs["ids"]
                 for i in range(0, len(all_ids), batch_size):
-                    batch = all_ids[i:i + batch_size]
+                    batch = all_ids[i : i + batch_size]
                     adapter.collection.delete(ids=batch)
 
         logger.info(f"Cleared patterns collection ({count_before} entries deleted)")
@@ -281,14 +247,14 @@ async def clear_patterns(request: Request):
         return {
             "status": "success",
             "collection": "patterns",
-            "deleted_count": count_before
+            "deleted_count": count_before,
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error clearing patterns: {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to clear patterns: {str(e)}")
+        logger.error(f"Failed to clear patterns: {e}"); raise HTTPException(500, "Failed to clear patterns")
 
 
 @router.post("/clear/books")
@@ -322,15 +288,18 @@ async def clear_books(request: Request):
             adapter.collection = client.get_or_create_collection(
                 name=collection_name,
                 embedding_function=None,  # We provide our own embeddings
-                metadata={"hnsw:space": "l2"}
+                metadata={"hnsw:space": "l2"},
             )
             logger.info(f"Recreated books collection '{collection_name}'")
 
-        logger.info(f"Cleared books ChromaDB collection ({count_before} entries deleted)")
+        logger.info(
+            f"Cleared books ChromaDB collection ({count_before} entries deleted)"
+        )
 
         # Step 1b: Clear ghost registry (v0.2.9)
         # Since we nuked the collection, no ghosts remain - clear the blacklist
         from config.settings import settings
+
         ghost_registry = get_ghost_registry(settings.paths.data_dir)
         ghosts_cleared = ghost_registry.clear()
         if ghosts_cleared > 0:
@@ -342,6 +311,7 @@ async def clear_books(request: Request):
         metadata_deleted = 0
         if book_processor:
             import aiosqlite
+
             db_path = book_processor.db_path
             if db_path.exists():
                 async with aiosqlite.connect(str(db_path)) as db:
@@ -361,22 +331,28 @@ async def clear_books(request: Request):
             metadata_dir = book_processor.data_dir / "metadata"
             if metadata_dir.exists():
                 import shutil
+
                 metadata_files = list(metadata_dir.glob("*.json"))
                 metadata_deleted = len(metadata_files)
                 shutil.rmtree(metadata_dir)
                 metadata_dir.mkdir(parents=True, exist_ok=True)
-                logger.info(f"Cleared metadata directory ({metadata_deleted} files deleted)")
+                logger.info(
+                    f"Cleared metadata directory ({metadata_deleted} files deleted)"
+                )
 
             # Step 4: Clear upload files
             uploads_dir = book_processor.data_dir / "uploads"
             uploads_deleted = 0
             if uploads_dir.exists():
                 import shutil
+
                 upload_files = list(uploads_dir.glob("*"))
                 uploads_deleted = len(upload_files)
                 shutil.rmtree(uploads_dir)
                 uploads_dir.mkdir(parents=True, exist_ok=True)
-                logger.info(f"Cleared uploads directory ({uploads_deleted} files deleted)")
+                logger.info(
+                    f"Cleared uploads directory ({uploads_deleted} files deleted)"
+                )
 
         return {
             "status": "success",
@@ -386,14 +362,14 @@ async def clear_books(request: Request):
             "metadata_deleted": metadata_deleted,
             "uploads_deleted": uploads_deleted,
             "ghosts_cleared": ghosts_cleared,  # v0.2.9
-            "deleted_count": count_before  # For UI backward compatibility
+            "deleted_count": count_before,  # For UI backward compatibility
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error clearing books: {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to clear books: {str(e)}")
+        logger.error(f"Failed to clear books: {e}"); raise HTTPException(500, "Failed to clear books")
 
 
 @router.post("/clear/sessions")
@@ -412,12 +388,12 @@ async def clear_sessions(request: Request):
             return {
                 "status": "success",
                 "message": "No sessions directory found",
-                "deleted_count": 0
+                "deleted_count": 0,
             }
 
         # Get active conversation ID if memory system is available
         active_conversation_id = None
-        if memory and hasattr(memory, 'conversation_id'):
+        if memory and hasattr(memory, "conversation_id"):
             active_conversation_id = memory.conversation_id
 
         # v0.3.0: Include archive folder - use recursive glob
@@ -451,10 +427,7 @@ async def clear_sessions(request: Request):
 
         logger.info(f"Cleared {deleted_count} session files (including archive)")
 
-        result = {
-            "status": "success",
-            "deleted_count": deleted_count
-        }
+        result = {"status": "success", "deleted_count": deleted_count}
 
         if skipped_active:
             result["warning"] = "Active conversation was preserved"
@@ -464,7 +437,7 @@ async def clear_sessions(request: Request):
 
     except Exception as e:
         logger.error(f"Error clearing sessions: {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to clear sessions: {str(e)}")
+        logger.error(f"Failed to clear sessions: {e}"); raise HTTPException(500, "Failed to clear sessions")
 
 
 @router.post("/clear/outcomes")
@@ -484,7 +457,7 @@ async def clear_outcomes(request: Request):
             return {
                 "status": "success",
                 "message": "No outcomes database found",
-                "deleted_count": 0
+                "deleted_count": 0,
             }
 
         try:
@@ -493,112 +466,17 @@ async def clear_outcomes(request: Request):
             return {
                 "status": "success",
                 "deleted_count": 1,
-                "message": "Outcomes database cleared"
+                "message": "Outcomes database cleared",
             }
         except Exception as e:
             logger.error(f"Failed to delete outcomes.db: {e}")
-            raise HTTPException(500, f"Failed to delete outcomes.db: {str(e)}")
+            logger.error(f"Failed to delete outcomes.db: {e}"); raise HTTPException(500, "Failed to delete outcomes.db")
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error clearing outcomes: {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to clear outcomes: {str(e)}")
-
-
-@router.post("/clear/knowledge-graph")
-async def clear_knowledge_graph(request: Request):
-    """Clear the knowledge graph (concept relationships and content graph)."""
-    memory = request.app.state.memory
-
-    try:
-        nodes_count = 0
-        edges_count = 0
-
-        # 1. Clear knowledge_graph.json (outcome routing patterns)
-        kg_path = memory.kg_path if memory else Path("data/knowledge_graph.json")
-        if kg_path and kg_path.exists():
-            try:
-                with open(kg_path, 'r', encoding='utf-8') as f:
-                    kg_data = json.load(f)
-                nodes_count += len(kg_data.get("routing_patterns", {}))
-                nodes_count += len(kg_data.get("problem_solutions", {}))
-                nodes_count += len(kg_data.get("solution_patterns", {}))
-            except:
-                pass
-
-            empty_kg = {
-                "routing_patterns": {},
-                "success_rates": {},
-                "failure_patterns": {},
-                "problem_categories": {},
-                "problem_solutions": {},
-                "solution_patterns": {}
-            }
-            with open(kg_path, 'w', encoding='utf-8') as f:
-                json.dump(empty_kg, f, indent=2)
-
-            # Clear in-memory cache
-            if memory and hasattr(memory, '_kg_service') and memory._kg_service:
-                memory._kg_service.knowledge_graph = empty_kg
-                logger.info("Cleared in-memory knowledge graph cache")
-
-        # 2. Clear content_graph.json (concept visualization - what UI shows)
-        content_graph_path = memory.data_dir / "content_graph.json" if memory else Path("data/content_graph.json")
-        if content_graph_path.exists():
-            try:
-                with open(content_graph_path, 'r', encoding='utf-8') as f:
-                    cg_data = json.load(f)
-                nodes_count += len(cg_data.get("entities", {}))
-                edges_count += len(cg_data.get("relationships", {}))
-            except:
-                pass
-
-            empty_cg = {"entities": {}, "relationships": {}, "metadata": {}}
-            with open(content_graph_path, 'w', encoding='utf-8') as f:
-                json.dump(empty_cg, f, indent=2)
-
-            # Clear in-memory content graph (lives in kg_service)
-            if memory and hasattr(memory, '_kg_service') and memory._kg_service:
-                cg = memory._kg_service.content_graph
-                cg.entities = {}
-                cg.relationships = {}
-                cg.entity_metadata = {}
-                cg._doc_entities = {}
-                logger.info("Cleared in-memory content graph cache")
-
-        # 3. Clear memory_relationships.json
-        rel_path = memory.data_dir / "memory_relationships.json" if memory else Path("data/memory_relationships.json")
-        empty_rel = {"related": {}, "evolution": {}, "conflicts": {}}
-        if rel_path.exists():
-            try:
-                with open(rel_path, 'r', encoding='utf-8') as f:
-                    rel_data = json.load(f)
-                edges_count += len(rel_data.get("related", {}))
-                edges_count += len(rel_data.get("evolution", {}))
-                edges_count += len(rel_data.get("conflicts", {}))
-            except:
-                pass
-
-            with open(rel_path, 'w', encoding='utf-8') as f:
-                json.dump(empty_rel, f, indent=2)
-
-            if memory and hasattr(memory, 'relationships'):
-                memory.relationships = empty_rel
-                logger.info("Cleared in-memory relationships cache")
-
-        logger.info(f"Cleared knowledge graph ({nodes_count} nodes, {edges_count} edges)")
-
-        return {
-            "status": "success",
-            "cleared": True,
-            "nodes_cleared": nodes_count,
-            "edges_cleared": edges_count
-        }
-
-    except Exception as e:
-        logger.error(f"Error clearing knowledge graph: {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to clear knowledge graph: {str(e)}")
+        logger.error(f"Failed to clear outcomes: {e}"); raise HTTPException(500, "Failed to clear outcomes")
 
 
 @router.post("/compact-database")
@@ -608,17 +486,22 @@ async def compact_database(request: Request):
     VACUUM the ChromaDB SQLite database to free up space from deleted embeddings.
     """
     import sqlite3
+
     memory = request.app.state.memory
 
     try:
         # Use AppData paths, not bundled data folder
-        chroma_db_path = memory.data_dir / "chromadb/chroma.sqlite3" if memory else Path("data/chromadb/chroma.sqlite3")
+        chroma_db_path = (
+            memory.data_dir / "chromadb/chroma.sqlite3"
+            if memory
+            else Path("data/chromadb/chroma.sqlite3")
+        )
 
         if not chroma_db_path.exists():
             return {
                 "status": "success",
                 "message": "ChromaDB does not exist",
-                "space_reclaimed": 0
+                "space_reclaimed": 0,
             }
 
         # Get size before compaction
@@ -633,16 +516,226 @@ async def compact_database(request: Request):
         size_after = chroma_db_path.stat().st_size / (1024 * 1024)  # MB
         space_reclaimed = size_before - size_after
 
-        logger.info(f"ChromaDB compacted: {size_before:.1f}MB → {size_after:.1f}MB (reclaimed {space_reclaimed:.1f}MB)")
+        logger.info(
+            f"ChromaDB compacted: {size_before:.1f}MB → {size_after:.1f}MB (reclaimed {space_reclaimed:.1f}MB)"
+        )
 
         return {
             "status": "success",
             "size_before_mb": round(size_before, 2),
             "size_after_mb": round(size_after, 2),
             "space_reclaimed_mb": round(space_reclaimed, 2),
-            "message": f"Reclaimed {space_reclaimed:.1f} MB"
+            "message": f"Reclaimed {space_reclaimed:.1f} MB",
         }
 
     except Exception as e:
         logger.error(f"Error compacting database: {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to compact database: {str(e)}")
+        logger.error(f"Failed to compact database: {e}"); raise HTTPException(500, "Failed to compact database")
+
+
+# ---------------------------------------------------------------------------
+# v0.3.1: Memory summarization / migration
+# ---------------------------------------------------------------------------
+
+SUMMARIZE_THRESHOLD = 400  # Characters — memories longer than this are candidates
+
+
+@router.get("/summarize/scan")
+async def summarize_scan(request: Request):
+    """
+    Scan for unsummarized memories. Lightweight — no LLM calls.
+    Returns candidate counts per collection and sidecar status.
+    """
+    memory = request.app.state.memory
+    if not memory:
+        raise HTTPException(503, "Memory system not available")
+
+    sidecar_configured = bool(getattr(request.app.state, "sidecar_model", ""))
+
+    candidates: Dict[str, int] = {}
+    for coll_name in ["working", "history", "patterns"]:
+        adapter = memory.collections.get(coll_name)
+        if not adapter or not adapter.collection:
+            candidates[coll_name] = 0
+            continue
+
+        try:
+            data = adapter.collection.get(include=["documents", "metadatas"])
+            ids = data.get("ids", [])
+            docs = data.get("documents", [])
+            metas = data.get("metadatas", [])
+
+            count = 0
+            for i in range(len(ids)):
+                doc = docs[i] if i < len(docs) and docs[i] else ""
+                meta = metas[i] if i < len(metas) and metas[i] else {}
+                if len(doc) > SUMMARIZE_THRESHOLD and not meta.get("summarized_at"):
+                    count += 1
+            candidates[coll_name] = count
+        except Exception as e:
+            logger.warning(f"[MIGRATION] Failed to scan {coll_name}: {e}")
+            candidates[coll_name] = 0
+
+    return {
+        "candidates": candidates,
+        "total": sum(candidates.values()),
+        "sidecar_configured": sidecar_configured,
+    }
+
+
+@router.post("/summarize/run")
+async def summarize_run(request: Request):
+    """
+    Summarize legacy memories via SSE stream.
+    Per-memory: summarize → extract tags (LLM) → extract facts → update → store facts.
+    Matches sidecar architecture: LLM tags for summaries and facts.
+    """
+    from modules.memory.sidecar_service import (
+        summarize_only_with_retry,
+        extract_facts_with_retry,
+        extract_noun_tags_with_retry,
+    )
+
+    sidecar_client = getattr(request.app.state, "sidecar_client", None)
+    sidecar_model = getattr(request.app.state, "sidecar_model", "")
+    if not sidecar_client or not sidecar_model:
+        raise HTTPException(400, "Sidecar model not configured")
+
+    memory = request.app.state.memory
+    if not memory:
+        raise HTTPException(503, "Memory system not available")
+
+    async def generate():
+        cancel_key = "summarize_migration"
+        _cancel_flags[cancel_key] = False
+
+        # Phase 1: Scan candidates
+        candidates = []
+        for coll_name in ["working", "history", "patterns"]:
+            adapter = memory.collections.get(coll_name)
+            if not adapter or not adapter.collection:
+                continue
+            try:
+                data = adapter.collection.get(include=["documents", "metadatas"])
+                ids = data.get("ids", [])
+                docs = data.get("documents", [])
+                metas = data.get("metadatas", [])
+                for i in range(len(ids)):
+                    doc = docs[i] if i < len(docs) and docs[i] else ""
+                    meta = metas[i] if i < len(metas) and metas[i] else {}
+                    if len(doc) > SUMMARIZE_THRESHOLD and not meta.get("summarized_at"):
+                        candidates.append((coll_name, ids[i], doc, meta))
+            except Exception as e:
+                logger.warning(f"[MIGRATION] Scan failed for {coll_name}: {e}")
+
+        total = len(candidates)
+        yield f"data: {json.dumps({'type': 'start', 'total': total})}\n\n"
+
+        if total == 0:
+            yield f"data: {json.dumps({'type': 'complete', 'summarized': 0, 'facts': 0, 'tags': 0})}\n\n"
+            return
+
+        # Phase 2: Process each candidate
+        summarized = 0
+        facts_total = 0
+        tags_total = 0
+
+        for idx, (coll_name, doc_id, content, meta) in enumerate(candidates):
+            if _cancel_flags.get(cancel_key):
+                yield f"data: {json.dumps({'type': 'cancelled', 'summarized': summarized, 'facts': facts_total, 'tags': tags_total})}\n\n"
+                return
+
+            yield f"data: {json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'collection': coll_name, 'message': f'Summarizing {idx + 1}/{total}...'})}\n\n"
+
+            try:
+                # Step 1: Summarize
+                summary = await summarize_only_with_retry(
+                    content, sidecar_client, sidecar_model, doc_id=doc_id
+                )
+                if not summary:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Failed to summarize {doc_id}', 'current': idx + 1, 'total': total})}\n\n"
+                    continue
+
+                # Enforce length — prevent re-summarization loop
+                if len(summary) > SUMMARIZE_THRESHOLD:
+                    summary = summary[: SUMMARIZE_THRESHOLD - 20] + "... [truncated]"
+
+                # Step 2: Extract tags (LLM, matching sidecar architecture)
+                tags = (
+                    await extract_noun_tags_with_retry(
+                        summary, sidecar_client, sidecar_model, doc_id=doc_id
+                    )
+                    or []
+                )
+
+                # Step 3: Extract facts (LLM)
+                facts = (
+                    await extract_facts_with_retry(
+                        content, sidecar_client, sidecar_model, doc_id=doc_id
+                    )
+                    or []
+                )
+
+                # Step 4: Update memory in ChromaDB
+                adapter = memory.collections.get(coll_name)
+                if adapter:
+                    adapter.update_fragment_metadata(
+                        doc_id,
+                        {
+                            "text": summary,
+                            "content": summary,
+                            "summarized_at": datetime.now().isoformat(),
+                            "original_length": len(content),
+                            "noun_tags": json.dumps(tags),
+                        },
+                    )
+
+                # Step 5: Store extracted facts as new working memories (with LLM tags)
+                for fact_text in facts:
+                    fact_tags = (
+                        await extract_noun_tags_with_retry(
+                            fact_text,
+                            sidecar_client,
+                            sidecar_model,
+                            doc_id=f"{doc_id}_fact",
+                        )
+                        or []
+                    )
+                    try:
+                        await memory.store(
+                            text=fact_text,
+                            collection="working",
+                            metadata={
+                                "memory_type": "fact",
+                                "role": "fact",
+                                "source": "sidecar",
+                                "score": 0.5,
+                                "noun_tags": json.dumps(fact_tags),
+                            },
+                        )
+                    except Exception as e:
+                        logger.warning(f"[MIGRATION] Failed to store fact: {e}")
+                    facts_total += 1
+
+                # Step 6: Register tags with tag service
+                if tags and hasattr(memory, "_tag_service") and memory._tag_service:
+                    memory._tag_service.add_known_tags(tags)
+                tags_total += len(tags)
+
+                summarized += 1
+
+            except Exception as e:
+                logger.warning(f"[MIGRATION] Failed to process {doc_id}: {e}")
+                yield f"data: {json.dumps({'type': 'error', 'message': f'Error: {doc_id}', 'current': idx + 1, 'total': total})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'complete', 'summarized': summarized, 'facts': facts_total, 'tags': tags_total})}\n\n"
+        _cancel_flags.pop(cancel_key, None)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.post("/summarize/cancel")
+async def summarize_cancel():
+    """Cancel an in-progress summarization migration."""
+    _cancel_flags["summarize_migration"] = True
+    return {"status": "cancelling"}

@@ -3,7 +3,7 @@ Unit tests for agent_chat.py - the main chat router.
 
 Tests critical functions:
 - ResponseValidator: Detects if LLM response was hijacked by prompt injection
-- parse_memory_marks: Extracts LLM's memory attribution (👍/👎/➖)
+- _strip_memory_marks: Strips LLM's memory attribution annotations
 - _humanize_age: Converts timestamps to human-readable ages like "2d", "5h"
 - _cache_memories_for_scoring: Caches searched memories for outcome scoring
 - _extract_and_strip_tag: Extracts content from XML tags
@@ -19,7 +19,7 @@ import math
 # Import the module under test
 from app.routers.agent_chat import (
     ResponseValidator,
-    parse_memory_marks,
+    _strip_memory_marks,
     _humanize_age,
     _cache_memories_for_scoring,
     _search_cache,
@@ -89,57 +89,40 @@ class TestResponseValidator:
         assert "unusual" in fallback.lower() or "try again" in fallback.lower()
 
 
-class TestParseMemoryMarks:
-    """Tests for parse_memory_marks - extracts LLM memory attribution."""
+class TestStripMemoryMarks:
+    """Tests for _strip_memory_marks - strips LLM memory attribution annotations."""
 
-    def test_basic_attribution_parsing(self):
-        """Should parse basic memory marks from response."""
+    def test_basic_stripping(self):
+        """Should strip memory marks from response."""
         response = "Here's the answer based on your memories. <!-- MEM: 1👍 2👎 3➖ -->"
-        clean, marks = parse_memory_marks(response)
+        clean = _strip_memory_marks(response)
 
         assert "<!-- MEM:" not in clean
-        assert marks == {1: "👍", 2: "👎", 3: "➖"}
+        assert "Here's the answer" in clean
 
-    def test_no_marks_returns_empty(self):
-        """Response without marks should return empty dict."""
+    def test_no_marks_returns_unchanged(self):
+        """Response without marks should return unchanged."""
         response = "Just a normal response without any memory attribution."
-        clean, marks = parse_memory_marks(response)
+        clean = _strip_memory_marks(response)
 
         assert clean == response
-        assert marks == {}
 
-    def test_marks_stripped_from_response(self):
-        """Memory marks annotation should be stripped from response."""
+    def test_marks_stripped_preserves_surrounding(self):
+        """Memory marks annotation should be stripped, preserving surrounding text."""
         response = "The answer is 42. <!-- MEM: 1👍 --> Hope that helps!"
-        clean, marks = parse_memory_marks(response)
+        clean = _strip_memory_marks(response)
 
         assert "<!-- MEM:" not in clean
-        assert "-->'" not in clean
         assert "The answer is 42" in clean
         assert "Hope that helps!" in clean
-
-    def test_multiple_marks_same_type(self):
-        """Should handle multiple positions with same emoji."""
-        response = "Response <!-- MEM: 1👍 2👍 3👍 -->"
-        clean, marks = parse_memory_marks(response)
-
-        assert marks == {1: "👍", 2: "👍", 3: "👍"}
-
-    def test_malformed_marks_skipped(self):
-        """Malformed entries should be skipped without crashing."""
-        response = "Response <!-- MEM: 1👍 bad 3👎 -->"
-        clean, marks = parse_memory_marks(response)
-
-        # Should get valid marks, skip malformed
-        assert 1 in marks
-        assert 3 in marks
 
     def test_whitespace_handling(self):
         """Should handle varying whitespace in marks."""
         response = "Response <!--  MEM:  1👍   2👎  -->"
-        clean, marks = parse_memory_marks(response)
+        clean = _strip_memory_marks(response)
 
-        assert marks == {1: "👍", 2: "👎"}
+        assert "<!-- " not in clean
+        assert "Response" in clean
 
 
 class TestHumanizeAge:

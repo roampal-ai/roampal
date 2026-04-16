@@ -1,6 +1,4 @@
 import React, { useState } from 'react';
-import KnowledgeGraph from './KnowledgeGraph';
-
 interface MemoryPanelV2Props {
   memories: any[];
   knowledgeGraph: any;
@@ -11,6 +9,7 @@ interface MemoryPanelV2Props {
   lastRefresh?: Date | null;
   currentUserId?: string;
   activeShard?: string;
+  sidecarModel?: string;
 }
 
 const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
@@ -22,14 +21,17 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
   lastRefresh,
   activeShard,
   onMemoryClick,
+  sidecarModel,
 }) => {
-  const [activeTab, setActiveTab] = useState<'all' | 'books' | 'working' | 'conversations' | 'patterns' | 'graph'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'books' | 'working' | 'conversations' | 'patterns'>('all');
   const [selectedMemory, setSelectedMemory] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'recent' | 'score'>('recent');
   const [filterType, setFilterType] = useState<'all' | 'working' | 'history' | 'patterns'>('all');
   const [showTypeInfo, setShowTypeInfo] = useState(false);
-  const [showGraphInfo, setShowGraphInfo] = useState(false);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
+  const [showTagSuggestions, setShowTagSuggestions] = useState(false);
 
   // Heroicon components - muted colors
   const BrainIcon = () => (
@@ -80,16 +82,6 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
         >
           Memory
         </button>
-        <button
-          onClick={() => setActiveTab('graph')}
-          className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all flex-1 border ${
-            activeTab === 'graph'
-              ? 'bg-blue-600/10 border-blue-600/30 text-blue-500'
-              : 'bg-transparent border-zinc-700/50 text-zinc-400 hover:bg-blue-600/5 hover:border-blue-600/20 hover:text-zinc-300'
-          }`}
-        >
-          Knowledge
-        </button>
         <div className="ml-auto flex items-center gap-1">
           <button
             onClick={onRefresh}
@@ -124,7 +116,6 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={
-                activeTab === 'graph' ? 'Search concepts...' :
                 activeTab === 'books' ? 'Search references...' :
                 'Search memories...'
               }
@@ -135,22 +126,10 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
             </svg>
           </div>
 
-          {/* Graph info button - shows inline with search when Graph tab is active */}
-          {activeTab === 'graph' && (
-            <button
-              onClick={() => setShowGraphInfo(true)}
-              className="p-1 hover:bg-zinc-800 rounded transition-colors flex-shrink-0"
-              title="Learn about the concept routing map"
-            >
-              <svg className="w-4 h-4 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </button>
-          )}
         </div>
 
         {/* Filter Options - Only for memory tabs */}
-        {activeTab !== 'graph' && activeTab !== 'books' && (
+        {activeTab !== 'books' && (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               {/* Memory Type Filter */}
@@ -229,14 +208,137 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
         )}
       </div>
 
+      {/* TAG FILTER — Substack-style type-to-add tag input */}
+      {(() => {
+        // Build tag counts from all memories (respecting type filter)
+        const tagCounts: Record<string, number> = {};
+        memories.forEach(memory => {
+          if (filterType !== 'all') {
+            const memType = memory.type || memory.collection_type || memory.collection || '';
+            if (filterType === 'working' && memType !== 'working') return;
+            if (filterType === 'history' && memType !== 'history' && memType !== 'conversation' && memType !== 'conversations') return;
+            if (filterType === 'patterns' && memType !== 'pattern' && memType !== 'patterns') return;
+          }
+          const tags = memory.tags || [];
+          tags.forEach((tag: string) => {
+            if (tag.length > 25) return;
+            tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+          });
+        });
+        const allTags = Object.entries(tagCounts)
+          .filter(([, count]) => count >= 2)
+          .sort((a, b) => b[1] - a[1]);
+
+        if (allTags.length === 0 && selectedTags.length === 0) return null;
+
+        // Filter suggestions based on input
+        const filtered = tagInput.trim()
+          ? allTags.filter(([tag]) =>
+              tag.includes(tagInput.toLowerCase()) && !selectedTags.includes(tag)
+            ).slice(0, 8)
+          : [];
+
+        const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+          if (e.key === 'Enter' && tagInput.trim()) {
+            e.preventDefault();
+            const input = tagInput.trim().toLowerCase();
+            // If there's a matching suggestion, use the first one
+            const match = filtered.length > 0 ? filtered[0][0] : input;
+            if (!selectedTags.includes(match)) {
+              setSelectedTags(prev => [...prev, match]);
+            }
+            setTagInput('');
+            setShowTagSuggestions(false);
+          } else if (e.key === 'Backspace' && tagInput === '' && selectedTags.length > 0) {
+            // Remove last tag on backspace in empty input
+            setSelectedTags(prev => prev.slice(0, -1));
+          } else if (e.key === 'Escape') {
+            setShowTagSuggestions(false);
+          }
+        };
+
+        return (
+          <div className="px-4 py-2 border-b border-zinc-800">
+            {/* Applied tags + input */}
+            <div className="flex flex-wrap items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 focus-within:border-zinc-600 transition-colors">
+              {selectedTags.map(tag => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-xs rounded bg-blue-500/20 text-blue-300 border border-blue-500/30"
+                >
+                  {tag}
+                  <button
+                    onClick={() => setSelectedTags(prev => prev.filter(t => t !== tag))}
+                    className="ml-0.5 hover:text-blue-100 transition-colors"
+                  >
+                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </span>
+              ))}
+              <div className="relative flex-1 min-w-[80px]">
+                <input
+                  type="text"
+                  value={tagInput}
+                  onChange={(e) => {
+                    setTagInput(e.target.value);
+                    setShowTagSuggestions(true);
+                  }}
+                  onKeyDown={handleTagKeyDown}
+                  onFocus={() => tagInput.trim() && setShowTagSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowTagSuggestions(false), 150)}
+                  placeholder={selectedTags.length === 0 ? "Filter by tag..." : ""}
+                  className="w-full bg-transparent text-xs text-zinc-300 placeholder-zinc-600 focus:outline-none py-0.5"
+                />
+                {/* Suggestions dropdown */}
+                {showTagSuggestions && filtered.length > 0 && (
+                  <div className="absolute left-0 top-full mt-1 w-48 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl z-50 py-1 max-h-48 overflow-y-auto">
+                    {filtered.map(([tag, count]) => (
+                      <button
+                        key={tag}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          if (!selectedTags.includes(tag)) {
+                            setSelectedTags(prev => [...prev, tag]);
+                          }
+                          setTagInput('');
+                          setShowTagSuggestions(false);
+                        }}
+                        className="w-full px-3 py-1 text-left text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 flex justify-between items-center"
+                      >
+                        <span>{tag}</span>
+                        <span className="text-zinc-600">{count}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {selectedTags.length > 0 && (
+                <button
+                  onClick={() => { setSelectedTags([]); setTagInput(''); }}
+                  className="text-zinc-600 hover:text-red-400 transition-colors p-0.5"
+                  title="Clear all tags"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* CONTENT AREA - Show memories by collection or graph */}
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
-        {activeTab === 'graph' ? (
-          <div className="h-full p-4">
-            <KnowledgeGraph searchQuery={searchQuery} />
-          </div>
-        ) : (
+        {(
           <div className="p-4 space-y-1 pb-4">
+            {!sidecarModel && memories.length > 0 && (
+              <div className="px-3 py-2 mb-2 rounded-lg bg-amber-500/5 border border-amber-500/20 text-xs text-amber-500/80">
+                No sidecar model selected — new memories won't be created. Pick one in the header.
+              </div>
+            )}
             {(() => {
               // Filter by collection type
               let filteredMemories = memories.filter(memory => {
@@ -257,10 +359,18 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                   if (filterType === 'patterns' && memType !== 'pattern' && memType !== 'patterns') return false;
                 }
 
-                // Search filter
+                // Tag filter — memory must have ALL selected tags
+                if (selectedTags.length > 0) {
+                  const memTags = memory.tags || [];
+                  if (!selectedTags.every(tag => memTags.includes(tag))) return false;
+                }
+
+                // Search filter (includes tag matching)
                 if (searchQuery) {
+                  const query = searchQuery.toLowerCase();
                   const content = (memory.text || memory.content || '').toLowerCase();
-                  return content.includes(searchQuery.toLowerCase());
+                  const tagMatch = (memory.tags || []).some((tag: string) => tag.toLowerCase().includes(query));
+                  return content.includes(query) || tagMatch;
                 }
                 return true;
               });
@@ -304,7 +414,11 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
                 <p className="text-sm text-zinc-500">No memories yet</p>
-                <p className="text-xs text-zinc-600 mt-1">Memories from your conversations will appear here</p>
+                {!sidecarModel ? (
+                  <p className="text-xs text-amber-500/80 mt-2 px-4">No sidecar model selected. Pick one in the header to enable memory.</p>
+                ) : (
+                  <p className="text-xs text-zinc-600 mt-1">Memories from your conversations will appear here</p>
+                )}
               </div>
             ) : (
               <>
@@ -337,6 +451,33 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                         <div className="text-xs text-zinc-500 line-clamp-2">
                           {memory.text || memory.content || 'Empty memory'}
                         </div>
+                        {/* Tags — filter out long garbage, truncate display */}
+                        {memory.tags && memory.tags.filter((t: string) => t.length <= 25).length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {memory.tags.filter((t: string) => t.length <= 25).slice(0, 4).map((tag: string) => (
+                              <span
+                                key={tag}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedTags(prev =>
+                                    prev.includes(tag) ? prev : [...prev, tag]
+                                  );
+                                }}
+                                className={`text-[10px] px-1.5 py-0.5 rounded border cursor-pointer transition-colors max-w-[120px] truncate ${
+                                  selectedTags.includes(tag)
+                                    ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+                                    : 'bg-zinc-800/50 text-zinc-500 border-transparent hover:text-zinc-400 hover:border-zinc-700'
+                                }`}
+                                title={tag}
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                            {memory.tags.filter((t: string) => t.length <= 25).length > 4 && (
+                              <span className="text-[10px] text-zinc-600">+{memory.tags.filter((t: string) => t.length <= 25).length - 4}</span>
+                            )}
+                          </div>
+                        )}
                         {memory.score !== undefined &&
                          memory.type !== 'book' &&
                          memory.type !== 'books' &&
@@ -418,8 +559,23 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                     selectedMemory.last_outcome === 'partial' ? 'text-yellow-400' :
                     'text-zinc-400'
                   }`}>{selectedMemory.last_outcome}</span></div>}
-                  {selectedMemory.persist_session && <div className="text-blue-400">📌 Persistent</div>}
+                  {selectedMemory.persist_session && <div className="text-blue-400">Persistent</div>}
+                  {selectedMemory.memory_type && <div>Memory Type: <span className="text-zinc-400">{selectedMemory.memory_type}</span></div>}
                 </div>
+
+                {/* Tags */}
+                {selectedMemory.tags && selectedMemory.tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {selectedMemory.tags.map((tag: string) => (
+                      <span
+                        key={tag}
+                        className="text-[10px] px-2 py-0.5 rounded bg-zinc-800/50 text-zinc-400 border border-zinc-700/50"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
 
                 {/* Full Content */}
                 <div className="text-sm text-zinc-300 whitespace-pre-wrap">
@@ -551,15 +707,15 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                 </div>
                 <div className="pl-1">
                   <p className="text-sm text-zinc-300 leading-relaxed mb-2">
-                    What you're discussing right now
+                    Recent exchanges and extracted facts
                   </p>
                   <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1.5 text-sm">
                     <span className="text-zinc-500">Lifespan:</span>
-                    <span className="text-zinc-400">24 hours</span>
+                    <span className="text-zinc-400">24 hours, then promoted or cleaned up</span>
                     <span className="text-zinc-500">What happens:</span>
-                    <span className="text-zinc-400">Good stuff gets saved, old stuff gets cleaned up</span>
-                    <span className="text-zinc-500">Example:</span>
-                    <span className="text-zinc-400">"We're brainstorming presentation ideas"</span>
+                    <span className="text-zinc-400">Sidecar summarizes exchanges and extracts atomic facts. Tagged with topic nouns for retrieval.</span>
+                    <span className="text-zinc-500">Types:</span>
+                    <span className="text-zinc-400">Summaries (exchange context) and Facts (atomic details like names, dates, preferences)</span>
                   </div>
                 </div>
               </div>
@@ -574,15 +730,15 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                 </div>
                 <div className="pl-1">
                   <p className="text-sm text-zinc-300 leading-relaxed mb-2">
-                    Past conversations and things you tried
+                    Past conversations promoted from working memory
                   </p>
                   <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1.5 text-sm">
                     <span className="text-zinc-500">Lifespan:</span>
-                    <span className="text-zinc-400">Stays until proven useful or not</span>
+                    <span className="text-zinc-400">30 days, scored by outcome</span>
                     <span className="text-zinc-500">What happens:</span>
-                    <span className="text-zinc-400">If it works repeatedly, becomes a pattern. If not, gets removed</span>
+                    <span className="text-zinc-400">Scored after each exchange by the sidecar. Proven memories promote to patterns, unhelpful ones decay.</span>
                     <span className="text-zinc-500">Example:</span>
-                    <span className="text-zinc-400">"Three different ways we explained that topic"</span>
+                    <span className="text-zinc-400">"Explained async/await with the restaurant analogy and it worked"</span>
                   </div>
                 </div>
               </div>
@@ -597,13 +753,13 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                 </div>
                 <div className="pl-1">
                   <p className="text-sm text-zinc-300 leading-relaxed mb-2">
-                    Solutions that worked really well
+                    Solutions that worked repeatedly
                   </p>
                   <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1.5 text-sm">
                     <span className="text-zinc-500">How they get here:</span>
-                    <span className="text-zinc-400">Automatically promoted when they prove valuable</span>
+                    <span className="text-zinc-400">Automatically promoted from history when proven valuable</span>
                     <span className="text-zinc-500">What happens:</span>
-                    <span className="text-zinc-400">Used first when similar problems appear</span>
+                    <span className="text-zinc-400">Permanent. Retrieved by tag matching and semantic search.</span>
                     <span className="text-zinc-500">Example:</span>
                     <span className="text-zinc-400">"Using STAR format always helps your interview answers"</span>
                   </div>
@@ -628,7 +784,7 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                     <span className="text-zinc-500">What happens:</span>
                     <span className="text-zinc-400">Always available when relevant</span>
                     <span className="text-zinc-500">Example:</span>
-                    <span className="text-zinc-400">Your favorite recipes, research papers, recipes, travel guides</span>
+                    <span className="text-zinc-400">Research papers, textbooks, recipes, travel guides</span>
                   </div>
                 </div>
               </div>
@@ -662,27 +818,27 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
                 <div className="grid gap-2.5 text-sm">
                   <div className="grid grid-cols-[auto,1fr] gap-x-3 items-start">
                     <svg className="w-4 h-4 text-blue-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
                     </svg>
-                    <span className="text-zinc-400">The AI evaluates what helps you most</span>
+                    <span className="text-zinc-400">Memories are tagged with topic nouns for precise retrieval</span>
+                  </div>
+                  <div className="grid grid-cols-[auto,1fr] gap-x-3 items-start">
+                    <svg className="w-4 h-4 text-cyan-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                    </svg>
+                    <span className="text-zinc-400">A sidecar model summarizes, extracts facts, and scores memories in the background</span>
                   </div>
                   <div className="grid grid-cols-[auto,1fr] gap-x-3 items-start">
                     <svg className="w-4 h-4 text-green-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                     </svg>
-                    <span className="text-zinc-400">Successful solutions get promoted automatically</span>
-                  </div>
-                  <div className="grid grid-cols-[auto,1fr] gap-x-3 items-start">
-                    <svg className="w-4 h-4 text-red-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                    <span className="text-zinc-400">Things that don't work get removed</span>
+                    <span className="text-zinc-400">Helpful memories get promoted, unhelpful ones decay and get removed</span>
                   </div>
                   <div className="grid grid-cols-[auto,1fr] gap-x-3 items-start">
                     <svg className="w-4 h-4 text-purple-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
-                    <span className="text-zinc-400">Learns which memories answer which questions best</span>
+                    <span className="text-zinc-400">Two-lane retrieval: 4 summaries + 4 facts = 8 memories per context</span>
                   </div>
                   </div>
               </div>
@@ -691,180 +847,6 @@ const MemoryPanelV2: React.FC<MemoryPanelV2Props> = ({
         </div>
       )}
 
-      {/* Graph Info Modal */}
-      {showGraphInfo && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => setShowGraphInfo(false)}
-        >
-          <div
-            className="bg-zinc-900 rounded-xl border border-zinc-800 w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col mx-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal Header */}
-            <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-zinc-100">Understanding the Concept Routing Map</h3>
-              <button
-                onClick={() => setShowGraphInfo(false)}
-                className="p-1 hover:bg-zinc-800 rounded transition-colors"
-              >
-                <svg className="w-5 h-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Modal Content */}
-            <div className="p-6 overflow-y-auto flex-1 min-h-0 max-h-[60vh] space-y-6">
-              {/* What is the Routing Map */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-100">What is this?</h4>
-                <p className="text-sm text-zinc-400 leading-relaxed">
-                  When you search memory or chat with Roampal, the system tracks which concepts lead to
-                  successful outcomes (you say "thanks", "worked", etc.).
-                </p>
-                <p className="text-sm text-zinc-400 leading-relaxed">
-                  Each node represents a concept the system has learned to route effectively — it knows which
-                  memory sources (books, patterns, history, working, memory_bank) tend to have the best information
-                  for that topic.
-                </p>
-              </div>
-
-              {/* Triple Knowledge Graph System (v0.2.1) */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-100">Three Types of Learning</h4>
-                <div className="space-y-2">
-                  <div className="p-3 bg-zinc-800/50 rounded-lg">
-                    <p className="text-xs font-medium text-blue-400 mb-1">Routing Graph (Query-based)</p>
-                    <p className="text-xs text-zinc-400">
-                      Learns which memory collections successfully answer queries containing specific concepts.
-                      When you search for "Python debugging", it learns that "patterns" collection has the best answers.
-                    </p>
-                  </div>
-                  <div className="p-3 bg-zinc-800/50 rounded-lg">
-                    <p className="text-xs font-medium text-green-400 mb-1">Content Graph (Memory-based)</p>
-                    <p className="text-xs text-zinc-400">
-                      Learns relationships between concepts in your memory_bank content. Tracks which ideas
-                      appear together in your saved knowledge.
-                    </p>
-                  </div>
-                  <div className="p-3 bg-zinc-800/50 rounded-lg">
-                    <p className="text-xs font-medium text-orange-400 mb-1">Action Effectiveness Graph</p>
-                    <p className="text-xs text-zinc-400">
-                      Tracks which actions (search, add, update) work best in different contexts (recall, learning, analysis).
-                      Helps the system choose smarter actions based on what's worked before.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Visual Elements */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-100">Node Colors (by Source)</h4>
-                <div className="space-y-3">
-                  <div className="flex items-start gap-3">
-                    <div className="w-3 h-3 rounded-full bg-blue-500 mt-1"></div>
-                    <div>
-                      <p className="text-sm text-zinc-300 font-medium">Blue (Query Routing)</p>
-                      <p className="text-sm text-zinc-500">Concepts learned from your search queries — knows which collections answer best</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <div className="w-3 h-3 rounded-full bg-green-500 mt-1"></div>
-                    <div>
-                      <p className="text-sm text-zinc-300 font-medium">Green (Memory Content)</p>
-                      <p className="text-sm text-zinc-500">Entities extracted from your memory_bank — tracks which ideas appear together</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <div className="w-3 h-3 rounded-full bg-purple-500 mt-1"></div>
-                    <div>
-                      <p className="text-sm text-zinc-300 font-medium">Purple (Both Graphs)</p>
-                      <p className="text-sm text-zinc-500">Concepts found in both routing and content graphs — strong signals</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <div className="w-3 h-3 rounded-full bg-orange-500 mt-1"></div>
-                    <div>
-                      <p className="text-sm text-zinc-300 font-medium">Orange (Action Patterns)</p>
-                      <p className="text-sm text-zinc-500">Action effectiveness patterns — which operations work in which contexts</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 h-0.5 bg-zinc-600 mt-2"></div>
-                    <div>
-                      <p className="text-sm text-zinc-300 font-medium">Lines (Connections)</p>
-                      <p className="text-sm text-zinc-500">Concepts that appear together in successful query-answer pairs</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <div className="w-4 h-4 rounded-full bg-zinc-600 mt-1 flex items-center justify-center text-xs font-bold text-zinc-300">
-                      S
-                    </div>
-                    <div>
-                      <p className="text-sm text-zinc-300 font-medium">Node Size</p>
-                      <p className="text-sm text-zinc-500">Larger = √usage × √quality (balances frequency and success rate)</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Node Information */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-100">When You Click a Concept</h4>
-                <div className="p-4 bg-zinc-800/50 rounded-lg space-y-2">
-                  <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-2 text-sm">
-                    <span className="text-zinc-500">Quality Score:</span>
-                    <span className="text-zinc-400">Percentage of queries where this concept found helpful answers</span>
-                    <span className="text-zinc-500">Usage Count:</span>
-                    <span className="text-zinc-400">How many memory searches included this concept</span>
-                    <span className="text-zinc-500">Hybrid Score:</span>
-                    <span className="text-zinc-400">√usage × √quality (determines node size)</span>
-                    <span className="text-zinc-500">Best Memory Type:</span>
-                    <span className="text-zinc-400">Which collection (books/patterns/history/working/memory_bank) performs best for this concept</span>
-                    <span className="text-zinc-500">Related Concepts:</span>
-                    <span className="text-zinc-400">Other concepts that appear together in successful searches</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* How It Works Example */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-100">How It Works (Example)</h4>
-                <div className="p-3 bg-zinc-800/30 rounded-lg">
-                  <ol className="text-xs text-zinc-400 space-y-1.5 list-decimal list-inside">
-                    <li>You search for "Python debugging"</li>
-                    <li>System identifies key concepts: "Python", "debugging"</li>
-                    <li>Checks which collections answered similar queries successfully</li>
-                    <li>Searches those collections first (e.g., "patterns" if you've solved Python bugs before)</li>
-                    <li>Based on your feedback ("that worked!"), updates routing strategy</li>
-                  </ol>
-                </div>
-              </div>
-
-              {/* How It Learns */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-100">How It Improves</h4>
-                <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1.5 text-sm">
-                  <span className="text-zinc-500">Learning:</span>
-                  <span className="text-zinc-400">Tracks which memory collections successfully answer queries</span>
-                  <span className="text-zinc-500">Connections:</span>
-                  <span className="text-zinc-400">Links concepts that appear together in successful searches</span>
-                  <span className="text-zinc-500">Cleanup:</span>
-                  <span className="text-zinc-400">Removes outdated routing patterns automatically</span>
-                </div>
-              </div>
-
-              {/* Important Note */}
-              <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-                <p className="text-sm text-blue-400">
-                  <strong>Note:</strong> This is a routing optimizer, not a content store. It helps the AI find information faster by learning which memory sources work best for different topics. The actual content lives in your memory collections.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

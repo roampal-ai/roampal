@@ -1,7 +1,7 @@
 """
 Unit Tests for SearchService
 
-Tests the extracted search logic.
+Tests the TagCascade search pipeline (v0.3.1).
 """
 
 import sys
@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from modules.memory.search_service import SearchService
 from modules.memory.scoring_service import ScoringService
 from modules.memory.routing_service import RoutingService
-from modules.memory.knowledge_graph_service import KnowledgeGraphService
+from modules.memory.tag_service import TagService
 from modules.memory.config import MemoryConfig
 
 
@@ -36,15 +36,15 @@ class TestSearchServiceInit:
         }
         scoring = MagicMock(spec=ScoringService)
         routing = MagicMock(spec=RoutingService)
-        kg = MagicMock(spec=KnowledgeGraphService)
-        kg.knowledge_graph = {"routing_patterns": {}, "context_action_effectiveness": {}}
+        tag_service = MagicMock(spec=TagService)
+        tag_service.match_query_tags = MagicMock(return_value=[])
         embed_fn = AsyncMock(return_value=[0.1] * 384)
 
         return {
             "collections": collections,
             "scoring_service": scoring,
             "routing_service": routing,
-            "kg_service": kg,
+            "tag_service": tag_service,
             "embed_fn": embed_fn,
         }
 
@@ -54,13 +54,17 @@ class TestSearchServiceInit:
         assert service.collections == mock_dependencies["collections"]
         assert service.scoring_service == mock_dependencies["scoring_service"]
         assert service.routing_service == mock_dependencies["routing_service"]
-        assert service.kg_service == mock_dependencies["kg_service"]
+        assert service.tag_service == mock_dependencies["tag_service"]
 
-    def test_init_with_optional_reranker(self, mock_dependencies):
-        """Should accept optional reranker."""
-        mock_reranker = MagicMock()
-        service = SearchService(**mock_dependencies, reranker=mock_reranker)
-        assert service.reranker == mock_reranker
+    def test_init_accepts_kwargs(self, mock_dependencies):
+        """Should accept extra kwargs for backward compat."""
+        service = SearchService(**mock_dependencies, reranker=MagicMock())
+        assert service is not None
+
+    def test_ce_candidate_pool_is_40(self, mock_dependencies):
+        """v0.3.1: CE candidate pool should be 40."""
+        service = SearchService(**mock_dependencies)
+        assert service.CE_CANDIDATE_POOL == 40
 
 
 class TestMainSearch:
@@ -91,12 +95,8 @@ class TestMainSearch:
         routing.route_query = MagicMock(return_value=["working", "history"])
         routing.preprocess_query = MagicMock(side_effect=lambda x: x)
 
-        kg = MagicMock(spec=KnowledgeGraphService)
-        kg.knowledge_graph = {"routing_patterns": {}, "context_action_effectiveness": {}}
-        kg.find_known_solutions = AsyncMock(return_value=[])
-        kg.extract_concepts = MagicMock(return_value=["test"])
-        kg.content_graph = MagicMock()
-        kg.content_graph._doc_entities = {}
+        tag_service = MagicMock(spec=TagService)
+        tag_service.match_query_tags = MagicMock(return_value=[])
 
         embed_fn = AsyncMock(return_value=[0.1] * 384)
 
@@ -104,7 +104,7 @@ class TestMainSearch:
             collections=collections,
             scoring_service=scoring,
             routing_service=routing,
-            kg_service=kg,
+            tag_service=tag_service,
             embed_fn=embed_fn,
         )
 
@@ -139,6 +139,12 @@ class TestMainSearch:
         mock_service.scoring_service.apply_scoring_to_results.assert_called()
 
     @pytest.mark.asyncio
+    async def test_search_checks_tags(self, mock_service):
+        """v0.3.1: Should check for matching tags before search."""
+        await mock_service.search("test query", limit=5)
+        mock_service.tag_service.match_query_tags.assert_called_with("test query")
+
+    @pytest.mark.asyncio
     async def test_search_returns_list_by_default(self, mock_service):
         """Should return list when return_metadata=False."""
         result = await mock_service.search("test query", limit=5)
@@ -162,7 +168,6 @@ class TestMainSearch:
     @pytest.mark.asyncio
     async def test_search_handles_empty_query(self, mock_service):
         """Empty query should return all items."""
-        # Mock get for empty query path
         for coll in mock_service.collections.values():
             coll.collection = MagicMock()
             coll.collection.get = MagicMock(return_value={
@@ -175,123 +180,20 @@ class TestMainSearch:
         assert len(result) > 0
 
 
-class TestEntityBoost:
-    """Test entity boost calculation."""
-
-    @pytest.fixture
-    def mock_service(self):
-        """Create SearchService with entity mocks."""
-        kg = MagicMock(spec=KnowledgeGraphService)
-        kg.extract_concepts = MagicMock(return_value=["python", "django"])
-        kg.content_graph = MagicMock()
-        kg.content_graph._doc_entities = {
-            "doc_1": {"python", "django", "web"},
-        }
-        kg.content_graph.entities = {
-            "python": {"avg_quality": 0.9},
-            "django": {"avg_quality": 0.8},
-        }
-        kg.knowledge_graph = {"routing_patterns": {}, "context_action_effectiveness": {}}
-
-        return SearchService(
-            collections={},
-            scoring_service=MagicMock(),
-            routing_service=MagicMock(),
-            kg_service=kg,
-            embed_fn=AsyncMock(),
-        )
-
-    def test_entity_boost_with_matches(self, mock_service):
-        """Should boost documents with matching high-quality entities."""
-        boost = mock_service._calculate_entity_boost("python django", "doc_1")
-        # python (0.9) + django (0.8) = 1.7 quality
-        # boost = 1.0 + min(1.7 * 0.2, 0.5) = 1.0 + 0.34 = 1.34
-        assert boost > 1.0
-        assert boost <= 1.5
-
-    def test_entity_boost_no_matches(self, mock_service):
-        """Should return 1.0 when no entity matches."""
-        boost = mock_service._calculate_entity_boost("python django", "doc_unknown")
-        assert boost == 1.0
-
-    def test_entity_boost_empty_query(self, mock_service):
-        """Should return 1.0 for empty query."""
-        mock_service.kg_service.extract_concepts = MagicMock(return_value=[])
-        boost = mock_service._calculate_entity_boost("", "doc_1")
-        assert boost == 1.0
-
-
-class TestDocEffectiveness:
-    """Test document effectiveness calculation."""
-
-    @pytest.fixture
-    def mock_service(self):
-        """Create SearchService with effectiveness data."""
-        kg = MagicMock(spec=KnowledgeGraphService)
-        kg.knowledge_graph = {
-            "routing_patterns": {},
-            "context_action_effectiveness": {
-                "context|action|coll": {
-                    "examples": [
-                        {"doc_id": "doc_1", "outcome": "worked"},
-                        {"doc_id": "doc_1", "outcome": "worked"},
-                        {"doc_id": "doc_1", "outcome": "failed"},
-                        {"doc_id": "doc_2", "outcome": "partial"},
-                    ]
-                }
-            }
-        }
-
-        return SearchService(
-            collections={},
-            scoring_service=MagicMock(),
-            routing_service=MagicMock(),
-            kg_service=kg,
-            embed_fn=AsyncMock(),
-        )
-
-    def test_doc_effectiveness_calculates_rate(self, mock_service):
-        """Should calculate success rate correctly."""
-        eff = mock_service.get_doc_effectiveness("doc_1")
-        assert eff is not None
-        assert eff["successes"] == 2
-        assert eff["failures"] == 1
-        assert eff["total_uses"] == 3
-        # success_rate = (2 + 0) / 3 = 0.667
-        assert abs(eff["success_rate"] - 0.667) < 0.01
-
-    def test_doc_effectiveness_unknown_doc(self, mock_service):
-        """Should return None for unknown document."""
-        eff = mock_service.get_doc_effectiveness("unknown_doc")
-        assert eff is None
-
-    def test_doc_effectiveness_partial_counts(self, mock_service):
-        """Should count partial as 0.5 success."""
-        eff = mock_service.get_doc_effectiveness("doc_2")
-        assert eff is not None
-        assert eff["partials"] == 1
-        # success_rate = (0 + 1*0.5) / 1 = 0.5
-        assert eff["success_rate"] == 0.5
-
-
 class TestCollectionBoosts:
     """Test collection-specific distance boosts."""
 
     @pytest.fixture
     def service(self):
         """Create SearchService."""
-        kg = MagicMock(spec=KnowledgeGraphService)
-        kg.extract_concepts = MagicMock(return_value=[])
-        kg.content_graph = MagicMock()
-        kg.content_graph._doc_entities = {}
-        kg.content_graph.entities = {}
-        kg.knowledge_graph = {"routing_patterns": {}, "context_action_effectiveness": {}}
+        tag_service = MagicMock(spec=TagService)
+        tag_service.match_query_tags = MagicMock(return_value=[])
 
         return SearchService(
             collections={},
             scoring_service=MagicMock(),
             routing_service=MagicMock(),
-            kg_service=kg,
+            tag_service=tag_service,
             embed_fn=AsyncMock(),
         )
 
@@ -329,15 +231,14 @@ class TestCaching:
     @pytest.fixture
     def service(self):
         """Create SearchService."""
-        kg = MagicMock(spec=KnowledgeGraphService)
-        kg.extract_concepts = MagicMock(return_value=["test"])
-        kg.knowledge_graph = {"routing_patterns": {}}
+        tag_service = MagicMock(spec=TagService)
+        tag_service.match_query_tags = MagicMock(return_value=[])
 
         return SearchService(
             collections={},
             scoring_service=MagicMock(),
             routing_service=MagicMock(),
-            kg_service=kg,
+            tag_service=tag_service,
             embed_fn=AsyncMock(),
         )
 
@@ -373,6 +274,24 @@ class TestCaching:
         assert service.get_cached_doc_ids("session_2") == ["doc_2"]
 
 
+class TestMergeFilters:
+    """Test filter merging for tag queries."""
+
+    def test_merge_tag_only(self):
+        """Should return tag filter when no metadata filters."""
+        tag_filter = {"noun_tags": {"$contains": '"python"'}}
+        result = SearchService._merge_filters(tag_filter, None)
+        assert result == tag_filter
+
+    def test_merge_with_metadata(self):
+        """Should combine with $and when metadata filters present."""
+        tag_filter = {"noun_tags": {"$contains": '"python"'}}
+        metadata = {"status": {"$ne": "archived"}}
+        result = SearchService._merge_filters(tag_filter, metadata)
+        assert "$and" in result
+        assert len(result["$and"]) == 2
+
+
 class TestParseNumeric:
     """Test numeric parsing helper."""
 
@@ -382,7 +301,7 @@ class TestParseNumeric:
             collections={},
             scoring_service=MagicMock(),
             routing_service=MagicMock(),
-            kg_service=MagicMock(),
+            tag_service=MagicMock(),
             embed_fn=AsyncMock(),
         )
 

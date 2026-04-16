@@ -5,9 +5,11 @@ interface ToastProps {
   type: 'success' | 'error' | 'info';
   onClose: () => void;
   duration?: number;
+  action?: string;
+  onAction?: () => void;
 }
 
-export const Toast: React.FC<ToastProps> = ({ message, type, onClose, duration = 4000 }) => {
+export const Toast: React.FC<ToastProps> = ({ message, type, onClose, duration = 4000, action, onAction }) => {
   useEffect(() => {
     const timer = setTimeout(() => {
       onClose();
@@ -50,7 +52,17 @@ export const Toast: React.FC<ToastProps> = ({ message, type, onClose, duration =
     <div className="fixed top-4 right-4 z-[100] animate-in slide-in-from-top-2 duration-300">
       <div className={`flex items-start gap-3 p-4 rounded-lg border ${typeStyles[type]} bg-zinc-800 shadow-2xl max-w-md`}>
         <div className={iconColors[type]}>{icons[type]}</div>
-        <div className="flex-1 text-sm text-zinc-200 whitespace-pre-wrap">{message}</div>
+        <div className="flex-1">
+          <div className="text-sm text-zinc-200 whitespace-pre-wrap">{message}</div>
+          {action && onAction && (
+            <button
+              onClick={onAction}
+              className="mt-1.5 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              {action} &rarr;
+            </button>
+          )}
+        </div>
         <button
           onClick={onClose}
           className="text-zinc-400 hover:text-zinc-200 transition-colors flex-shrink-0"

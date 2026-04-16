@@ -31,6 +31,7 @@ import { SettingsModal } from './SettingsModal';
 import { OllamaRequiredModal } from './OllamaRequiredModal';
 import { PersonalityCustomizer } from './PersonalityCustomizer';
 import MemoryStatsPanel from './MemoryStatsPanel';
+import { Toast } from './Toast';
 
 /**
  * Neural UI with all features properly integrated
@@ -72,7 +73,7 @@ export const ConnectedChat: React.FC = () => {
   const [installedModelsMetadata, setInstalledModelsMetadata] = useState<Array<any>>([]);
   const [isSwitchingModel, setIsSwitchingModel] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
-  const [showProviderDropdown, setShowProviderDropdown] = useState(false);
+  const [customPullName, setCustomPullName] = useState('');
   const [showModelInstallModal, setShowModelInstallModal] = useState(false);
   const [installingModelName, setInstallingModelName] = useState<string | null>(null);
   const [installingProvider, setInstallingProvider] = useState<'ollama' | 'lmstudio' | null>(null);
@@ -85,6 +86,11 @@ export const ConnectedChat: React.FC = () => {
   const [providerSwitchPending, setProviderSwitchPending] = useState<'ollama' | 'lmstudio' | null>(null);
   const [isLoadingModels, setIsLoadingModels] = useState(true);  // v0.2.9: Convert ref to state for loading UI
   const [showOllamaRequired, setShowOllamaRequired] = useState(false);
+
+  // v0.3.1: Sidecar model state
+  const [sidecarModel, setSidecarModel] = useState(() => localStorage.getItem('sidecarModel') || '');
+  const [showSidecarDropdown, setShowSidecarDropdown] = useState(false);
+  const [sidecarError, setSidecarError] = useState('');
 
   // GPU/VRAM and quantization selection state
   const [gpuInfo, setGpuInfo] = useState<{
@@ -325,6 +331,44 @@ export const ConnectedChat: React.FC = () => {
     }
   }, [availableModels, isLoadingModels]);
 
+  // v0.3.1.3: Auto-switch to first available chat model when backend has none
+  // Runs after availableModels is populated (avoids race with parallel fetchModels/fetchCurrentModel)
+  const autoSwitchAttempted = React.useRef(false);
+  useEffect(() => {
+    if (availableModels.length === 0 || autoSwitchAttempted.current) return;
+
+    const tryAutoSwitch = async () => {
+      try {
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/current`);
+        if (!response.ok) return;
+        const data = await response.json();
+
+        const nonLLMs = ['llava', 'nomic-embed', 'bge-', 'all-minilm', 'mxbai-embed'];
+        const isEmbeddingModel = data.current_model && (
+          nonLLMs.some(excluded => data.current_model.toLowerCase().includes(excluded)) ||
+          data.is_embedding_model === true ||
+          data.can_chat === false
+        );
+
+        if (!data.current_model || isEmbeddingModel) {
+          const chatModels = availableModels.filter(m =>
+            !nonLLMs.some(excluded => m.name.toLowerCase().includes(excluded))
+          );
+          if (chatModels.length > 0) {
+            const firstModel = chatModels[0];
+            console.log(`[Models] Auto-switching to ${firstModel.name} (${firstModel.provider}) — backend had no chat model`);
+            autoSwitchAttempted.current = true;
+            await performModelSwitch(firstModel.name);
+          }
+        }
+      } catch (error) {
+        console.error('[Models] Auto-switch check failed:', error);
+      }
+    };
+
+    tryAutoSwitch();
+  }, [availableModels]);
+
   // Function to get current model from backend
   const fetchCurrentModel = async () => {
     try {
@@ -342,28 +386,19 @@ export const ConnectedChat: React.FC = () => {
           data.can_chat === false
         );
 
-        const needsAutoSwitch = !data.current_model || isEmbeddingModel;
-
-        if (data.current_model && !isEmbeddingModel) {
+        if (data.current_model && !(
+          data.current_model.includes('nomic-embed') ||
+          data.current_model.includes('bge-') ||
+          data.current_model.includes('all-minilm') ||
+          data.current_model.includes('llava') ||
+          data.is_embedding_model === true ||
+          data.can_chat === false
+        )) {
           // Backend has a valid chat model
           setSelectedModel(data.current_model);
           localStorage.setItem('selectedLLMModel', data.current_model);
-        } else if (needsAutoSwitch) {
-          // Backend has no model, or has embedding-only model - auto-switch to first chat model
-          const reason = !data.current_model ? 'no current model' : 'embedding-only model';
-          console.log(`[Models] Backend has ${reason}, finding first available chat model...`);
-          const nonLLMs = ['llava', 'nomic-embed', 'bge-', 'all-minilm', 'mxbai-embed'];
-          const chatModels = availableModels.filter((m: any) =>
-            !nonLLMs.some(excluded => m.name.toLowerCase().includes(excluded))
-          );
-
-          if (chatModels.length > 0) {
-            const firstModel = chatModels[0];
-            console.log(`[Models] Auto-switching to first available chat model: ${firstModel.name} (${firstModel.provider})`);
-            // Switch to it on backend
-            await performModelSwitch(firstModel.name);
-          }
         }
+        // Auto-switch handled by separate effect (avoids race with fetchModels)
 
         // Sync provider from backend (source of truth)
         if (data.provider) {
@@ -601,9 +636,11 @@ export const ConnectedChat: React.FC = () => {
   const [downloadDetails, setDownloadDetails] = useState({ downloaded: '', total: '', speed: '' });
   const [downloadAbortController, setDownloadAbortController] = useState<AbortController | null>(null);
 
-  const handleInstallModel = async (modelName: string) => {
+  // v0.3.1: Added targetProvider param so callers can specify provider explicitly
+  const handleInstallModel = async (modelName: string, targetProvider?: 'ollama' | 'lmstudio') => {
+    const provider = targetProvider || viewProvider;
     setInstallingModelName(modelName);
-    setInstallingProvider(viewProvider); // Use viewProvider (which tab user is on) not selectedProvider (active model)
+    setInstallingProvider(provider);
     setShowInstallPopup(true);
     setInstallProgress(`Initializing download for ${modelName}...`);
     setDownloadProgress(0);
@@ -679,6 +716,12 @@ export const ConnectedChat: React.FC = () => {
                       // Use data.model if provided (LM Studio returns actual model ID), otherwise use modelName
                       const modelIdToSwitch = data.model || modelName;
                       performModelSwitch(modelIdToSwitch);
+                      // v0.3.1.3: After first model install, prompt sidecar setup if not configured
+                      if (!sidecarModel) {
+                        setTimeout(() => {
+                          setShowSidecarToast(true);
+                        }, 3000); // Give model switch 3s to settle
+                      }
                     }
                     // Else: subsequent install - toast already shows success, user switches manually
                   });
@@ -758,13 +801,12 @@ export const ConnectedChat: React.FC = () => {
       // Use SSE for dev mode (original implementation)
       console.log('[Model Install] Using SSE for development mode');
 
-      // Route to correct endpoint based on which provider tab user is viewing
-      // (NOT selectedProvider - that's the active model, viewProvider is which library tab they're on)
-      const endpoint = viewProvider === 'lmstudio'
+      // v0.3.1: Route based on explicit provider param (was viewProvider tab)
+      const endpoint = provider === 'lmstudio'
         ? `${ROAMPAL_CONFIG.apiUrl}/api/model/download-gguf-stream`
         : `${ROAMPAL_CONFIG.apiUrl}/api/model/pull-stream`;
 
-      console.log(`[Model Install] View Provider: ${viewProvider}, Endpoint: ${endpoint}`);
+      console.log(`[Model Install] Provider: ${provider}, Endpoint: ${endpoint}`);
 
       const response = await apiFetch(endpoint, {
         method: 'POST',
@@ -936,6 +978,15 @@ export const ConnectedChat: React.FC = () => {
     }
   };
 
+  // v0.3.1: Pull any model from Ollama by name
+  const handleOllamaPull = () => {
+    let name = customPullName.trim();
+    if (!name) return;
+    if (!name.includes(':')) name += ':latest'; // Backend requires name:tag format
+    handleInstallModel(name, 'ollama');
+    setCustomPullName('');
+  };
+
   // Handle model uninstallation - show confirmation modal
   const handleUninstallModel = (modelName: string, provider: 'ollama' | 'lmstudio') => {
     setUninstallConfirmModel({ name: modelName, provider });
@@ -1065,54 +1116,32 @@ export const ConnectedChat: React.FC = () => {
     'mistral:7b': 32768,
   };
 
-  // Models categorized by capability (Updated December 2025 - Tool Capable Only)
+  // v0.3.1: Popular models with verified tool calling support.
+  // Sources: ollama.com/search?c=tools, community testing (clawdbook, morphllm, collabnix)
+  // Tool calling quality varies by model — not controlled by Roampal.
   const curatedModels = [
-    // Recommended for Chat + Memory - Models with verified tool calling support
     {
-      category: 'Recommended for Chat + Memory',
-      description: 'Models with native tool calling support for Roampal\'s memory system',
+      category: 'Chat Models',
+      description: 'Models with verified tool calling support. 14B+ recommended — smaller models may have inconsistent tool use.',
       icon: 'sparkles',
       models: [
-        // OpenAI Open Source
-        { name: 'gpt-oss:120b', description: 'OpenAI\'s flagship open model - Native tools', size: '80GB', tokens: 128000, agentCapable: true, license: 'Apache 2.0', badge: 'top' },
-        { name: 'gpt-oss:20b', description: 'OpenAI\'s efficient model - Excellent tools', size: '16GB', tokens: 128000, agentCapable: true, license: 'Apache 2.0', badge: 'recommended' },
-
-        // Meta Llama 4 Series - MoE with massive context
-        { name: 'llama4:scout', description: 'MoE 109B - 10M context, native tools', size: '65GB', tokens: 10000000, agentCapable: true, license: 'Meta License', badge: 'top' },
-        { name: 'llama4:maverick', description: 'MoE 401B - 128 experts, 1M context', size: '243GB', tokens: 1000000, agentCapable: true, license: 'Meta License' },
-
-        // Meta Llama 3 Series (Tool Support)
-        { name: 'llama3.3:70b', description: 'Meta\'s latest 70B - Native tools, 128K context', size: '43GB', tokens: 131072, agentCapable: true, license: 'Meta License' },
-
-        // Qwen3 Series (Native Hermes tools)
-        { name: 'qwen3:32b', description: 'Alibaba flagship - Native Hermes tools', size: '20GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0', badge: 'recommended' },
-        { name: 'qwen3-coder:30b', description: 'MoE 30B - 256K context, tool calling', size: '18GB', tokens: 262144, agentCapable: true, license: 'Apache 2.0', badge: 'recommended' },
-
-        // Qwen 2.5 Series (Best Tool Support)
-        { name: 'qwen2.5:72b', description: 'Massive Qwen - Superior tool calling', size: '41GB', tokens: 32768, agentCapable: true, license: 'Qwen License' },
-        { name: 'qwen2.5:32b', description: 'Powerful Qwen - Excellent tools', size: '20GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
-        { name: 'qwen2.5:14b', description: 'Larger Qwen - Great tool performance', size: '9.0GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
-
-        // Mistral Family
-        { name: 'mixtral:8x7b', description: 'MoE architecture with native tools', size: '26GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
+        { name: 'qwen3:32b', description: 'Stable tool calling, top-tier performance', size: '20GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
+        { name: 'gemma4:26b', description: 'Native function calling, multimodal', size: '17GB', tokens: 131072, agentCapable: true, license: 'Gemma License' },
+        { name: 'gpt-oss:20b', description: 'OpenAI open-weight, clean tool calling', size: '14GB', tokens: 131072, agentCapable: true, license: 'Apache 2.0' },
+        { name: 'qwen2.5:14b', description: 'Reliable tools, moderate VRAM', size: '9.0GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
+        { name: 'gemma4', description: 'Gemma 4 8B — native tools, lower VRAM', size: '9.6GB', tokens: 131072, agentCapable: true, license: 'Gemma License' },
       ]
     },
-
-
-    // Lightweight & Tool-Capable - Smaller models that still support tools
     {
-      category: 'Lightweight & Tool-Capable',
-      description: 'Smaller models (≤8B) may struggle with complex reasoning and reliable tool calling when many tools are loaded. May output tool JSON as text instead of invoking tools. ⚠️ Use qwen2.5:14b or larger for production.',
-      icon: 'chat-bubble-left-right',
+      category: 'Sidecar Models',
+      description: 'For background memory processing. Sidecar does not use tool calling — any model works.',
+      icon: 'cog',
       models: [
-        // Small but capable - with warnings
-        { name: 'qwen2.5:7b', description: '⚠️ Tool calling may be unreliable', size: '4.7GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
-        { name: 'llama3.1:8b', description: '⚠️ Unreliable tool calling', size: '4.7GB', tokens: 131072, agentCapable: true, license: 'Meta License' },
-        { name: 'qwen2.5:3b', description: '⚠️ May have inconsistent tool calling', size: '1.9GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
-        { name: 'llama3.2:3b', description: '⚠️ May output JSON instead of calling tools', size: '2.0GB', tokens: 131072, agentCapable: true, license: 'Meta License' },
-
+        { name: 'gpt-oss:20b', description: 'Benchmark validated sidecar', size: '14GB', tokens: 131072, agentCapable: true, license: 'Apache 2.0' },
+        { name: 'qwen2.5:7b', description: 'Fast, low VRAM', size: '4.7GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
+        { name: 'qwen2.5:3b', description: 'Ultra-light', size: '1.9GB', tokens: 32768, agentCapable: true, license: 'Apache 2.0' },
       ]
-    }
+    },
   ];
 
   // Close dropdown on click outside
@@ -1129,6 +1158,66 @@ export const ConnectedChat: React.FC = () => {
       return () => document.removeEventListener('click', handleClickOutside);
     }
   }, [showModelDropdown]);
+
+  // v0.3.1: Close sidecar dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.sidecar-dropdown-container')) {
+        setShowSidecarDropdown(false);
+      }
+    };
+
+    if (showSidecarDropdown) {
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
+    }
+  }, [showSidecarDropdown]);
+
+  // v0.3.1.3: Sync sidecar state — re-initialize if frontend has model but backend lost it
+  useEffect(() => {
+    const syncSidecar = async () => {
+      try {
+        const resp = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/status`);
+        if (resp.ok) {
+          const data = await resp.json();
+          // Track sidecar errors
+          setSidecarError(data.last_error || '');
+
+          if (data.enabled && data.model) {
+            // Backend has sidecar — sync to frontend
+            setSidecarModel(data.model);
+            localStorage.setItem('sidecarModel', data.model);
+          } else {
+            // Backend lost sidecar — re-initialize from localStorage if we have one
+            const saved = localStorage.getItem('sidecarModel');
+            if (saved) {
+              console.log(`[Sidecar] Re-initializing ${saved} from localStorage`);
+              const provider = saved.includes(':') ? 'ollama' : 'ollama';
+              await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/set`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: saved, provider }),
+              });
+              setSidecarModel(saved);
+            }
+          }
+        }
+      } catch {}
+    };
+    syncSidecar();
+    // Poll sidecar status every 30s to catch errors
+    const interval = setInterval(async () => {
+      try {
+        const resp = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/status`);
+        if (resp.ok) {
+          const data = await resp.json();
+          setSidecarError(data.last_error || '');
+        }
+      } catch {}
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Get model options with descriptions
   const getModelOptions = () => {
@@ -1177,9 +1266,8 @@ export const ConnectedChat: React.FC = () => {
     // Filter out non-LLM models (embedding, vision, etc.)
     const nonLLMs = ['llava', 'nomic-embed', 'bge-', 'all-minilm', 'mxbai-embed'];
 
-    // Filter by selected provider AND exclude non-LLMs
+    // v0.3.1: Show ALL models from ALL providers (model-first, not provider-first)
     const filteredModels = availableModels.filter(model =>
-      model.provider === selectedProvider &&
       !nonLLMs.some(excluded => model.name.toLowerCase().includes(excluded))
     );
 
@@ -1187,14 +1275,44 @@ export const ConnectedChat: React.FC = () => {
       const modelName = model.name;
       const isAgentCapable = MODEL_TOKEN_LIMITS[modelName] && MODEL_TOKEN_LIMITS[modelName] >= 12000;
       const baseDescription = modelDescriptions[modelName] || 'Custom model';
+      const providerLabel = model.provider === 'lmstudio' ? 'LM Studio' : 'Ollama';
 
       return {
         value: modelName,
         label: modelName.split(':')[0].replace(/-/g, ' '),
-        description: baseDescription,
-        agentCapable: isAgentCapable
+        description: `${baseDescription} • ${providerLabel}`,
+        agentCapable: isAgentCapable,
+        provider: model.provider as 'ollama' | 'lmstudio',
       };
     });
+  };
+
+  // v0.3.1: Group models for sidecar selection (small models recommended)
+  const getSidecarModelOptions = () => {
+    const all = getModelOptions().map(m => ({
+      ...m,
+      // Strip tool-calling warnings — sidecar doesn't use tools
+      description: m.description
+        ?.replace(/⚠️\s*Tool calling may be unreliable/g, '')
+        ?.replace(/⚠️\s*Unreliable tools\s*•\s*Use \S+/g, '')
+        ?.replace(/⚠️\s*May output JSON instead of calling tools/g, '')
+        ?.replace(/•\s*Native tools/g, '')
+        ?.replace(/•\s*Excellent tools/g, '')
+        ?.replace(/•\s*Great tools/g, '')
+        ?.replace(/•\s*Superior tools/g, '')
+        ?.replace(/•\s*Tool calling/g, '')
+        ?.replace(/•\s*tool support/g, '')
+        ?.replace(/\s+•\s*$/g, '')
+        ?.trim(),
+    }));
+    const parseSize = (name: string): number => {
+      const m = name.match(/:(\d+(?:\.\d+)?)b/i);
+      return m ? parseFloat(m[1]) : 999;
+    };
+    return {
+      recommended: all.filter(m => parseSize(m.value) <= 7),
+      others: all.filter(m => parseSize(m.value) > 7),
+    };
   };
 
   // Check if chat model is available (from ANY provider, not just selected one)
@@ -1220,6 +1338,7 @@ export const ConnectedChat: React.FC = () => {
   const [lastMemoryRefresh, setLastMemoryRefresh] = useState<Date | null>(null);
   const [knowledgeGraphData, setKnowledgeGraphData] = useState<any>({ concepts: 0, relationships: 0 });
   const [kgHasLoaded, setKgHasLoaded] = useState(false);  // v0.2.9: Lazy load KG only when panel opens
+  const [selectedTags, setSelectedTags] = useState<string[]>([]); // Tag filtering state
   const activeMemories = localMemories.length > 0 ? localMemories : (currentState?.memories || []);
 
   // Ref to track if title regeneration has been triggered (to prevent duplicates)
@@ -1333,6 +1452,11 @@ export const ConnectedChat: React.FC = () => {
   // Essential UI states only
   const [showSettings, setShowSettings] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<'integrations' | undefined>(undefined);
+  const [settingsDataTab, setSettingsDataTab] = useState<'summarize' | undefined>(undefined);
+  const [showMigrationToast, setShowMigrationToast] = useState(false);
+  const [migrationCount, setMigrationCount] = useState(0);
+  const [showSidecarToast, setShowSidecarToast] = useState(false);
+  const sidecarToastShown = React.useRef(false);
   const [showDevPanel, setShowDevPanel] = useState(false);
   const [showPersonalityCustomizer, setShowPersonalityCustomizer] = useState(false);
   const [showMemoryStats, setShowMemoryStats] = useState(false);
@@ -1457,6 +1581,36 @@ export const ConnectedChat: React.FC = () => {
       fetchBackendUsers();
     }
   }, [showSettings]);
+
+  // v0.3.1: One-time migration toast — scan for unsummarized memories on connect
+  useEffect(() => {
+    if (connectionStatus !== 'connected') return;
+    if (localStorage.getItem('roampal_migration_toast_dismissed')) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/data/summarize/scan`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.total > 0 && data.sidecar_configured) {
+            setMigrationCount(data.total);
+            setShowMigrationToast(true);
+          }
+        }
+      } catch { /* silent */ }
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, [connectionStatus]);
+
+  // v0.3.1.3: Toast when user chats without sidecar — once per session
+  useEffect(() => {
+    const messages = currentState?.messages || [];
+    if (!sidecarModel && messages.length >= 2 && !sidecarToastShown.current) {
+      sidecarToastShown.current = true;
+      setShowSidecarToast(true);
+    }
+  }, [sidecarModel, currentState?.messages?.length]);
 
   // WebSocket connection is managed by useChatStore to prevent duplicates
 
@@ -1614,7 +1768,14 @@ export const ConnectedChat: React.FC = () => {
           score,
           relevance: score,
           session_id: f.session_id || f.metadata?.session_id,
-          tags: f.tags || f.metadata?.tags || [],
+          tags: (() => {
+            // Parse noun_tags from metadata (stored as JSON string)
+            const raw = f.metadata?.noun_tags;
+            if (!raw) return f.tags || [];
+            if (Array.isArray(raw)) return raw;
+            try { return JSON.parse(raw); } catch { return []; }
+          })(),
+          memory_type: f.metadata?.memory_type || null,
           usefulness_score: f.usefulness_score || f.metadata?.usefulness_score,
           sentiment_score: f.sentiment_score || f.metadata?.sentiment_score,
           uses: f.uses || f.metadata?.uses,
@@ -1645,10 +1806,17 @@ export const ConnectedChat: React.FC = () => {
 
   // Fetch knowledge graph from Roampal backend
   const fetchKnowledgeGraph = useCallback(async () => {
+    // KG removed in v0.3.1 — set empty state without API call
+    setKnowledgeGraphData({
+      concepts: 0,
+      relationships: 0,
+      activeTopics: [],
+      nodes: []
+    });
+    return;
+    // Dead code below — KG endpoint removed
     try {
       console.log('[Knowledge Graph] Fetching from Roampal backend');
-
-      // Roampal has a unified knowledge graph
       const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory/knowledge-graph`);
 
       if (!response.ok) {
@@ -1905,82 +2073,21 @@ export const ConnectedChat: React.FC = () => {
               )}
             </div>
 
-            {/* Provider & Model Selectors */}
+            {/* v0.3.1: Model-first — no provider toggle, models show provider badge */}
             <div className="flex items-center gap-2">
-              {/* Provider Selector - only show when both providers have models installed */}
-              {availableProviders.filter(p => p.available).length > 1 &&
-                availableModels.some(m => m.provider === 'ollama') &&
-                availableModels.some(m => m.provider === 'lmstudio') && (
-                  <div className="relative">
-                    <button
-                      onClick={() => setShowProviderDropdown(!showProviderDropdown)}
-                      className="flex items-center gap-1 px-2 py-1 text-xs bg-zinc-800/50 hover:bg-zinc-700/50 border border-zinc-700/50 hover:border-zinc-600 rounded-lg transition-all focus:outline-none focus:ring-1 focus:ring-zinc-500/30 text-zinc-300"
-                    >
-                      <span>{selectedProvider === 'ollama' ? 'Ollama' : 'LM Studio'}</span>
-                      <svg className={`w-3 h-3 text-zinc-500 transition-transform ${showProviderDropdown ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </button>
-
-                    {showProviderDropdown && (
-                      <div className="absolute top-full mt-1 left-0 w-full bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl z-50 overflow-hidden">
-                        <button
-                          onClick={() => {
-                            if (selectedProvider === 'ollama') {
-                              setShowProviderDropdown(false);
-                              return;
-                            }
-                            const providerModels = availableModels.filter(m => m.provider === 'ollama');
-                            if (providerModels.length === 0) {
-                              alert('No Ollama models installed. Please install a model first.');
-                              setShowProviderDropdown(false);
-                              return;
-                            }
-                            const currentModelInNewProvider = providerModels.find(m => m.name === selectedModel);
-                            const modelToSwitch = currentModelInNewProvider ? selectedModel : providerModels[0].name;
-
-                            // Switch model and provider (non-blocking)
-                            setShowProviderDropdown(false);
-                            switchModel(modelToSwitch, 'ollama');
-                          }}
-                          className={`w-full px-3 py-2 text-xs text-left transition-colors ${selectedProvider === 'ollama'
-                              ? 'bg-blue-600/20 text-blue-400'
-                              : 'text-zinc-300 hover:bg-zinc-800'
-                            }`}
-                        >
-                          Ollama
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (selectedProvider === 'lmstudio') {
-                              setShowProviderDropdown(false);
-                              return;
-                            }
-                            const providerModels = availableModels.filter(m => m.provider === 'lmstudio');
-                            if (providerModels.length === 0) {
-                              alert('No LM Studio models installed. Please install a model first.');
-                              setShowProviderDropdown(false);
-                              return;
-                            }
-                            const currentModelInNewProvider = providerModels.find(m => m.name === selectedModel);
-                            const modelToSwitch = currentModelInNewProvider ? selectedModel : providerModels[0].name;
-
-                            // Switch model and provider (non-blocking)
-                            setShowProviderDropdown(false);
-                            switchModel(modelToSwitch, 'lmstudio');
-                          }}
-                          className={`w-full px-3 py-2 text-xs text-left transition-colors ${selectedProvider === 'lmstudio'
-                              ? 'bg-blue-600/20 text-blue-400'
-                              : 'text-zinc-300 hover:bg-zinc-800'
-                            }`}
-                        >
-                          LM Studio
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
+              {/* Install New Model Button */}
+              <button
+                onClick={() => {
+                  fetchModels();
+                  setShowModelInstallModal(true);
+                }}
+                className="p-1.5 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700/50 rounded-lg transition-all"
+                title="Install new model"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+              </button>
               {/* Model Selector */}
               <div className="relative model-dropdown-container">
                 <button
@@ -2010,7 +2117,7 @@ export const ConnectedChat: React.FC = () => {
                 </button>
 
                 {showModelDropdown && (
-                  <div className="absolute top-full mt-1 right-0 w-[280px] sm:w-[320px] bg-gradient-to-b from-zinc-900 to-zinc-950 border border-zinc-700 rounded-xl shadow-2xl z-[100] overflow-hidden">
+                  <div className="absolute top-full mt-1 left-1/2 -translate-x-1/2 w-[280px] sm:w-[320px] bg-gradient-to-b from-zinc-900 to-zinc-950 border border-zinc-700 rounded-xl shadow-2xl z-[100] overflow-hidden max-h-[70vh] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700">
                     {/* Installed Models Section */}
                     <div className="px-3 py-2 bg-zinc-800/50 border-b border-zinc-700">
                       <div className="flex items-center justify-between">
@@ -2019,6 +2126,21 @@ export const ConnectedChat: React.FC = () => {
                       </div>
                     </div>
                     <div className="max-h-[280px] overflow-y-auto custom-scrollbar p-1">
+                      {getModelOptions().length === 0 && (
+                        <button
+                          onClick={() => {
+                            setShowModelDropdown(false);
+                            fetchModels();
+                            setShowModelInstallModal(true);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-3 text-sm text-blue-400 hover:bg-zinc-800/70 rounded-lg transition-all"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                          </svg>
+                          Browse Model Library
+                        </button>
+                      )}
                       {getModelOptions().map(option => (
                         <div
                           key={option.value}
@@ -2027,7 +2149,7 @@ export const ConnectedChat: React.FC = () => {
                         >
                           <button
                             onClick={() => {
-                              switchModel(option.value);
+                              switchModel(option.value, option.provider);
                               setShowModelDropdown(false);
                             }}
                             className="flex-1 text-left min-w-0"
@@ -2054,7 +2176,7 @@ export const ConnectedChat: React.FC = () => {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleUninstallModel(option.value, selectedProvider);
+                                handleUninstallModel(option.value, option.provider);
                               }}
                               className="ml-2 p-1.5 text-zinc-600 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                               title={`Uninstall ${option.label}`}
@@ -2068,32 +2190,98 @@ export const ConnectedChat: React.FC = () => {
                       ))}
                     </div>
 
-                    {/* Install New Models Section */}
-                    <div className="border-t border-zinc-700">
-                      <button
-                        onClick={() => {
-                          setShowModelDropdown(false);
-                          fetchModels();
-                          setShowModelInstallModal(true);
-                        }}
-                        className="w-full px-3 py-2.5 text-left flex items-center gap-2 hover:bg-zinc-800/50 transition-all group"
-                      >
-                        <div className="w-7 h-7 rounded-lg bg-zinc-800 group-hover:bg-zinc-700 flex items-center justify-center transition-colors">
-                          <svg className="w-4 h-4 text-zinc-400 group-hover:text-zinc-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                          </svg>
-                        </div>
-                        <div className="flex-1">
-                          <div className="text-sm font-medium text-zinc-300 group-hover:text-white">Install New Model</div>
-                          <div className="text-xs text-zinc-500">Browse available models</div>
-                        </div>
-                        <svg className="w-4 h-4 text-zinc-600 group-hover:text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                      </button>
-                    </div>
                   </div>
                 )}
+              </div>
+
+              {/* Sidecar Model Selector (v0.3.1) */}
+              <div className="relative sidecar-dropdown-container">
+                <button
+                  onClick={() => setShowSidecarDropdown(!showSidecarDropdown)}
+                  className={`flex items-center gap-1 px-2 py-1 text-xs bg-zinc-800/50 hover:bg-zinc-700/50 border rounded-lg transition-all focus:outline-none focus:ring-1 focus:ring-zinc-500/30 ${
+                    sidecarError ? 'border-red-500/40' : 'border-zinc-700/50 hover:border-zinc-600'
+                  }`}
+                  title={sidecarError ? `Sidecar error: ${sidecarError}` : "Sidecar model — summarizes exchanges, extracts facts & tags in background"}
+                >
+                  <svg className="w-3 h-3 text-zinc-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  <span className={`truncate max-w-[80px] ${sidecarModel ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                    {sidecarModel ? sidecarModel.split(':')[0] : 'Sidecar'}
+                  </span>
+                  {sidecarError && (
+                    <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0 animate-pulse" />
+                  )}
+                  <svg className={`w-3 h-3 text-zinc-500 transition-transform flex-shrink-0 ${showSidecarDropdown ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                {showSidecarDropdown && (() => {
+                  const { recommended, others } = getSidecarModelOptions();
+                  const renderSidecarOption = (option: ReturnType<typeof getModelOptions>[0]) => (
+                    <button
+                      key={`sidecar-${option.value}-${option.provider}`}
+                      onClick={async () => {
+                        setSidecarModel(option.value);
+                        localStorage.setItem('sidecarModel', option.value);
+                        setShowSidecarDropdown(false);
+                        try {
+                          await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/set`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ model: option.value, provider: option.provider }),
+                          });
+                        } catch {}
+                      }}
+                      className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition-all ${sidecarModel === option.value ? 'bg-zinc-800 border border-blue-500/30' : 'hover:bg-zinc-800/70'}`}
+                    >
+                      <span className={sidecarModel === option.value ? 'text-zinc-200' : 'text-zinc-300'}>{option.label}</span>
+                      <p className="text-[10px] text-zinc-500 mt-0.5">{option.description}</p>
+                    </button>
+                  );
+                  return (
+                  <div className="absolute top-full mt-1 right-0 w-[260px] bg-gradient-to-b from-zinc-900 to-zinc-950 border border-zinc-700 rounded-xl shadow-2xl z-[100] overflow-hidden">
+                    <div className="px-3 py-2 bg-zinc-800/50 border-b border-zinc-700">
+                      <span className="text-xs font-medium text-zinc-400">Sidecar Model</span>
+                      <p className="text-[10px] text-zinc-500 mt-0.5">Summarizes exchanges, extracts facts & tags</p>
+                    </div>
+                    <div className="max-h-[300px] overflow-y-auto custom-scrollbar p-1">
+                      {/* None / Disabled option */}
+                      <button
+                        onClick={async () => {
+                          setSidecarModel('');
+                          localStorage.removeItem('sidecarModel');
+                          setShowSidecarDropdown(false);
+                          try { await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/disable`, { method: 'POST' }); } catch {}
+                        }}
+                        className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition-all ${!sidecarModel ? 'bg-zinc-800 border border-zinc-600' : 'hover:bg-zinc-800/70'}`}
+                      >
+                        <span className={!sidecarModel ? 'text-zinc-200' : 'text-zinc-400'}>None (disabled)</span>
+                      </button>
+                      {/* Recommended for sidecar (small models) */}
+                      {recommended.length > 0 && (
+                        <>
+                          <div className="px-2.5 pt-2.5 pb-1">
+                            <span className="text-[10px] text-green-400/80 font-medium uppercase tracking-wider">Recommended</span>
+                          </div>
+                          {recommended.map(renderSidecarOption)}
+                        </>
+                      )}
+                      {/* All other models */}
+                      {others.length > 0 && (
+                        <>
+                          <div className="px-2.5 pt-2.5 pb-1">
+                            <span className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">All Models</span>
+                          </div>
+                          {others.map(renderSidecarOption)}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  );
+                })()}
               </div>
             </div>
 
@@ -2144,7 +2332,7 @@ export const ConnectedChat: React.FC = () => {
                     <div className="space-y-2">
                       <h3 className="text-xl font-semibold text-zinc-200">No Model Installed</h3>
                       <p className="text-sm text-zinc-400 leading-relaxed">
-                        You need to download an AI model to start chatting. Choose from powerful models like Llama or Qwen.
+                        Download a chat model to start chatting (e.g. Llama, Qwen, Gemma). Then pick a small sidecar model to enable persistent memory across conversations.
                       </p>
                     </div>
                     <button
@@ -2248,6 +2436,7 @@ export const ConnectedChat: React.FC = () => {
                 lastRefresh={lastMemoryRefresh}
                 currentUserId={'default'}
                 activeShard={'loopsmith'}
+                sidecarModel={sidecarModel}
               />
             </div>
           </div>
@@ -2262,9 +2451,46 @@ export const ConnectedChat: React.FC = () => {
         onClose={() => {
           setShowSettings(false);
           setSettingsInitialTab(undefined);
+          setSettingsDataTab(undefined);
         }}
         initialTab={settingsInitialTab}
+        initialDataTab={settingsDataTab}
       />
+
+      {/* v0.3.1.3: Sidecar toast — nudge when chatting without sidecar */}
+      {showSidecarToast && (
+        <Toast
+          message="Select a sidecar model to start recording memories."
+          type="info"
+          duration={8000}
+          action="Set Up"
+          onAction={() => {
+            setShowSidecarToast(false);
+            setShowSidecarDropdown(true);
+          }}
+          onClose={() => setShowSidecarToast(false)}
+        />
+      )}
+
+      {/* v0.3.1: Migration toast — one-time nudge for legacy memory summarization */}
+      {showMigrationToast && (
+        <Toast
+          message={`${migrationCount} memories can be optimized for better search.`}
+          type="info"
+          duration={12000}
+          action="Summarize Now"
+          onAction={() => {
+            localStorage.setItem('roampal_migration_toast_dismissed', 'true');
+            setShowMigrationToast(false);
+            setSettingsDataTab('summarize');
+            setShowSettings(true);
+          }}
+          onClose={() => {
+            localStorage.setItem('roampal_migration_toast_dismissed', 'true');
+            setShowMigrationToast(false);
+          }}
+        />
+      )}
 
       {/* Book Processor Modal */}
       <BookProcessorModal
@@ -2358,35 +2584,7 @@ export const ConnectedChat: React.FC = () => {
               </div>
             </div>
 
-            {/* Provider Tabs - Browse models without switching active model */}
-            <div className="flex gap-2 px-6 pt-4 border-b border-zinc-800">
-              <button
-                onClick={() => {
-                  setViewProvider('ollama');
-                  localStorage.setItem('viewProvider', 'ollama');
-                  // Don't call switchModel() - just change which models are displayed
-                }}
-                className={`px-4 py-2 text-sm font-medium transition-all ${viewProvider === 'ollama'
-                    ? 'text-white border-b-2 border-blue-500'
-                    : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
-              >
-                Ollama
-              </button>
-              <button
-                onClick={() => {
-                  setViewProvider('lmstudio');
-                  localStorage.setItem('viewProvider', 'lmstudio');
-                  // Don't call switchModel() - just change which models are displayed
-                }}
-                className={`px-4 py-2 text-sm font-medium transition-all ${viewProvider === 'lmstudio'
-                    ? 'text-white border-b-2 border-blue-500'
-                    : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
-              >
-                LM Studio
-              </button>
-            </div>
+            {/* v0.3.1: No provider tabs — unified model-first layout */}
 
             {/* Scrollable Content */}
             <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
@@ -2418,25 +2616,24 @@ export const ConnectedChat: React.FC = () => {
               )}
 
               <div className="space-y-3">
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-lg font-medium text-white">Available Models</h3>
-                  <div className="flex items-center gap-2">
-                    {availableProviders.find(p => p.name === viewProvider)?.available ? (
-                      <>
-                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                        <span className="text-xs text-zinc-400">
-                          Connected to {viewProvider === 'lmstudio' ? 'LM Studio' : 'Ollama'}
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="w-2 h-2 bg-red-500 rounded-full"></span>
-                        <span className="text-xs text-zinc-400">
-                          {viewProvider === 'lmstudio' ? 'LM Studio' : 'Ollama'} offline
-                        </span>
-                      </>
-                    )}
+                {/* v0.3.1: Show both provider statuses side by side */}
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-lg font-medium text-white">Available Models</h3>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-2 h-2 rounded-full ${availableProviders.find(p => p.name === 'ollama')?.available ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+                        <span className="text-xs text-zinc-400">Ollama</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-2 h-2 rounded-full ${availableProviders.find(p => p.name === 'lmstudio')?.available ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+                        <span className="text-xs text-zinc-400">LM Studio</span>
+                      </div>
+                    </div>
                   </div>
+                  <p className="text-xs text-zinc-400">
+                    Models you download in Ollama or LM Studio are automatically detected here. You can also install from the curated list below. Not all models support tool calling equally — check your model's documentation for function calling support.
+                  </p>
                 </div>
 
                 <div className="space-y-3 mb-6">
@@ -2470,8 +2667,8 @@ export const ConnectedChat: React.FC = () => {
                 </div>
 
                 <div className="space-y-6">
-                  {/* Ollama setup banner - only show if NOT detected */}
-                  {viewProvider === 'ollama' && !availableProviders.find(p => p.name === 'ollama')?.available && (
+                  {/* Ollama setup banner - show if NOT detected */}
+                  {!availableProviders.find(p => p.name === 'ollama')?.available && (
                     <div className="p-4 bg-blue-900/20 border border-blue-600/30 rounded-lg">
                       <div className="flex items-start gap-3 mb-3">
                         <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -2495,8 +2692,8 @@ export const ConnectedChat: React.FC = () => {
                     </div>
                   )}
 
-                  {/* LM Studio setup banner - only show if server NOT detected */}
-                  {viewProvider === 'lmstudio' && !availableProviders.find(p => p.name === 'lmstudio')?.available && (
+                  {/* LM Studio setup banner - show if NOT detected */}
+                  {!availableProviders.find(p => p.name === 'lmstudio')?.available && (
                     <div className="p-4 bg-amber-900/20 border border-amber-600/30 rounded-lg">
                       <div className="flex items-start gap-3 mb-3">
                         <div className="w-8 h-8 bg-amber-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -2524,139 +2721,8 @@ export const ConnectedChat: React.FC = () => {
                   )}
 
                   {/* LM Studio models - show all models except gpt-oss */}
-                  {viewProvider === 'lmstudio' && curatedModels.map(category => {
-                    // Filter out gpt-oss models (don't work well as GGUF)
-                    const filteredModels = category.models.filter(m => !m.name.startsWith('gpt-oss'));
-                    if (filteredModels.length === 0) return null;
-
-                    return (
-                      <div key={category.category}>
-                        {/* Category Header */}
-                        <div className="mb-3 p-3 bg-zinc-800/40 rounded-lg border border-zinc-700/50">
-                          <div className="flex items-center gap-2 mb-1">
-                            {category.icon === 'sparkles' ? (
-                              <svg className="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
-                              </svg>
-                            ) : (
-                              <svg className="w-5 h-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                              </svg>
-                            )}
-                            <h3 className="font-semibold text-white">{category.category}</h3>
-                            {category.category === 'Premium Models' && (
-                              <span className="ml-auto px-2 py-0.5 bg-green-500/20 text-green-400 rounded-full text-xs font-medium">
-                                Recommended
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-zinc-400 ml-7">{category.description}</p>
-                        </div>
-
-                        {/* Models in Category */}
-                        <div className="space-y-2 ml-3">
-                          {filteredModels.map(model => {
-                            const isAlreadyInstalled = availableModels.some(m => m.name === model.name && m.provider === 'lmstudio');
-                            return (
-                              <div
-                                key={model.name}
-                                className={`group flex items-center justify-between p-4 bg-zinc-800/30 border rounded-xl hover:bg-zinc-800/50 transition-all duration-200 ${model.agentCapable
-                                    ? 'border-green-700/30 hover:border-green-600/50'
-                                    : 'border-zinc-700/50 hover:border-zinc-600/50'
-                                  }`}
-                              >
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                    <span className="font-medium text-white text-sm truncate group-hover:text-blue-400 transition-colors">
-                                      {model.name}
-                                    </span>
-                                    <span className="text-xs px-2 py-0.5 bg-zinc-700/50 text-zinc-300 rounded-full whitespace-nowrap">
-                                      {model.size}
-                                    </span>
-                                    {model.agentCapable && (
-                                      <span className="text-xs px-2 py-0.5 bg-green-600/20 text-green-400 rounded-full whitespace-nowrap flex items-center gap-1">
-                                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                                          <path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                        </svg>
-                                        Premium
-                                      </span>
-                                    )}
-                                    {model.tokens && (
-                                      <span className="text-xs px-2 py-0.5 bg-blue-600/20 text-blue-400 rounded-full whitespace-nowrap">
-                                        {model.tokens >= 1000 ? `${Math.floor(model.tokens / 1000)}K` : model.tokens} tokens
-                                      </span>
-                                    )}
-                                  </div>
-                                  <p className="text-xs text-zinc-500 line-clamp-2 mt-1">{model.description}</p>
-                                </div>
-                                <div className="flex items-center gap-2 ml-3">
-                                  {isAlreadyInstalled ? (
-                                    <>
-                                      <span className="px-3 py-1.5 bg-green-500/20 text-green-400 rounded-lg text-xs font-medium flex items-center gap-1">
-                                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                        </svg>
-                                        Installed
-                                      </span>
-                                      <button
-                                        onClick={() => handleUninstallModel(model.name, 'lmstudio')}
-                                        disabled={!!installingModelName}
-                                        className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all hover:scale-110"
-                                        title={`Uninstall ${model.name}`}
-                                      >
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                        </svg>
-                                      </button>
-                                    </>
-                                  ) : installingModelName === model.name && installingProvider === 'lmstudio' ? (
-                                    <button
-                                      onClick={() => setShowCancelDownloadConfirm(true)}
-                                      className="px-4 py-1.5 rounded-lg text-xs font-medium bg-red-600/10 hover:bg-red-600/20 border border-red-600/30 text-red-400 transition-all"
-                                    >
-                                      Cancel Download
-                                    </button>
-                                  ) : (
-                                    <div className="relative group/install">
-                                      <button
-                                        onClick={() => {
-                                          // Check if model has quantization options (in our registry)
-                                          const hasQuantOptions = [
-                                            'qwen2.5:7b', 'qwen2.5:14b', 'qwen2.5:32b', 'qwen2.5:72b', 'qwen2.5:3b',
-                                            'llama3.2:3b', 'llama3.1:8b', 'llama3.3:70b', 'mixtral:8x7b',
-                                            'gpt-oss:20b', 'gpt-oss:120b',
-                                            'llama4:scout', 'llama4:maverick',
-                                            'qwen3:32b', 'qwen3-coder:30b'
-                                          ].includes(model.name);
-                                          if (hasQuantOptions) {
-                                            openQuantSelector(model.name);
-                                          } else {
-                                            handleInstallModel(model.name);
-                                          }
-                                        }}
-                                        disabled={!!installingModelName || !availableProviders.find(p => p.name === 'lmstudio')?.available}
-                                        className="px-4 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-                                      >
-                                        Install
-                                      </button>
-                                      {!availableProviders.find(p => p.name === 'lmstudio')?.available && (
-                                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-zinc-800 text-zinc-300 text-xs rounded whitespace-nowrap opacity-0 group-hover/install:opacity-100 transition-opacity pointer-events-none z-50">
-                                          Start LM Studio server to install
-                                        </div>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  }).filter(Boolean)}
-
-                  {/* Only show Ollama models in library */}
-                  {viewProvider === 'ollama' && curatedModels.map(category => (
+                  {/* v0.3.1: Unified model list — no provider tabs */}
+                  {curatedModels.map(category => (
                     <div key={category.category}>
                       {/* Category Header */}
                       <div className="mb-3 p-3 bg-zinc-800/40 rounded-lg border border-zinc-700/50">
@@ -2666,16 +2732,12 @@ export const ConnectedChat: React.FC = () => {
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
                             </svg>
                           ) : (
-                            <svg className="w-5 h-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                            <svg className="w-5 h-5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                             </svg>
                           )}
                           <h3 className="font-semibold text-white">{category.category}</h3>
-                          {category.category === 'Premium Models' && (
-                            <span className="ml-auto px-2 py-0.5 bg-green-500/20 text-green-400 rounded-full text-xs font-medium">
-                              Recommended
-                            </span>
-                          )}
                         </div>
                         <p className="text-xs text-zinc-400 ml-7">{category.description}</p>
                       </div>
@@ -2683,17 +2745,21 @@ export const ConnectedChat: React.FC = () => {
                       {/* Models in Category */}
                       <div className="space-y-2 ml-3">
                         {category.models.map(model => {
-                          const isAlreadyInstalled = availableModels.some(m => m.name === model.name && m.provider === 'ollama');
-                          // Get enriched metadata from registry if model is installed
+                          const isInstalledOllama = availableModels.some(m => m.name === model.name && m.provider === 'ollama');
+                          const isInstalledLms = availableModels.some(m => m.name === model.name && m.provider === 'lmstudio');
+                          const ollamaOnline = availableProviders.find(p => p.name === 'ollama')?.available;
+                          const lmsOnline = availableProviders.find(p => p.name === 'lmstudio')?.available;
                           const ollamaMetadata = installedModelsMetadata.find(m => m.name === model.name && m.provider === 'ollama');
+                          const hasQuantOptions = [
+                            'qwen2.5:7b', 'qwen2.5:14b', 'qwen2.5:32b', 'qwen2.5:72b', 'qwen2.5:3b',
+                            'llama3.2:3b', 'llama3.1:8b', 'llama3.3:70b', 'mixtral:8x7b',
+                            'qwen3:32b', 'qwen3-coder:30b'
+                          ].includes(model.name);
 
                           return (
                             <div
                               key={model.name}
-                              className={`group flex items-center justify-between p-4 bg-zinc-800/30 border rounded-xl hover:bg-zinc-800/50 transition-all duration-200 ${model.agentCapable
-                                  ? 'border-green-700/30 hover:border-green-600/50'
-                                  : 'border-zinc-700/50 hover:border-zinc-600/50'
-                                }`}
+                              className="group flex items-center justify-between p-4 bg-zinc-800/30 border border-zinc-700/50 rounded-xl hover:bg-zinc-800/50 transition-all duration-200"
                             >
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -2703,18 +2769,9 @@ export const ConnectedChat: React.FC = () => {
                                   <span className="text-xs px-2 py-0.5 bg-zinc-700/50 text-zinc-300 rounded-full whitespace-nowrap">
                                     {ollamaMetadata?.size_gb ? `${ollamaMetadata.size_gb}GB` : model.size}
                                   </span>
-                                  {/* Show quantization if available from registry */}
                                   {ollamaMetadata?.quantization && (
                                     <span className="text-xs px-2 py-0.5 bg-purple-600/20 text-purple-400 rounded font-mono whitespace-nowrap">
                                       {ollamaMetadata.quantization}
-                                    </span>
-                                  )}
-                                  {model.agentCapable && (
-                                    <span className="text-xs px-2 py-0.5 bg-green-600/20 text-green-400 rounded-full whitespace-nowrap flex items-center gap-1">
-                                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                                        <path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                      </svg>
-                                      Premium
                                     </span>
                                   )}
                                   {model.tokens && (
@@ -2726,64 +2783,35 @@ export const ConnectedChat: React.FC = () => {
                                 <p className="text-xs text-zinc-500 line-clamp-2 mt-1">{ollamaMetadata?.description || model.description}</p>
                               </div>
                               <div className="flex items-center gap-2 ml-3">
-                                {isAlreadyInstalled ? (
-                                  <>
-                                    <span className="px-3 py-1.5 bg-green-500/20 text-green-400 rounded-lg text-xs font-medium flex items-center gap-1">
-                                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                      </svg>
-                                      Installed
-                                    </span>
-                                    <button
-                                      onClick={() => handleUninstallModel(model.name, 'ollama')}
-                                      disabled={!!installingModelName}
-                                      className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all hover:scale-110"
-                                      title={`Uninstall ${model.name}`}
-                                    >
-                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                      </svg>
-                                    </button>
-                                  </>
+                                {/* Ollama install status */}
+                                {isInstalledOllama ? (
+                                  <span className="px-2 py-1 bg-green-500/20 text-green-400 rounded-lg text-[10px] font-medium">Ollama</span>
                                 ) : installingModelName === model.name && installingProvider === 'ollama' ? (
-                                  <button
-                                    onClick={() => setShowCancelDownloadConfirm(true)}
-                                    className="px-4 py-1.5 rounded-lg text-xs font-medium bg-red-600/10 hover:bg-red-600/20 border border-red-600/30 text-red-400 transition-all"
-                                  >
-                                    Cancel Download
-                                  </button>
+                                  <span className="px-2 py-1 text-blue-400 text-[10px] animate-pulse">Installing...</span>
                                 ) : (
-                                  <div className="relative group/install">
-                                    <button
-                                      onClick={() => {
-                                        // Check if model has quantization options (in our registry)
-                                        const hasQuantOptions = [
-                                          'qwen2.5:7b', 'qwen2.5:14b', 'qwen2.5:32b', 'qwen2.5:72b', 'qwen2.5:3b',
-                                          'llama3.2:3b', 'llama3.1:8b', 'llama3.3:70b', 'mixtral:8x7b',
-                                          'gpt-oss:20b', 'gpt-oss:120b',
-                                          'llama4:scout', 'llama4:maverick',
-                                          'qwen3:32b', 'qwen3-coder:30b'
-                                        ].includes(model.name);
-                                        if (hasQuantOptions) {
-                                          openQuantSelector(model.name);
-                                        } else {
-                                          handleInstallModel(model.name);
-                                        }
-                                      }}
-                                      disabled={!!installingModelName || !availableProviders.find(p => p.name === 'ollama')?.available}
-                                      className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap ${model.agentCapable
-                                          ? 'bg-green-600 hover:bg-green-700 text-white shadow-sm hover:shadow-md'
-                                          : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm hover:shadow-md'
-                                        } disabled:opacity-50 disabled:cursor-not-allowed`}
-                                    >
-                                      Install
-                                    </button>
-                                    {!availableProviders.find(p => p.name === 'ollama')?.available && (
-                                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-zinc-800 text-zinc-300 text-xs rounded whitespace-nowrap opacity-0 group-hover/install:opacity-100 transition-opacity pointer-events-none z-50">
-                                        Install Ollama to download models
-                                      </div>
-                                    )}
-                                  </div>
+                                  <button
+                                    onClick={() => { setViewProvider('ollama'); hasQuantOptions ? openQuantSelector(model.name) : handleInstallModel(model.name, 'ollama'); }}
+                                    disabled={!!installingModelName || !ollamaOnline}
+                                    className="px-3 py-1.5 rounded-lg text-[10px] font-medium bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                                    title={!ollamaOnline ? 'Ollama is offline' : `Install via Ollama`}
+                                  >
+                                    Ollama
+                                  </button>
+                                )}
+                                {/* LM Studio install status */}
+                                {isInstalledLms ? (
+                                  <span className="px-2 py-1 bg-green-500/20 text-green-400 rounded-lg text-[10px] font-medium">LM Studio</span>
+                                ) : installingModelName === model.name && installingProvider === 'lmstudio' ? (
+                                  <span className="px-2 py-1 text-amber-400 text-[10px] animate-pulse">Installing...</span>
+                                ) : (
+                                  <button
+                                    onClick={() => { setViewProvider('lmstudio'); hasQuantOptions ? openQuantSelector(model.name) : handleInstallModel(model.name, 'lmstudio'); }}
+                                    disabled={!!installingModelName || !lmsOnline}
+                                    className="px-3 py-1.5 rounded-lg text-[10px] font-medium bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                                    title={!lmsOnline ? 'LM Studio is offline' : `Install via LM Studio`}
+                                  >
+                                    LM Studio
+                                  </button>
                                 )}
                               </div>
                             </div>
@@ -2792,6 +2820,51 @@ export const ConnectedChat: React.FC = () => {
                       </div>
                     </div>
                   ))}
+
+                  {/* Pull from Ollama — type any model name */}
+                  <div className="mt-6 p-4 bg-zinc-800/40 rounded-xl border border-zinc-700/50">
+                    <h3 className="text-sm font-semibold text-white mb-1">Pull from Ollama</h3>
+                    <p className="text-xs text-zinc-400 mb-3">
+                      Type any model name from the{' '}
+                      <a href="https://ollama.com/library" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
+                        Ollama Library
+                      </a>{' '}
+                      to download it directly.
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={customPullName}
+                        onChange={(e) => setCustomPullName(e.target.value)}
+                        placeholder="e.g. deepseek-r1:14b, phi4:14b, gemma3:12b"
+                        className="flex-1 px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+                        disabled={!!installingModelName}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleOllamaPull(); }}
+                      />
+                      <button
+                        onClick={handleOllamaPull}
+                        disabled={!customPullName.trim() || !!installingModelName || !availableProviders.find(p => p.name === 'ollama')?.available}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                      >
+                        Pull
+                      </button>
+                    </div>
+                    {!availableProviders.find(p => p.name === 'ollama')?.available && (
+                      <p className="text-[10px] text-red-400/70 mt-2">Ollama is not running. Install and start Ollama to pull models.</p>
+                    )}
+                  </div>
+
+                  {/* LM Studio note */}
+                  <div className="mt-4 p-3 bg-amber-900/10 border border-amber-700/30 rounded-lg">
+                    <p className="text-xs text-zinc-400">
+                      <span className="font-medium text-amber-400">LM Studio</span> — Models loaded in LM Studio appear here automatically.
+                      Use{' '}
+                      <a href="https://lmstudio.ai" target="_blank" rel="noopener noreferrer" className="text-amber-400 hover:underline">
+                        LM Studio
+                      </a>{' '}
+                      to browse and download additional models.
+                    </p>
+                  </div>
                 </div>
 
                 <div className="mt-6 pt-4 border-t border-zinc-800/50">
@@ -2800,9 +2873,7 @@ export const ConnectedChat: React.FC = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <p className="text-xs text-zinc-500">
-                      {viewProvider === 'lmstudio'
-                        ? 'Models are downloaded from HuggingFace and imported to LM Studio. Larger models provide better quality but require more VRAM.'
-                        : 'Models are downloaded from Ollama Hub. Larger models provide better quality but require more VRAM.'}
+                      Larger models provide better quality but require more VRAM. Models are privacy-first and run entirely on your computer.
                     </p>
                   </div>
                 </div>

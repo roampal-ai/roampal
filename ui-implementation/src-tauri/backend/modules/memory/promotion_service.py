@@ -146,9 +146,10 @@ class PromotionService:
         metadata["promotion_history"] = json.dumps(promotion_history)
         metadata["promoted_from"] = "working"
 
-        # v0.2.9: Reset counters on history entry - memory must prove itself fresh
+        # v0.3.1: Reset success_count only — uses preserved (matches core v0.4.5).
+        # Memory must re-prove usefulness via success_count>=5 to reach patterns,
+        # but preserving uses allows faster progression through tiers.
         metadata["success_count"] = 0.0
-        metadata["uses"] = 0
         metadata["promoted_to_history_at"] = datetime.now().isoformat()
 
         # Get text for embedding
@@ -201,6 +202,9 @@ class PromotionService:
         promotion_history.append(promotion_record)
         metadata["promotion_history"] = json.dumps(promotion_history)
         metadata["promoted_from"] = "history"
+
+        # v0.3.1: Reset success_count on promotion — memory must re-prove in new tier
+        metadata["success_count"] = 0.0
 
         # Get text for embedding
         text_for_embedding = metadata.get("text") or metadata.get("content") or doc.get("content", "")
@@ -487,4 +491,46 @@ class PromotionService:
 
         except Exception as e:
             logger.error(f"Error in working memory cleanup: {e}", exc_info=True)
+            return 0
+
+    async def cleanup_old_history(self, max_age_hours: float = 720.0) -> int:
+        """
+        Clean up history items older than specified age (default 30 days).
+
+        History has a 30-day lifecycle: items older than 30 days are removed
+        unless they've been promoted to patterns. Matches core v0.4.5.
+
+        Args:
+            max_age_hours: Maximum age in hours (default 720 = 30 days)
+
+        Returns:
+            Number of items cleaned up
+        """
+        try:
+            history_adapter = self.collections.get("history")
+            if not history_adapter:
+                return 0
+
+            cleaned_count = 0
+            all_ids = history_adapter.list_all_ids()
+
+            for doc_id in all_ids:
+                doc = history_adapter.get_fragment(doc_id)
+                if not doc:
+                    continue
+
+                metadata = doc.get("metadata", {})
+                timestamp_str = metadata.get("timestamp", "")
+                age_hours = self._calculate_age_hours(timestamp_str)
+
+                if age_hours > max_age_hours:
+                    history_adapter.delete_vectors([doc_id])
+                    cleaned_count += 1
+
+            if cleaned_count > 0:
+                logger.info(f"History cleanup: removed {cleaned_count} items older than {max_age_hours/24:.0f} days")
+            return cleaned_count
+
+        except Exception as e:
+            logger.error(f"Error in history cleanup: {e}", exc_info=True)
             return 0

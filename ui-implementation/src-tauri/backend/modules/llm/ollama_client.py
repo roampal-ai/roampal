@@ -622,23 +622,19 @@ class OllamaClient(LLMClientInterface):
         if messages:
             logger.info(f"[DEBUG MESSAGES] Last 200 chars of last message: {messages[-1]['content'][-200:]}")
 
-        # Model capability detection for native tool support (October 2025)
-        NATIVE_TOOL_MODELS = [
-            "gpt-oss",  # OpenAI's open source models (20b, 120b)
-            "llama3.1", "llama3.2", "llama-3.1", "llama-3.2",  # Meta Llama variants
-            "qwen", "qwen2", "qwen2.5",  # Alibaba Qwen family - excellent tool support
-            "mistral", "mixtral",  # Mistral AI family
-            "command-r", "command-r-plus",  # Cohere models
-            "phi-4", "phi4",  # Microsoft Phi-4
-            # "dolphin", "dolphin3",  # REMOVED 2025-10-09: Causes 400 errors with tools
-            "firefunction"  # FireFunction optimized for tools
+        # v0.3.1.3: Blocklist approach — most modern models support tools.
+        # Only block models known to break with tool calling.
+        TOOL_BLOCKLIST = [
+            "dolphin", "dolphin3",  # Causes 400 errors with tools
+            "nomic-embed",  # Embedding model, no chat
+            "all-minilm",  # Embedding model
+            "bge-",  # Embedding model
         ]
 
-        # Check if model supports native tools
         model_lower = actual_model.lower()
-        supports_native_tools = any(
-            native_model in model_lower
-            for native_model in NATIVE_TOOL_MODELS
+        supports_native_tools = not any(
+            blocked in model_lower
+            for blocked in TOOL_BLOCKLIST
         )
 
         payload = {

@@ -2,6 +2,7 @@
 Unit Tests for ContextService
 
 Tests the extracted context analysis logic.
+KG removed in v0.3.1 — KG-dependent methods return empty results.
 """
 
 import sys
@@ -24,18 +25,14 @@ class TestContextServiceInit:
         """Should initialize with default config."""
         service = ContextService(collections={})
         assert service.config is not None
-        assert service.kg_service is None
 
-    def test_init_with_services(self):
-        """Should accept KG service and embed function."""
-        kg_mock = MagicMock()
+    def test_init_with_embed_fn(self):
+        """Should accept embed function."""
         embed_mock = AsyncMock()
         service = ContextService(
             collections={},
-            kg_service=kg_mock,
             embed_fn=embed_mock
         )
-        assert service.kg_service == kg_mock
         assert service.embed_fn == embed_mock
 
 
@@ -70,7 +67,6 @@ class TestConceptExtraction:
             "I am a developer"
         )
         assert "developer" in concepts
-        # Short words filtered
         assert len([c for c in concepts if len(c) < 3]) == 0
 
     def test_empty_text(self, service):
@@ -78,114 +74,33 @@ class TestConceptExtraction:
         concepts = service._basic_concept_extraction("")
         assert concepts == []
 
-    def test_uses_kg_service_if_available(self):
-        """Should use KG service for extraction when available."""
-        kg_mock = MagicMock()
-        kg_mock.extract_concepts = MagicMock(return_value=["test", "concepts"])
-
-        service = ContextService(collections={}, kg_service=kg_mock)
-        concepts = service._extract_concepts("test input")
-
-        kg_mock.extract_concepts.assert_called_once_with("test input")
-        assert concepts == ["test", "concepts"]
+    def test_extract_concepts_uses_basic_extraction(self):
+        """Should use basic extraction (KG removed)."""
+        service = ContextService(collections={})
+        concepts = service._extract_concepts("test input here")
+        assert isinstance(concepts, list)
+        assert len(concepts) > 0
 
 
 class TestPatternRecognition:
-    """Test pattern recognition from past conversations."""
-
-    @pytest.fixture
-    def mock_kg_service(self):
-        kg = MagicMock()
-        kg.extract_concepts = MagicMock(return_value=["python", "logging", "config"])
-        kg.get_problem_categories = MagicMock(return_value={
-            "config_logging_python": ["patterns_doc123"]
-        })
-        return kg
-
-    @pytest.fixture
-    def mock_collections(self):
-        patterns = MagicMock()
-        patterns.get_fragment = MagicMock(return_value={
-            "content": "Use logging.basicConfig() for simple setup",
-            "metadata": {
-                "score": 0.85,
-                "uses": 5,
-                "last_outcome": "worked"
-            }
-        })
-        return {"patterns": patterns, "history": MagicMock()}
-
-    @pytest.fixture
-    def service(self, mock_collections, mock_kg_service):
-        return ContextService(
-            collections=mock_collections,
-            kg_service=mock_kg_service
-        )
+    """Test pattern recognition — returns empty without KG (removed v0.3.1)."""
 
     @pytest.mark.asyncio
-    async def test_finds_relevant_patterns(self, service):
-        """Should find patterns from past conversations."""
-        patterns = await service._find_relevant_patterns(
-            ["python", "logging", "config"]
-        )
-
-        assert len(patterns) == 1
-        assert patterns[0]["score"] == 0.85
-        assert patterns[0]["uses"] == 5
-        assert "success rate" in patterns[0]["insight"]
-
-    @pytest.mark.asyncio
-    async def test_filters_low_score_patterns(self, service, mock_collections):
-        """Should filter patterns below threshold."""
-        mock_collections["patterns"].get_fragment = MagicMock(return_value={
-            "content": "Low score pattern",
-            "metadata": {"score": 0.5, "uses": 1, "last_outcome": "partial"}
-        })
-
-        patterns = await service._find_relevant_patterns(
-            ["python", "logging", "config"]
-        )
-
-        assert len(patterns) == 0
-
-    @pytest.mark.asyncio
-    async def test_no_kg_service(self):
-        """Should return empty list without KG service."""
+    async def test_returns_empty_without_kg(self):
+        """Should return empty list (KG removed)."""
         service = ContextService(collections={})
         patterns = await service._find_relevant_patterns(["test"])
         assert patterns == []
 
 
 class TestFailureAwareness:
-    """Test failure pattern detection."""
+    """Test failure pattern detection — returns empty without KG (removed v0.3.1)."""
 
-    @pytest.fixture
-    def mock_kg_service(self):
-        kg = MagicMock()
-        kg.get_failure_patterns = MagicMock(return_value={
-            "asyncio deadlock": [
-                {"timestamp": "2024-01-15T10:00:00", "doc_id": "doc1"},
-                {"timestamp": "2024-01-16T11:00:00", "doc_id": "doc2"}
-            ]
-        })
-        return kg
-
-    @pytest.fixture
-    def service(self, mock_kg_service):
-        return ContextService(collections={}, kg_service=mock_kg_service)
-
-    def test_detects_failure_patterns(self, service):
-        """Should detect related failure patterns."""
+    def test_returns_empty_without_kg(self):
+        """Should return empty (KG removed)."""
+        service = ContextService(collections={})
         failures = service._check_failure_patterns(["asyncio", "threading"])
-
-        assert len(failures) >= 1
-        assert failures[0]["outcome"] == "failed"
-        assert "deadlock" in failures[0]["reason"]
-
-    def test_no_matching_failures(self, service):
-        """Should return empty for unrelated concepts."""
-        failures = service._check_failure_patterns(["unrelated", "concepts"])
-        assert len(failures) == 0
+        assert failures == []
 
 
 class TestTopicContinuity:
@@ -193,9 +108,7 @@ class TestTopicContinuity:
 
     @pytest.fixture
     def service(self):
-        kg = MagicMock()
-        kg.extract_concepts = MagicMock(side_effect=lambda x: x.lower().split()[:5])
-        return ContextService(collections={}, kg_service=kg)
+        return ContextService(collections={})
 
     def test_detects_continuation(self, service):
         """Should detect topic continuation."""
@@ -235,40 +148,13 @@ class TestTopicContinuity:
 
 
 class TestProactiveInsights:
-    """Test proactive insights generation."""
+    """Test proactive insights — returns empty without KG (removed v0.3.1)."""
 
-    @pytest.fixture
-    def mock_kg_service(self):
-        kg = MagicMock()
-        kg.get_routing_patterns = MagicMock(return_value={
-            "python": {
-                "success_rate": 0.85,
-                "best_collection": "patterns"
-            },
-            "config": {
-                "success_rate": 0.6,  # Below threshold
-                "best_collection": "history"
-            }
-        })
-        return kg
-
-    @pytest.fixture
-    def service(self, mock_kg_service):
-        return ContextService(collections={}, kg_service=mock_kg_service)
-
-    def test_generates_insights_for_high_success(self, service):
-        """Should generate insights for high-success patterns."""
+    def test_returns_empty_without_kg(self):
+        """Should return empty (KG removed)."""
+        service = ContextService(collections={})
         insights = service._get_proactive_insights(["python", "config"])
-
-        # Only python should have insight (config below 0.7)
-        assert len(insights) == 1
-        assert insights[0]["concept"] == "python"
-        assert "patterns" in insights[0]["recommendation"]
-
-    def test_no_insights_below_threshold(self, service):
-        """Should not generate insights for low-success patterns."""
-        insights = service._get_proactive_insights(["config"])
-        assert len(insights) == 0
+        assert insights == []
 
 
 class TestRepetitionDetection:
@@ -281,7 +167,7 @@ class TestRepetitionDetection:
             {
                 "content": "How do I configure logging?",
                 "metadata": {"conversation_id": "conv123"},
-                "distance": 0.1  # Very similar
+                "distance": 0.1
             }
         ])
         return {"working": working}
@@ -328,20 +214,8 @@ class TestAnalyzeConversationContext:
     """Test full context analysis."""
 
     @pytest.fixture
-    def mock_kg_service(self):
-        kg = MagicMock()
-        kg.extract_concepts = MagicMock(return_value=["test", "concept"])
-        kg.get_problem_categories = MagicMock(return_value={})
-        kg.get_failure_patterns = MagicMock(return_value={})
-        kg.get_routing_patterns = MagicMock(return_value={})
-        return kg
-
-    @pytest.fixture
-    def service(self, mock_kg_service):
-        return ContextService(
-            collections={},
-            kg_service=mock_kg_service
-        )
+    def service(self):
+        return ContextService(collections={})
 
     @pytest.mark.asyncio
     async def test_returns_context_structure(self, service):
@@ -359,55 +233,14 @@ class TestAnalyzeConversationContext:
 
 
 class TestFindKnownSolutions:
-    """Test known solution finding."""
-
-    @pytest.fixture
-    def mock_kg_service(self):
-        kg = MagicMock()
-        kg.extract_concepts = MagicMock(return_value=["python", "logging"])
-        kg.get_problem_solutions = MagicMock(return_value={
-            "logging_python": [
-                {"doc_id": "patterns_123", "success_count": 5, "last_used": "2024-01-15"}
-            ]
-        })
-        return kg
-
-    @pytest.fixture
-    def mock_collections(self):
-        patterns = MagicMock()
-        patterns.get_fragment = MagicMock(return_value={
-            "content": "Use logging.basicConfig()",
-            "metadata": {"score": 0.9}
-        })
-        return {"patterns": patterns}
-
-    @pytest.fixture
-    def service(self, mock_collections, mock_kg_service):
-        return ContextService(
-            collections=mock_collections,
-            kg_service=mock_kg_service
-        )
+    """Test known solution finding — returns empty without KG (removed v0.3.1)."""
 
     @pytest.mark.asyncio
-    async def test_finds_exact_match(self, service):
-        """Should find exact problem match."""
-        solutions = await service.find_known_solutions(
-            "How do I setup python logging?"
-        )
-
-        assert len(solutions) == 1
-        assert solutions[0]["is_known_solution"] is True
-        assert solutions[0]["solution_success_count"] == 5
-
-    @pytest.mark.asyncio
-    async def test_boosts_known_solutions(self, service):
-        """Should boost distance for known solutions."""
-        solutions = await service.find_known_solutions(
-            "How do I setup python logging?"
-        )
-
-        # Distance should be boosted (reduced by 50%)
-        assert solutions[0]["distance"] == 0.5
+    async def test_returns_empty_without_kg(self):
+        """Should return empty (KG removed)."""
+        service = ContextService(collections={})
+        solutions = await service.find_known_solutions("How do I setup python logging?")
+        assert solutions == []
 
 
 class TestContextSummary:

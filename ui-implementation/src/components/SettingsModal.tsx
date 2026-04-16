@@ -12,9 +12,10 @@ interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialTab?: 'integrations';
+  initialDataTab?: 'summarize';
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab, initialDataTab }) => {
   const [showDataManagementModal, setShowDataManagementModal] = useState(false);
   const [showMemoryBankModal, setShowMemoryBankModal] = useState(false);
   const [showModelContextSettings, setShowModelContextSettings] = useState(false);
@@ -30,6 +31,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
       setShowIntegrationsPanel(true);
     }
   }, [isOpen, initialTab]);
+
+  // Auto-open Data Management with specific tab (e.g., from migration toast)
+  useEffect(() => {
+    if (isOpen && initialDataTab) {
+      setShowDataManagementModal(true);
+    }
+  }, [isOpen, initialDataTab]);
 
   // Fetch current model and providers when modal opens
   useEffect(() => {
@@ -243,6 +251,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
       <DataManagementModal
         isOpen={showDataManagementModal}
         onClose={() => setShowDataManagementModal(false)}
+        initialTab={initialDataTab}
       />
 
       {/* Memory Bank Modal */}

@@ -149,12 +149,12 @@ class TestReleaseBundle:
         """Verify all required packages can be imported."""
         required = [
             "chromadb",
-            "sentence_transformers",
+            "onnxruntime",
+            "tokenizers",
             "fastapi",
             "uvicorn",
             "httpx",
             "numpy",
-            "pandas",
         ]
 
         missing = []

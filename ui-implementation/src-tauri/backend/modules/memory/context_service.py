@@ -29,21 +29,19 @@ class ContextService:
     def __init__(
         self,
         collections: Dict[str, Any],
-        kg_service: Any = None,
         embed_fn: Optional[Callable[[str], Awaitable[List[float]]]] = None,
-        config: Optional[MemoryConfig] = None
+        config: Optional[MemoryConfig] = None,
+        **kwargs,
     ):
         """
         Initialize ContextService.
 
         Args:
             collections: Dict of collection name -> adapter
-            kg_service: KnowledgeGraphService for pattern/routing access
             embed_fn: Async function to embed text for similarity search
             config: Memory configuration
         """
         self.collections = collections
-        self.kg_service = kg_service
         self.embed_fn = embed_fn
         self.config = config or MemoryConfig()
 
@@ -112,8 +110,10 @@ class ContextService:
         """Find relevant patterns from past conversations."""
         patterns = []
 
-        if not self.kg_service or not concepts:
+        if not concepts:
             return patterns
+        # KG removed in v0.3.1 — pattern matching no longer available
+        return patterns
 
         # Create pattern signature from concepts
         pattern_signature = "_".join(sorted(concepts[:3]))
@@ -157,10 +157,8 @@ class ContextService:
         """Check if similar attempts failed before."""
         past_outcomes = []
 
-        if not self.kg_service:
-            return past_outcomes
-
-        failure_patterns = self.kg_service.get_failure_patterns()
+        # KG removed in v0.3.1
+        return past_outcomes
 
         for failure_key, failures in failure_patterns.items():
             # Check if current message relates to past failures
@@ -224,10 +222,8 @@ class ContextService:
         """Get proactive insights based on routing patterns."""
         insights = []
 
-        if not self.kg_service:
-            return insights
-
-        routing_patterns = self.kg_service.get_routing_patterns()
+        # KG removed in v0.3.1
+        return insights
 
         for concept in concepts[:3]:
             if concept in routing_patterns:
@@ -289,10 +285,7 @@ class ContextService:
 
         Uses KG service if available, otherwise basic extraction.
         """
-        if self.kg_service:
-            return self.kg_service.extract_concepts(text)
-
-        # Basic extraction fallback
+        # Basic extraction (KG removed in v0.3.1)
         return self._basic_concept_extraction(text)
 
     def _basic_concept_extraction(self, text: str) -> List[str]:
@@ -338,8 +331,8 @@ class ContextService:
         Returns:
             List of known solutions with boost information
         """
-        if not query or not self.kg_service:
-            return []
+        # KG removed in v0.3.1
+        return []
 
         try:
             # Extract concepts

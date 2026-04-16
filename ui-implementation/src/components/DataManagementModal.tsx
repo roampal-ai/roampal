@@ -6,6 +6,7 @@ import { ROAMPAL_CONFIG } from '../config/roampal';
 interface DataManagementModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: 'export' | 'delete' | 'summarize';
 }
 
 interface ExportOptions {
@@ -43,11 +44,23 @@ interface DataStats {
   outcomes?: { exists: boolean };
 }
 
-type ActiveTab = 'export' | 'delete';
+type ActiveTab = 'export' | 'delete' | 'summarize';
+
+interface ScanResult {
+  candidates: Record<string, number>;
+  total: number;
+  sidecar_configured: boolean;
+}
+
+interface SummarizeResult {
+  summarized: number;
+  facts: number;
+  tags: number;
+}
 type DeleteTarget = 'memory_bank' | 'working' | 'history' | 'patterns' | 'books' | 'sessions' | 'knowledge-graph' | 'outcomes' | null;
 
-export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen, onClose }) => {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('export');
+export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen, onClose, initialTab }) => {
+  const [activeTab, setActiveTab] = useState<ActiveTab>(initialTab || 'export');
 
   // Export tab state
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
@@ -67,6 +80,15 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isCompacting, setIsCompacting] = useState(false);
+
+  // Summarize tab state
+  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summarizeProgress, setSummarizeProgress] = useState<{ current: number; total: number; message: string } | null>(null);
+  const [summarizeResult, setSummarizeResult] = useState<SummarizeResult | null>(null);
+  const [summarizeError, setSummarizeError] = useState<string | null>(null);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
 
   // Fetch export size estimate
   useEffect(() => {
@@ -108,6 +130,97 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
 
     fetchDataStats();
   }, [isOpen, activeTab]);
+
+  // Honor initialTab prop
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
+
+  // Scan for summarize candidates when tab opens
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'summarize') return;
+    const scanForCandidates = async () => {
+      setIsScanning(true);
+      try {
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/data/summarize/scan`);
+        if (response.ok) {
+          setScanResult(await response.json());
+        }
+      } catch (error) {
+        console.error('Summarize scan failed:', error);
+      } finally {
+        setIsScanning(false);
+      }
+    };
+    scanForCandidates();
+  }, [isOpen, activeTab]);
+
+  const handleStartSummarize = async () => {
+    setIsSummarizing(true);
+    setSummarizeResult(null);
+    setSummarizeError(null);
+    setSummarizeProgress(null);
+    const controller = new AbortController();
+    setAbortController(controller);
+
+    try {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/data/summarize/run`, {
+        method: 'POST',
+        signal: controller.signal,
+      });
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'progress') {
+              setSummarizeProgress({ current: data.current, total: data.total, message: data.message });
+            } else if (data.type === 'complete') {
+              setSummarizeResult({ summarized: data.summarized, facts: data.facts, tags: data.tags });
+            } else if (data.type === 'cancelled') {
+              setSummarizeResult({ summarized: data.summarized, facts: data.facts, tags: data.tags });
+              setSummarizeError('Cancelled by user');
+            }
+          } catch {
+            // Skip malformed SSE lines
+          }
+        }
+      }
+    } catch (error: any) {
+      if (error.name !== 'AbortError') {
+        setSummarizeError(error.message || 'Summarization failed');
+      }
+    } finally {
+      setIsSummarizing(false);
+      setAbortController(null);
+      // Refresh scan results and trigger memory panel update
+      try {
+        const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/data/summarize/scan`);
+        if (response.ok) setScanResult(await response.json());
+      } catch { /* ignore */ }
+      window.dispatchEvent(new CustomEvent('memoryUpdated', { detail: { source: 'summarize' } }));
+    }
+  };
+
+  const handleCancelSummarize = async () => {
+    abortController?.abort();
+    try {
+      await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/data/summarize/cancel`, { method: 'POST' });
+    } catch { /* best effort */ }
+  };
 
   const fetchDataStats = async () => {
     setIsLoadingStats(true);
@@ -374,6 +487,21 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
               </div>
             </button>
             <button
+              onClick={() => setActiveTab('summarize')}
+              className={`flex-1 px-6 py-3 font-medium transition-colors ${
+                activeTab === 'summarize'
+                  ? 'text-amber-400 border-b-2 border-amber-400 bg-amber-600/5'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
+              }`}
+            >
+              <div className="flex items-center justify-center gap-2">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Summarize
+              </div>
+            </button>
+            <button
               onClick={() => setActiveTab('delete')}
               className={`flex-1 px-6 py-3 font-medium transition-colors ${
                 activeTab === 'delete'
@@ -392,7 +520,131 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
 
           {/* Content */}
           <div className="flex-1 overflow-y-auto">
-            {activeTab === 'export' ? (
+            {activeTab === 'summarize' ? (
+              <div className="p-6 space-y-4">
+                {/* Sidecar warning */}
+                {scanResult && !scanResult.sidecar_configured && (
+                  <div className="p-4 bg-amber-600/10 border border-amber-600/20 rounded-lg">
+                    <p className="text-sm text-amber-400 font-medium">Sidecar model required</p>
+                    <p className="text-xs text-zinc-400 mt-1">
+                      Configure a sidecar model in the header dropdown to enable summarization.
+                    </p>
+                  </div>
+                )}
+
+                {/* Description */}
+                <div className="p-4 bg-amber-600/10 border border-amber-600/20 rounded-lg">
+                  <p className="text-sm text-amber-400 font-medium">Optimize Legacy Memories</p>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    Summarize old raw exchanges into concise notes, extract searchable tags and atomic facts.
+                    Improves retrieval quality for memories created before the sidecar was active.
+                  </p>
+                </div>
+
+                {/* Scan results */}
+                {isScanning ? (
+                  <div className="flex items-center justify-center py-8">
+                    <svg className="animate-spin w-6 h-6 text-zinc-500" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    <span className="ml-3 text-sm text-zinc-400">Scanning memories...</span>
+                  </div>
+                ) : scanResult ? (
+                  <>
+                    {scanResult.total === 0 ? (
+                      <div className="p-4 bg-green-600/10 border border-green-600/20 rounded-lg">
+                        <p className="text-sm text-green-400 font-medium">All memories are optimized</p>
+                        <p className="text-xs text-zinc-400 mt-1">No unsummarized memories found.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-sm text-zinc-300 font-medium">
+                          {scanResult.total} {scanResult.total === 1 ? 'memory' : 'memories'} can be summarized
+                        </p>
+                        {Object.entries(scanResult.candidates).map(([coll, count]) => (
+                          count > 0 && (
+                            <div key={coll} className="flex items-center justify-between px-3 py-2 bg-zinc-800/50 rounded-lg">
+                              <span className="text-sm text-zinc-400 capitalize">{coll}</span>
+                              <span className="text-sm text-zinc-300">{count}</span>
+                            </div>
+                          )
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : null}
+
+                {/* Progress */}
+                {isSummarizing && summarizeProgress && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-zinc-300">{summarizeProgress.message}</span>
+                      <span className="text-xs text-zinc-500">
+                        {summarizeProgress.current}/{summarizeProgress.total}
+                      </span>
+                    </div>
+                    <div className="w-full bg-zinc-800 rounded-full h-2">
+                      <div
+                        className="bg-amber-500 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${(summarizeProgress.current / summarizeProgress.total) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Results */}
+                {summarizeResult && (
+                  <div className={`p-4 rounded-lg border ${summarizeError ? 'bg-yellow-600/10 border-yellow-600/20' : 'bg-green-600/10 border-green-600/20'}`}>
+                    <p className={`text-sm font-medium ${summarizeError ? 'text-yellow-400' : 'text-green-400'}`}>
+                      {summarizeError ? 'Partially completed' : 'Migration complete'}
+                    </p>
+                    <div className="mt-2 space-y-1">
+                      <p className="text-xs text-zinc-400">{summarizeResult.summarized} memories summarized</p>
+                      <p className="text-xs text-zinc-400">{summarizeResult.facts} facts extracted</p>
+                      <p className="text-xs text-zinc-400">{summarizeResult.tags} tags added</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Error */}
+                {summarizeError && !summarizeResult && (
+                  <div className="p-4 bg-red-600/10 border border-red-600/20 rounded-lg">
+                    <p className="text-sm text-red-400">{summarizeError}</p>
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div className="pt-2">
+                  {isSummarizing ? (
+                    <button
+                      onClick={handleCancelSummarize}
+                      className="w-full h-10 px-3 py-2 flex items-center justify-center gap-2 rounded-lg font-medium bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                      <span className="text-sm">Cancel</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleStartSummarize}
+                      disabled={!scanResult || scanResult.total === 0 || !scanResult.sidecar_configured}
+                      className={`w-full h-10 px-3 py-2 flex items-center justify-center gap-2 rounded-lg font-medium transition-colors ${
+                        !scanResult || scanResult.total === 0 || !scanResult.sidecar_configured
+                          ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed border border-zinc-700'
+                          : 'bg-amber-600/10 hover:bg-amber-600/20 border border-amber-600/30 text-amber-500'
+                      }`}
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      <span className="text-sm">Summarize All</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : activeTab === 'export' ? (
               <div className="p-6 space-y-4">
                 <div className="flex items-center justify-between">
                   <p className="text-sm text-zinc-400">Select data to include:</p>

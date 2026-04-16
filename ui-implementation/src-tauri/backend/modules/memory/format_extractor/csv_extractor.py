@@ -18,7 +18,7 @@ class CSVExtractor(BaseExtractor):
 
     Features:
     - Auto-detects delimiter (comma, tab, semicolon, pipe)
-    - Auto-detects encoding using chardet
+    - Auto-detects encoding using charset-normalizer
     - Row-based text conversion for semantic search
     - Handles quoted fields and escapes
 
@@ -95,9 +95,9 @@ class CSVExtractor(BaseExtractor):
         )
 
     def _detect_encoding(self, file_path: Path) -> Optional[str]:
-        """Detect file encoding using chardet"""
+        """Detect file encoding using charset-normalizer"""
         try:
-            import chardet
+            from charset_normalizer import from_bytes
         except ImportError:
             return 'utf-8'
 
@@ -105,8 +105,8 @@ class CSVExtractor(BaseExtractor):
             with open(file_path, 'rb') as f:
                 # Read first 10KB for detection
                 raw = f.read(10240)
-                result = chardet.detect(raw)
-                return result.get('encoding', 'utf-8')
+                result = from_bytes(raw).best()
+                return str(result.encoding) if result else 'utf-8'
         except Exception:
             return 'utf-8'
 

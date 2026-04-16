@@ -173,7 +173,6 @@ Port: 8000 (backend), 5174 (frontend dev)
 
 # Feature Flags
 Memory: true
-Knowledge Graph: true
 Outcome Detection: true
 Autonomy: false (chat-only system)
 
@@ -272,7 +271,7 @@ ROAMPAL_LLM_OLLAMA_MODEL=qwen3:8b  # Or OLLAMA_MODEL for fallback
 # Core Features
 ROAMPAL_ENABLE_MEMORY=true
 ROAMPAL_ENABLE_OUTCOME_TRACKING=true
-ROAMPAL_ENABLE_KG=true
+# ROAMPAL_ENABLE_KG removed in v0.3.1 (KG fully removed)
 
 # Optional
 ROAMPAL_LOG_LEVEL=INFO

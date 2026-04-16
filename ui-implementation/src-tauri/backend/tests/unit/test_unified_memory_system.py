@@ -90,7 +90,6 @@ class TestInitialize:
         await ums.initialize()
 
         assert ums._scoring_service is not None
-        assert ums._kg_service is not None
         assert ums._routing_service is not None
         assert ums._search_service is not None
         assert ums._promotion_service is not None
@@ -102,10 +101,10 @@ class TestInitialize:
     async def test_initialize_only_once(self, ums):
         """Should only initialize once."""
         await ums.initialize()
-        first_kg = ums._kg_service
+        first_search = ums._search_service
 
         await ums.initialize()
-        assert ums._kg_service is first_kg
+        assert ums._search_service is first_search
 
 
 class TestStore:
@@ -396,48 +395,6 @@ class TestSessionManagement:
         assert mock_ums.message_count == initial + 1
 
 
-class TestKGVisualization:
-    """Test KG visualization API."""
-
-    @pytest.fixture
-    def mock_ums(self, tmp_path):
-        """Create UMS with KG mock."""
-        ums = UnifiedMemorySystem(data_dir=str(tmp_path / "data"))
-        ums.initialized = True
-
-        # Mock KG service with async methods
-        ums._kg_service = MagicMock()
-        # get_kg_entities is async, so mock needs to return coroutine
-        async def mock_get_entities(limit=200):
-            return [{"id": "concept1", "weight": 10}]
-        ums._kg_service.get_kg_entities = mock_get_entities
-        ums._kg_service.get_kg_relationships = MagicMock(return_value=[
-            {"source": "c1", "target": "c2", "weight": 1}
-        ])
-        ums._kg_service.knowledge_graph = {"routing_patterns": {}}
-
-        return ums
-
-    @pytest.mark.asyncio
-    async def test_get_kg_entities(self, mock_ums):
-        """Should return entities from KG service."""
-        entities = await mock_ums.get_kg_entities()
-
-        assert len(entities) == 1
-
-    def test_get_kg_relationships(self, mock_ums):
-        """Should return relationships from KG service."""
-        rels = mock_ums.get_kg_relationships()
-
-        assert len(rels) == 1
-
-    def test_knowledge_graph_property(self, mock_ums):
-        """Should expose knowledge graph."""
-        kg = mock_ums.knowledge_graph
-
-        assert "routing_patterns" in kg
-
-
 class TestCleanup:
     """Test cleanup functionality."""
 
@@ -452,18 +409,7 @@ class TestCleanup:
         working.cleanup = AsyncMock()
         ums.collections = {"working": working}
 
-        # Mock KG service
-        ums._kg_service = MagicMock()
-        ums._kg_service._save_kg_sync = MagicMock()
-
         return ums
-
-    @pytest.mark.asyncio
-    async def test_cleanup_saves_kg(self, mock_ums):
-        """Should save KG on cleanup."""
-        await mock_ums.cleanup()
-
-        mock_ums._kg_service._save_kg_sync.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cleanup_closes_collections(self, mock_ums):

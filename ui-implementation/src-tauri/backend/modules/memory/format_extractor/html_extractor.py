@@ -122,13 +122,13 @@ class HTMLExtractor(BaseExtractor):
         except UnicodeDecodeError:
             pass
 
-        # Try chardet detection
+        # Try charset-normalizer detection
         try:
-            import chardet
+            from charset_normalizer import from_bytes
             with open(file_path, 'rb') as f:
                 raw = f.read()
-                detected = chardet.detect(raw)
-                encoding = detected.get('encoding', 'utf-8')
+                detected = from_bytes(raw).best()
+                encoding = str(detected.encoding) if detected else 'utf-8'
                 return raw.decode(encoding, errors='replace'), encoding
         except ImportError:
             pass

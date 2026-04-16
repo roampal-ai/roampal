@@ -577,12 +577,19 @@ class ChromaDBAdapter:
             return
         metadata = frag.get("metadata", {}) or {}
         metadata.update(metadata_updates)
-        self.collection.upsert(
-            ids=[fragment_id],
-            embeddings=[frag.get("vector")],
-            metadatas=[metadata]
-        )
-        logger.info(f"Fragment {fragment_id} metadata updated with {metadata_updates}")
+
+        # v0.3.1: If text/content is being updated, also update the searchable document
+        doc_text = metadata_updates.get("text") or metadata_updates.get("content")
+        upsert_kwargs = {
+            "ids": [fragment_id],
+            "embeddings": [frag.get("vector")],
+            "metadatas": [metadata],
+        }
+        if doc_text:
+            upsert_kwargs["documents"] = [doc_text]
+
+        self.collection.upsert(**upsert_kwargs)
+        logger.info(f"Fragment {fragment_id} metadata updated with {list(metadata_updates.keys())}")
 
     def update_fragment_score(self, fragment_id: str, new_score: float):
         if self.collection is None:

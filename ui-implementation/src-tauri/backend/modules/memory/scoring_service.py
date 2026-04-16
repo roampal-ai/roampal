@@ -211,16 +211,10 @@ class ScoringService:
             # FAILING PATTERN
             return (0.7, 0.3)
 
-        elif collection == "memory_bank":
-            # MEMORY BANK SPECIAL CASE - quality-based ranking
-            quality = importance * confidence
-            if quality >= 0.8:
-                return (0.45, 0.55)
-            else:
-                return (0.5, 0.5)
-
         else:
             # NEW/UNKNOWN MEMORY
+            # v0.3.1: memory_bank special case removed (matches core v0.4.5).
+            # All collections flow through same 5-tier system.
             return (self.config.embedding_weight_new, self.config.learned_weight_new)
 
     def calculate_final_score(
@@ -276,15 +270,9 @@ class ScoringService:
             raw_score, uses, outcome_history, success_count
         )
 
-        # Special case: memory_bank uses 20% Wilson + 80% quality
-        # (persistent user facts prioritize declared importance/confidence over usage patterns)
-        # Cold start protection: only blend after 3+ uses (matches roampal-core)
-        if collection == "memory_bank":
-            quality = importance * confidence
-            if uses >= 3:
-                learned_score = 0.2 * wilson_score + 0.8 * quality
-            else:
-                learned_score = quality  # Not enough data - use quality only
+        # v0.3.1: memory_bank special case removed. All collections flow through
+        # the same 5-tier dynamic weight system. Benchmark showed Wilson hurts
+        # retrieval — CE handles ranking, Wilson is metadata only.
 
         # Convert distance to similarity
         embedding_similarity = 1.0 / (1.0 + distance)

@@ -1,6 +1,6 @@
 """
 Complete backup and restore functionality for RoamPal
-Handles full system backup including ChromaDB, sessions, books, and knowledge graph
+Handles full system backup including ChromaDB, sessions, books, and outcomes
 Supports selective export with granular control
 """
 import logging
@@ -95,26 +95,8 @@ def _backup_books(zipf: zipfile.ZipFile) -> int:
 
 
 def _backup_knowledge(zipf: zipfile.ZipFile) -> int:
-    """Backup knowledge graph and outcomes. Returns count of files backed up."""
+    """Backup outcomes and MCP sessions. Returns count of files backed up."""
     count = 0
-
-    # Knowledge graph (routing patterns)
-    kg_file = Path(DATA_PATH) / "knowledge_graph.json"
-    if kg_file.exists():
-        zipf.write(kg_file, "knowledge_graph.json")
-        count += 1
-
-    # Content graph (entity relationships - v0.3.0)
-    cg_file = Path(DATA_PATH) / "content_graph.json"
-    if cg_file.exists():
-        zipf.write(cg_file, "content_graph.json")
-        count += 1
-
-    # Memory relationships
-    rel_file = Path(DATA_PATH) / "memory_relationships.json"
-    if rel_file.exists():
-        zipf.write(rel_file, "memory_relationships.json")
-        count += 1
 
     # Outcomes database
     outcomes_db = Path(DATA_PATH) / "outcomes.db"
@@ -144,7 +126,7 @@ async def create_backup(
       - "sessions": Conversation history
       - "memory": ChromaDB vector embeddings (the actual memory)
       - "books": Books database and uploaded files
-      - "knowledge": Knowledge graph, relationships, outcomes
+      - "knowledge": Outcomes and MCP sessions
       - Default: All data types included
 
     Examples:
@@ -313,9 +295,6 @@ async def estimate_export_size(
             file_count = 0
 
             for file_path in [
-                Path(DATA_PATH) / "knowledge_graph.json",
-                Path(DATA_PATH) / "content_graph.json",  # v0.3.0
-                Path(DATA_PATH) / "memory_relationships.json",
                 Path(DATA_PATH) / "outcomes.db"
             ]:
                 if file_path.exists():
@@ -366,10 +345,10 @@ async def list_backups():
                             "sessions": metadata.get("backup_stats", {}).get("sessions", 0) > 0,
                             "chromadb": metadata.get("backup_stats", {}).get("chromadb_files", 0) > 0,
                             "books": metadata.get("backup_stats", {}).get("books", 0) > 0,
-                            "knowledge_graph": metadata.get("backup_stats", {}).get("knowledge_files", 0) > 0
+                            "knowledge": metadata.get("backup_stats", {}).get("knowledge_files", 0) > 0
                         }
                     else:
-                        contains = {"sessions": True, "chromadb": True, "books": True, "knowledge_graph": True}
+                        contains = {"sessions": True, "chromadb": True, "books": True, "knowledge": True}
 
                 backups.append({
                     "filename": backup_file.name,
@@ -512,8 +491,8 @@ async def restore_from_backup(file: UploadFile = File(...)) -> RestoreResponse:
                     restored_items["books"] += 1
             logger.info(f"Restored {restored_items['books']} book files")
 
-        # 4. Restore knowledge graph and outcomes
-        for filename in ["knowledge_graph.json", "content_graph.json", "memory_relationships.json", "outcomes.db"]:
+        # 4. Restore outcomes
+        for filename in ["outcomes.db"]:
             src_file = extract_dir / filename
             if src_file.exists():
                 dest_file = Path(DATA_PATH) / filename

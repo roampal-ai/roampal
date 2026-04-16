@@ -20,32 +20,35 @@ class OutcomeService:
 
     Extracted from UnifiedMemorySystem.record_outcome and related methods.
     Handles:
-    - Time-weighted score updates
+    - Score updates (flat deltas, no time-weight)
     - Outcome history tracking
-    - KG routing updates
-    - Problem-solution pattern tracking
+    - Promotion/demotion triggering
+    - Batch cleanup of old working memory (every 50 scores)
+
+    v0.3.1: KG routing removed (matches core v0.4.5). Tags handle routing.
+    v0.3.1: Time-weight removed (matches core v0.3.6). A score is a score.
     """
 
     def __init__(
         self,
         collections: Dict[str, Any],
-        kg_service: Any = None,
         promotion_service: Any = None,
-        config: Optional[MemoryConfig] = None
+        config: Optional[MemoryConfig] = None,
+        **kwargs,  # Accept and ignore kg_service for backward compat
     ):
         """
         Initialize OutcomeService.
 
         Args:
             collections: Dict of collection name -> adapter
-            kg_service: KnowledgeGraphService for routing updates
             promotion_service: PromotionService for promotion handling
             config: Memory configuration
         """
         self.collections = collections
-        self.kg_service = kg_service
         self.promotion_service = promotion_service
         self.config = config or MemoryConfig()
+        self._score_count = 0
+        self._cleanup_interval = 50  # Trigger cleanup every N scores
 
     async def record_outcome(
         self,
@@ -66,7 +69,7 @@ class OutcomeService:
         Returns:
             Updated metadata or None if document not found
         """
-        # Find collection and document FIRST (needed for KG routing update)
+        # Find collection and document
         collection_name = None
         doc = None
 
@@ -76,42 +79,46 @@ class OutcomeService:
                 doc = adapter.get_fragment(doc_id)
                 break
 
-        # UPDATE KG ROUTING FIRST - even for books/memory_bank
-        # This allows KG to learn which collections answer which queries
-        if doc and collection_name and self.kg_service:
-            metadata = doc.get("metadata", {})
-            # For quiz retrievals, use quiz_question from context; otherwise use stored query
-            problem_text = ""
-            if context and "quiz_question" in context:
-                problem_text = context["quiz_question"]
-            else:
-                problem_text = metadata.get("query", "") or metadata.get("text", "")[:200]
-
-            if problem_text:
-                await self.kg_service.update_kg_routing(problem_text, collection_name, outcome)
-                logger.info(f"[KG] Updated routing for '{problem_text[:50]}' -> {collection_name} (outcome={outcome})")
-
         # SAFEGUARD: Books are reference material, not scorable memories
-        # But we still updated KG routing above so system learns to route to books
-        if doc_id.startswith("books_"):
-            logger.info(f"[KG] Learned routing pattern for books, but skipping score update (static reference material)")
+        if doc_id.startswith("books_") or doc_id.startswith("book_"):
+            logger.info(f"Skipping score update for books/{doc_id} (static reference material)")
             return None
 
+        # v0.3.1: If doc not found, check if it was promoted to the next collection
+        if not doc and collection_name:
+            promotion_targets = {"working": "history", "history": "patterns"}
+            target_coll = promotion_targets.get(collection_name)
+            if target_coll and target_coll in self.collections:
+                try:
+                    target_adapter = self.collections[target_coll]
+                    if target_adapter.collection:
+                        promoted_results = target_adapter.collection.get(
+                            where={"original_id": doc_id},
+                            include=["metadatas", "documents", "embeddings"],
+                            limit=1,
+                        )
+                        if promoted_results and promoted_results.get("ids") and len(promoted_results["ids"]) > 0:
+                            promoted_id = promoted_results["ids"][0]
+                            doc = target_adapter.get_fragment(promoted_id)
+                            if doc:
+                                doc_id = promoted_id
+                                collection_name = target_coll
+                                logger.info(f"Found promoted doc: {doc_id} in {collection_name}")
+                except Exception as e:
+                    logger.debug(f"Promoted doc lookup failed for {doc_id}: {e}")
 
         if not doc:
-            logger.warning(f"Document {doc_id} not found")
+            logger.debug(f"Document {doc_id} not found (may have been promoted or expired)")
             return None
 
-        # Calculate score update
+        # Calculate score update (flat deltas, no time-weight — matches core v0.3.6+)
         metadata = doc.get("metadata", {})
         current_score = metadata.get("score", 0.5)
         uses = metadata.get("uses", 0)
         success_count = metadata.get("success_count", 0.0)  # v0.3.0: Track cumulative successes
 
-        # Time-weighted score update
-        time_weight = self._calculate_time_weight(metadata.get("last_used"))
         score_delta, new_score, uses, success_delta = self._calculate_score_update(
-            outcome, current_score, uses, time_weight
+            outcome, current_score, uses
         )
         success_count += success_delta  # v0.3.0: Accumulate successes (no cap)
 
@@ -152,16 +159,8 @@ class OutcomeService:
 
         logger.info(
             f"Score update [{collection_name}]: {current_score:.2f} → {new_score:.2f} "
-            f"(outcome={outcome}, delta={score_delta:+.2f}, time_weight={time_weight:.2f}, uses={uses})"
+            f"(outcome={outcome}, delta={score_delta:+.2f}, uses={uses})"
         )
-
-        # Update KG routing if service available
-        if self.kg_service:
-            problem_text = metadata.get("query", "")
-            await self._update_kg_with_outcome(
-                doc_id, outcome, problem_text, doc.get("content", ""),
-                new_score, metadata, failure_reason, context
-            )
 
         # Handle promotion/demotion if service available
         if self.promotion_service:
@@ -175,53 +174,56 @@ class OutcomeService:
                 collection_size=collection_size
             )
 
+        # Batch cleanup: trigger every N scores (matches core v0.4.5)
+        self._score_count += 1
+        if self._score_count % self._cleanup_interval == 0 and self.promotion_service:
+            cleaned = await self.promotion_service.cleanup_old_working_memory(max_age_hours=24.0)
+            if cleaned > 0:
+                logger.info(f"Batch cleanup triggered: removed {cleaned} old working memories")
+            cleaned_history = await self.promotion_service.cleanup_old_history(max_age_hours=720.0)
+            if cleaned_history > 0:
+                logger.info(f"Batch cleanup triggered: removed {cleaned_history} old history items")
+
         logger.info(f"Outcome recorded: {doc_id} -> {outcome} (score: {new_score:.2f})")
         return metadata
-
-    def _calculate_time_weight(self, last_used: Optional[str]) -> float:
-        """Calculate time weight for score updates."""
-        if not last_used:
-            return 1.0
-
-        try:
-            age_days = (datetime.now() - datetime.fromisoformat(last_used)).days
-            return 1.0 / (1 + age_days / 30)  # Decay over month
-        except:
-            return 1.0
 
     def _calculate_score_update(
         self,
         outcome: str,
         current_score: float,
         uses: int,
-        time_weight: float
     ) -> tuple:
         """
         Calculate score delta and new values.
 
         Returns:
             Tuple of (score_delta, new_score, new_uses, success_delta)
+
+        v0.3.1: Flat deltas, no time-weight (matches core v0.3.6+).
+        - worked: +0.2 raw, +1.0 success, +1 use
+        - partial: +0.05 raw, +0.5 success, +1 use
+        - failed: -0.3 raw, +0.0 success, +1 use
+        - unknown: -0.05 raw, +0.25 success, +1 use
         """
         if outcome == "worked":
-            score_delta = 0.2 * time_weight
+            score_delta = 0.2
             new_score = min(1.0, current_score + score_delta)
             uses += 1
-            success_delta = 1.0  # v0.3.0: Full success
+            success_delta = 1.0
         elif outcome == "failed":
-            score_delta = -0.3 * time_weight
+            score_delta = -0.3
             new_score = max(0.0, current_score + score_delta)
-            uses += 1  # v0.3.0: Fix - failed should increment uses
-            success_delta = 0.0  # v0.3.0: No success
+            uses += 1
+            success_delta = 0.0
         elif outcome == "partial":
-            score_delta = 0.05 * time_weight
+            score_delta = 0.05
             new_score = min(1.0, current_score + score_delta)
             uses += 1
-            success_delta = 0.5  # v0.3.0: Half success
+            success_delta = 0.5
         elif outcome == "unknown":
-            # v0.3.0: unknown = surfaced but not used (all collections)
-            # Weak negative signal: 0.25 success creates gradual drift for noise
-            score_delta = 0.0  # Don't change raw score
-            new_score = current_score
+            # v0.3.1: -0.05 raw (matches core v0.2.9+). Surfaced but unused = weak negative.
+            score_delta = -0.05
+            new_score = max(0.0, current_score + score_delta)
             uses += 1
             success_delta = 0.25
         else:
@@ -230,110 +232,6 @@ class OutcomeService:
             return 0.0, current_score, uses, 0.0
 
         return score_delta, new_score, uses, success_delta
-
-    async def _update_kg_with_outcome(
-        self,
-        doc_id: str,
-        outcome: str,
-        problem_text: str,
-        solution_text: str,
-        new_score: float,
-        metadata: Dict[str, Any],
-        failure_reason: Optional[str],
-        context: Optional[Dict[str, Any]]
-    ):
-        """Update knowledge graph based on outcome."""
-        if not self.kg_service:
-            return
-
-        # NOTE: update_kg_routing already called at start of record_outcome for ALL docs
-        # This method handles additional KG updates like concept relationships
-
-        if outcome == "worked" and problem_text and solution_text:
-            # Extract concepts
-            problem_concepts = self.kg_service.extract_concepts(problem_text)
-            solution_concepts = self.kg_service.extract_concepts(solution_text)
-            all_concepts = list(set(problem_concepts + solution_concepts))
-
-            # Build relationships
-            self.kg_service.build_concept_relationships(all_concepts)
-
-            # Track problem category
-            problem_key = "_".join(sorted(problem_concepts)[:3])
-            self.kg_service.add_problem_category(problem_key, doc_id)
-
-            # Track solution pattern
-            self.kg_service.add_solution_pattern(
-                doc_id, solution_text, new_score,
-                [problem_key], solution_concepts[:5]
-            )
-
-            # Update success rate
-            self.kg_service.update_success_rate(doc_id, outcome)
-
-            # Track problem-solution mapping
-            await self._track_problem_solution(doc_id, metadata, context)
-
-        elif outcome == "failed":
-            # Track failure
-            self.kg_service.update_success_rate(doc_id, outcome)
-
-            if failure_reason:
-                self.kg_service.add_failure_pattern(
-                    failure_reason[:50], doc_id, problem_text[:100]
-                )
-
-        elif outcome == "partial":
-            self.kg_service.update_success_rate(doc_id, outcome)
-
-        # Save KG (debounced)
-        await self.kg_service.debounced_save_kg()
-
-    async def _track_problem_solution(
-        self,
-        doc_id: str,
-        metadata: Dict[str, Any],
-        context: Optional[Dict[str, Any]]
-    ):
-        """Track successful problem→solution patterns for future reuse."""
-        if not self.kg_service:
-            return
-
-        try:
-            problem_text = metadata.get("original_context", "") or metadata.get("query", "")
-            solution_text = metadata.get("text", "")
-
-            if not problem_text or not solution_text:
-                return
-
-            # Create problem signature
-            problem_concepts = self.kg_service.extract_concepts(problem_text)
-            problem_signature = "_".join(sorted(problem_concepts[:5]))
-
-            if not problem_signature:
-                return
-
-            # Track in KG
-            self.kg_service.add_problem_solution(
-                problem_signature=problem_signature,
-                doc_id=doc_id,
-                solution_text=solution_text,
-                context=context
-            )
-
-            # Track solution pattern
-            pattern_hash = f"{problem_signature}::{doc_id}"
-            self.kg_service.add_solution_pattern_entry(
-                pattern_hash=pattern_hash,
-                problem_text=problem_text,
-                solution_text=solution_text,
-                outcome="worked"
-            )
-
-            logger.info(f"Tracked problem→solution: {problem_signature[:30]}... -> {doc_id}")
-
-        except Exception as e:
-            logger.error(f"Error tracking problem→solution: {e}")
 
     def count_successes_from_history(self, outcome_history_json: str) -> float:
         """

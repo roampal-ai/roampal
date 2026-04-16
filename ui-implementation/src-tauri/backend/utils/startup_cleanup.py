@@ -260,11 +260,10 @@ async def delete_chromadb_collections_for_shard(shard_name: str) -> List[str]:
                 
                 # Check if this collection belongs to the shard
                 # Format: global_{shard_name}_fragments or user_{id}_{shard_name}_fragments
-                # Also check for other shard-specific collections like conversations and knowledge_graph
+                # Also check for other shard-specific collections like conversations
                 if (f"global_{shard_name}_" in collection_name or
                     f"_{shard_name}_fragments" in collection_name or
-                    f"_{shard_name}_conversations" in collection_name or
-                    f"_{shard_name}_knowledge_graph" in collection_name):
+                    f"_{shard_name}_conversations" in collection_name):
                     
                     try:
                         client.delete_collection(name=collection_name)

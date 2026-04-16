@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowDownIcon, ClockIcon, SparklesIcon, CubeIcon, LinkIcon, MagnifyingGlassIcon, FunnelIcon } from '@heroicons/react/24/outline';
+import { ArrowDownIcon, ClockIcon, SparklesIcon, LinkIcon, MagnifyingGlassIcon, FunnelIcon } from '@heroicons/react/24/outline';
 import { apiFetch } from '../utils/fetch';
 import { ROAMPAL_CONFIG } from '../config/roampal';
 
@@ -55,7 +55,7 @@ export const ContextBar: React.FC<ContextBarProps> = ({
   onMemoryClick,
   onRefresh,
 }) => {
-  const [activeTab, setActiveTab] = useState<'fragments' | 'graph' | 'references'>('fragments');
+  const [activeTab, setActiveTab] = useState<'fragments' | 'references'>('fragments');
   const [sortBy, setSortBy] = useState<SortType>('recent');
   const [fragments, setFragments] = useState<MemoryFragment[]>(memories);
   const [graphNodes, setGraphNodes] = useState<KnowledgeNode[]>([]);
@@ -200,17 +200,6 @@ export const ContextBar: React.FC<ContextBarProps> = ({
             )}
           </button>
 
-          <button
-            onClick={() => setActiveTab('graph')}
-            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-              activeTab === 'graph'
-                ? 'bg-zinc-800 text-zinc-100'
-                : 'text-zinc-400 hover:text-zinc-100'
-            }`}
-          >
-            <CubeIcon className="w-3.5 h-3.5 inline mr-1" />
-            Graph
-          </button>
         </div>
 
         {/* Controls for Fragments */}
@@ -364,72 +353,6 @@ export const ContextBar: React.FC<ContextBarProps> = ({
           </div>
         )}
 
-        {/* Knowledge Graph Tab */}
-        {activeTab === 'graph' && (
-          <div className="p-4">
-            {/* Graph Stats */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div className="bg-zinc-900/50 rounded-lg p-3 border border-zinc-800">
-                <div className="flex items-center gap-2 mb-1">
-                  <CubeIcon className="w-3.5 h-3.5 text-blue-400" />
-                  <span className="text-xs text-zinc-500">Concepts</span>
-                </div>
-                <p className="text-xl font-semibold text-zinc-200">
-                  {knowledgeGraph.concepts || graphNodes.length || 0}
-                </p>
-              </div>
-              <div className="bg-zinc-900/50 rounded-lg p-3 border border-zinc-800">
-                <div className="flex items-center gap-2 mb-1">
-                  <LinkIcon className="w-3.5 h-3.5 text-purple-400" />
-                  <span className="text-xs text-zinc-500">Relations</span>
-                </div>
-                <p className="text-xl font-semibold text-zinc-200">
-                  {knowledgeGraph.relationships || 0}
-                </p>
-              </div>
-            </div>
-
-            {/* Concept List */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-medium text-zinc-400 mb-2">Active Concepts</h3>
-              {graphNodes.length > 0 ? (
-                graphNodes.slice(0, 10).map((node) => (
-                  <div
-                    key={node.id}
-                    className="p-2.5 bg-zinc-900/50 rounded-lg hover:bg-zinc-800/50 border border-zinc-800 hover:border-zinc-700 transition-all"
-                  >
-                    <div className="flex items-start justify-between mb-1">
-                      <span className="text-sm font-medium text-zinc-200">{node.name}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-zinc-500">{node.connections} links</span>
-                        <div className={`w-2 h-2 rounded-full ${
-                          node.strength >= 0.8 ? 'bg-green-400' :
-                          node.strength >= 0.5 ? 'bg-yellow-400' :
-                          'bg-zinc-400'
-                        }`} />
-                      </div>
-                    </div>
-                    <p className="text-xs text-zinc-500 line-clamp-2">{node.meaning}</p>
-                  </div>
-                ))
-              ) : knowledgeGraph.activeTopics && knowledgeGraph.activeTopics.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {knowledgeGraph.activeTopics.map((topic, idx) => (
-                    <span
-                      key={idx}
-                      className="px-2 py-1 bg-zinc-900 text-zinc-300 text-xs rounded-full"
-                    >
-                      {topic}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-zinc-600">No active concepts yet</p>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* References Tab */}
         {activeTab === 'references' && (
           <div className="p-3 space-y-2">
@@ -461,7 +384,6 @@ export const ContextBar: React.FC<ContextBarProps> = ({
       <div className="h-10 px-4 flex items-center justify-center border-t border-zinc-800">
         <span className="text-xs text-zinc-500">
           {activeTab === 'fragments' && `${sortedFragments.length} fragment${sortedFragments.length !== 1 ? 's' : ''}`}
-          {activeTab === 'graph' && `${knowledgeGraph.concepts || 0} concepts • ${knowledgeGraph.relationships || 0} relations`}
           {activeTab === 'references' && `${references.length} reference${references.length !== 1 ? 's' : ''}`}
         </span>
       </div>

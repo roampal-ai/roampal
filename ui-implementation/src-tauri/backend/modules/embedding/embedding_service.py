@@ -1,12 +1,20 @@
 # backend/modules/embedding/embedding_service.py
+"""
+Embedding Service — ONNX Runtime backend.
+
+v0.3.1: Replaced sentence-transformers + PyTorch with direct ONNX inference.
+Same model (paraphrase-multilingual-mpnet-base-v2), same 768d vectors,
+same ChromaDB collections — zero user-facing change. Existing embeddings
+stay compatible.
+"""
 
 import logging
+import hashlib
 import numpy as np
 from typing import List, Dict, Any
 import sys
 import os
 from pathlib import Path
-import threading
 
 # Add the backend directory to sys.path if not already there
 backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -15,101 +23,137 @@ if backend_dir not in sys.path:
 
 from core.interfaces.embedding_service_interface import EmbeddingServiceInterface
 
+try:
+    import onnxruntime as ort
+    from tokenizers import Tokenizer
+    from huggingface_hub import hf_hub_download
+    ONNX_AVAILABLE = True
+except ImportError:
+    ort = None
+    Tokenizer = None
+    hf_hub_download = None
+    ONNX_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+# HuggingFace repo for the ONNX-exported model
+HF_REPO = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+ONNX_FILE = "onnx/model_O4.onnx"
+TOKENIZER_FILE = "tokenizer.json"
+EMBEDDING_DIM = 768
+
+
+def _mean_pool(token_embeddings: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
+    """Mean pooling — average token embeddings weighted by attention mask."""
+    mask_expanded = np.expand_dims(attention_mask, axis=-1)
+    summed = np.sum(token_embeddings * mask_expanded, axis=1)
+    counts = np.clip(mask_expanded.sum(axis=1), a_min=1e-9, a_max=None)
+    return summed / counts
+
+
+def _normalize(vectors: np.ndarray) -> np.ndarray:
+    """L2-normalize each row."""
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms = np.clip(norms, a_min=1e-12, a_max=None)
+    return vectors / norms
+
 
 class EmbeddingService(EmbeddingServiceInterface):
     def __init__(self):
         self._model_name = "paraphrase-multilingual-mpnet-base-v2"
-        self._version = "1.4"
-        self._embedding_dim = 768
-        self.model = None
+        self._version = "1.5"  # v0.3.1: ONNX backend
+        self._embedding_dim = EMBEDDING_DIM
+        self._session = None
+        self._tokenizer = None
 
         # Embedding cache to avoid regenerating identical embeddings
-        self._cache = {}  # {text_hash: embedding}
-        self._max_cache_size = 200  # Limit memory usage
+        self._cache = {}
+        self._max_cache_size = 200
 
-        logger.info(f"EmbeddingService initialized (model will load on first use): {self._model_name}")
+        logger.info(f"EmbeddingService initialized (ONNX, model loads on first use): {self._model_name}")
 
-    def _load_bundled_model(self):
-        """Load the bundled paraphrase-multilingual-mpnet-base-v2 model with timeout protection."""
-        try:
-            from sentence_transformers import SentenceTransformer
+    def _load_model(self):
+        """Download (if needed) and load the ONNX model + tokenizer."""
+        if not ONNX_AVAILABLE:
+            raise ImportError(
+                "onnxruntime/tokenizers not installed. "
+                "Run: pip install onnxruntime tokenizers huggingface-hub"
+            )
 
-            # Path from embedding_service.py: embedding/ -> modules/ -> backend/ -> release/ -> binaries/
-            bundled_cache = Path(__file__).parent.parent.parent.parent / "binaries" / "models" / "paraphrase-multilingual-mpnet-base-v2"
+        # Check for bundled model first
+        bundled_cache = Path(__file__).parent.parent.parent.parent / "binaries" / "models" / self._model_name
+        bundled_onnx = None
+        bundled_tokenizer = None
 
-            model_path = None
-            if bundled_cache.exists():
-                # Read the snapshot ID from refs/main
-                ref_file = bundled_cache / "refs" / "main"
-                if ref_file.exists():
-                    snapshot_id = ref_file.read_text().strip()
-                    snapshot_path = bundled_cache / "snapshots" / snapshot_id
+        if bundled_cache.exists():
+            ref_file = bundled_cache / "refs" / "main"
+            if ref_file.exists():
+                snapshot_id = ref_file.read_text().strip()
+                snapshot_path = bundled_cache / "snapshots" / snapshot_id
+                onnx_path = snapshot_path / "onnx" / "model_O4.onnx"
+                tok_path = snapshot_path / "tokenizer.json"
+                if onnx_path.exists() and tok_path.exists():
+                    bundled_onnx = str(onnx_path)
+                    bundled_tokenizer = str(tok_path)
+                    logger.info(f"Loading bundled ONNX model from: {snapshot_path}")
 
-                    if snapshot_path.exists():
-                        logger.info(f"Loading bundled embedding model from snapshot: {snapshot_path}")
-                        model_path = str(snapshot_path)
-                    else:
-                        logger.warning(f"Snapshot path not found: {snapshot_path}")
+        if bundled_onnx:
+            model_path = bundled_onnx
+            tokenizer_path = bundled_tokenizer
+        else:
+            logger.info(f"Downloading ONNX model: {self._model_name}")
+            model_path = hf_hub_download(repo_id=HF_REPO, filename=ONNX_FILE)
+            tokenizer_path = hf_hub_download(repo_id=HF_REPO, filename=TOKENIZER_FILE)
 
-            if model_path is None:
-                # Fallback to download (development mode only)
-                logger.warning("Bundled model not found, downloading from HuggingFace (dev mode)")
-                model_path = 'paraphrase-multilingual-mpnet-base-v2'
+        opts = ort.SessionOptions()
+        opts.inter_op_num_threads = 1
+        opts.intra_op_num_threads = 0  # auto-detect
 
-            # Load model with timeout protection to prevent deadlocks
-            result = [None]
-            error = [None]
+        self._session = ort.InferenceSession(
+            model_path, sess_options=opts, providers=["CPUExecutionProvider"]
+        )
+        self._tokenizer = Tokenizer.from_file(tokenizer_path)
+        self._tokenizer.enable_padding()
+        self._tokenizer.enable_truncation(max_length=128)
 
-            def load_model():
-                try:
-                    result[0] = SentenceTransformer(model_path)
-                except Exception as e:
-                    error[0] = e
+        logger.info(f"Embedding model loaded (ONNX): {self._model_name}")
 
-            thread = threading.Thread(target=load_model)
-            thread.daemon = True
-            thread.start()
-            thread.join(timeout=120)  # 2 minute timeout for model loading
+    def _encode(self, texts: List[str]) -> np.ndarray:
+        """Tokenize and run ONNX inference, return normalized embeddings."""
+        encoded = self._tokenizer.encode_batch(texts)
 
-            if thread.is_alive():
-                logger.error("Model loading timed out after 120 seconds")
-                raise RuntimeError("Embedding model loading timed out")
+        input_ids = np.array([e.ids for e in encoded], dtype=np.int64)
+        attention_mask = np.array([e.attention_mask for e in encoded], dtype=np.int64)
 
-            if error[0]:
-                raise error[0]
+        session_inputs = {inp.name for inp in self._session.get_inputs()}
+        feeds = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if "token_type_ids" in session_inputs:
+            feeds["token_type_ids"] = np.zeros_like(input_ids)
 
-            self.model = result[0]
-            logger.info(f"Embedding model loaded successfully: {self._model_name}")
+        outputs = self._session.run(None, feeds)
+        token_embeddings = outputs[0]  # (batch, seq_len, hidden_dim)
 
-        except ImportError as e:
-            logger.error(f"Cannot import sentence_transformers: {e}")
-            raise RuntimeError("sentence_transformers is required for embeddings") from e
-        except Exception as e:
-            logger.error(f"Failed to load embedding model: {e}")
-            raise
+        pooled = _mean_pool(token_embeddings, attention_mask.astype(np.float32))
+        return _normalize(pooled)
 
     @property
     def model_name(self) -> str:
-        """Get the name of the embedding model being used."""
         return self._model_name
 
     @property
     def embedding_dim(self) -> int:
-        """Get the dimension of the embeddings produced by this service."""
         return self._embedding_dim
 
     @property
     def version(self) -> str:
-        """Get the version of the embedding service."""
         return self._version
 
     def get_embedding_metadata(self) -> Dict[str, Any]:
-        """Get metadata about the embedding service and model."""
         return {
             "model_name": self._model_name,
             "version": self._version,
             "embedding_dim": self._embedding_dim,
+            "backend": "onnx",
             "bundled": True
         }
 
@@ -120,54 +164,27 @@ class EmbeddingService(EmbeddingServiceInterface):
             return [0.0] * self._embedding_dim
 
         # Lazy load model on first use
-        if self.model is None:
-            self._load_bundled_model()
+        if self._session is None:
+            self._load_model()
 
-        # Check cache first (using hash to save memory)
-        import hashlib
+        # Check cache first
         cache_key = hashlib.md5(text.encode('utf-8')).hexdigest()
-
         if cache_key in self._cache:
-            logger.debug(f"Embedding cache HIT for: {text[:50]}...")
             return self._cache[cache_key]
 
-        # Generate embedding using bundled model
         try:
-            # Truncate text to avoid token length issues (roughly 400 tokens = 2000 chars)
+            # Truncate to avoid token length issues
             if len(text) > 2000:
                 text = text[:2000]
-                logger.warning(f"Truncated text to 2000 characters for embedding")
 
-            # Add timeout protection to prevent indefinite hangs
-            result = [None]
-            error = [None]
+            embedding = self._encode([text])[0].tolist()
 
-            def encode_with_timeout():
-                try:
-                    result[0] = self.model.encode(text).tolist()
-                except Exception as e:
-                    error[0] = e
-
-            thread = threading.Thread(target=encode_with_timeout)
-            thread.daemon = True
-            thread.start()
-            thread.join(timeout=30)  # 30 second timeout
-
-            if thread.is_alive():
-                logger.error("Embedding generation timed out after 30 seconds, returning zero vector")
-                return [0.0] * self._embedding_dim
-
-            if error[0]:
-                raise error[0]
-
-            embedding = result[0]
-
-            # Verify dimension (should be 768 natively)
+            # Verify dimension
             if len(embedding) != self._embedding_dim:
-                logger.warning(f"Dimension mismatch: expected {self._embedding_dim}, got {len(embedding)}. Padding/trimming.")
+                logger.warning(f"Dimension mismatch: expected {self._embedding_dim}, got {len(embedding)}")
                 embedding = (embedding + [0.0] * (self._embedding_dim - len(embedding)))[:self._embedding_dim]
 
-            # Store in cache (FIFO eviction if at capacity)
+            # Store in cache (FIFO eviction)
             if len(self._cache) >= self._max_cache_size:
                 oldest_key = next(iter(self._cache))
                 del self._cache[oldest_key]
@@ -181,11 +198,16 @@ class EmbeddingService(EmbeddingServiceInterface):
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Embed multiple text strings into vector representations."""
-        embeddings = []
-        for text in texts:
-            embedding = await self.embed_text(text)
-            embeddings.append(embedding)
-        return embeddings
+        if self._session is None:
+            self._load_model()
+
+        valid_texts = [t if isinstance(t, str) and t.strip() else "" for t in texts]
+        try:
+            vectors = self._encode(valid_texts)
+            return vectors.tolist()
+        except Exception as e:
+            logger.error(f"Batch embedding failed: {e}")
+            return [await self.embed_text(t) for t in texts]
 
     async def validate_embedding(self, embedding: List[float]) -> bool:
         """Validate that an embedding has the correct format and dimension."""
@@ -198,24 +220,15 @@ class EmbeddingService(EmbeddingServiceInterface):
         return True
 
     async def get_similarity(self, embedding1: List[float], embedding2: List[float]) -> float:
-        """Calculate the similarity between two embeddings using cosine similarity."""
+        """Calculate cosine similarity between two embeddings."""
         try:
-            # Convert to numpy arrays for calculation
             vec1 = np.array(embedding1)
             vec2 = np.array(embedding2)
-            
-            # Normalize vectors
             norm1 = np.linalg.norm(vec1)
             norm2 = np.linalg.norm(vec2)
-            
             if norm1 == 0 or norm2 == 0:
                 return 0.0
-            
-            # Calculate cosine similarity
-            similarity = np.dot(vec1, vec2) / (norm1 * norm2)
-            return float(similarity)
-            
+            return float(np.dot(vec1, vec2) / (norm1 * norm2))
         except Exception as e:
             logger.error(f"Error calculating similarity: {e}")
             return 0.0
-

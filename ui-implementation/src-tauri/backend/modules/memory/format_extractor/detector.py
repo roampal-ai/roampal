@@ -173,13 +173,13 @@ def _extract_plain_text(file_path: Path) -> ExtractedDocument:
             content = f.read()
         encoding = 'utf-8'
     except UnicodeDecodeError:
-        # Try chardet
+        # Try charset-normalizer
         try:
-            import chardet
+            from charset_normalizer import from_bytes
             with open(file_path, 'rb') as f:
                 raw = f.read()
-                detected = chardet.detect(raw)
-                encoding = detected.get('encoding', 'utf-8')
+                detected = from_bytes(raw).best()
+                encoding = str(detected.encoding) if detected else 'utf-8'
                 content = raw.decode(encoding, errors='replace')
                 warnings.append(f"Detected encoding: {encoding}")
         except ImportError:

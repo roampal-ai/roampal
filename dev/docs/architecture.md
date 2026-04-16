@@ -10,21 +10,23 @@ Roampal is an intelligent chatbot with persistent memory and learning capabiliti
 
 ### New Architecture
 
-| Component | Lines | Purpose |
-|-----------|-------|---------|
-| `unified_memory_system.py` | 1203 | **Facade** - coordinates services, maintains API |
-| `knowledge_graph_service.py` | 949 | KG operations, routing patterns, entity extraction |
-| `search_service.py` | 646 | Search, reranking, dynamic weighting |
-| `chromadb_adapter.py` | 604 | Vector DB operations, BM25 hybrid search |
-| `smart_book_processor.py` | 657 | Book ingestion, chunking, contextual embedding |
-| `content_graph.py` | 543 | Entity relationships, content KG |
-| `promotion_service.py` | 473 | Working→History→Patterns promotion |
-| `context_service.py` | 455 | Conversation context analysis |
-| `routing_service.py` | 444 | Query routing, acronym expansion |
-| `memory_bank_service.py` | 430 | Memory bank CRUD operations |
-| `outcome_service.py` | 370 | Outcome recording, score updates |
-| `scoring_service.py` | 324 | Wilson scoring, score calculations |
-| `types.py` | 296 | Shared types, ActionOutcome enum |
+| Component | Lines | Purpose | v0.3.1 Status |
+|-----------|-------|---------|---------------|
+| `unified_memory_system.py` | ~1,600 | **Facade** - coordinates services, maintains API | KG removed, tag extraction on store |
+| `search_service.py` | ~650 | TagCascade retrieval, CE reranking | Tag-routed overlap cascade |
+| `chromadb_adapter.py` | 672 | Vector DB operations, BM25 hybrid search | Unchanged |
+| `smart_book_processor.py` | 657 | Book ingestion, chunking, contextual embedding | Unchanged |
+| `promotion_service.py` | 490 | Working→History→Patterns promotion | Unchanged |
+| `context_service.py` | ~400 | Conversation context analysis | KG methods return empty |
+| `routing_service.py` | ~400 | Query routing, acronym expansion | KG routing removed |
+| `memory_bank_service.py` | ~450 | Memory bank CRUD operations | KG entity tracking removed |
+| `outcome_service.py` | 401 | Outcome recording, score updates | Unchanged |
+| `scoring_service.py` | 339 | Wilson scoring, score calculations | memory_bank special case removed |
+| `sidecar_service.py` | NEW | Background LLM scoring + fact extraction | **New in v0.3.1** |
+| `sidecar_queue.py` | NEW | Retry queue for failed sidecar tasks | **New in v0.3.1** |
+| `tag_service.py` | NEW | Noun tag extraction + word-boundary matching | **New in v0.3.1** |
+| `types.py` | 296 | Shared types, ActionOutcome enum | Unchanged |
+| `config.py` | 102 | Configuration constants | graph config removed |
 
 ### Key Methods by Service
 
@@ -33,7 +35,7 @@ Roampal is an intelligent chatbot with persistent memory and learning capabiliti
 | Cross-encoder reranking | `unified_memory_system.py:591-659` | `search_service.py:447+` |
 | Acronym expansion | `unified_memory_system.py:972-1144` | `routing_service.py:39+` |
 | Outcome recording | `unified_memory_system.py:2296-2424` | `outcome_service.py:50+` |
-| KG routing updates | `unified_memory_system.py` | `knowledge_graph_service.py:381+` |
+| KG routing updates | `unified_memory_system.py` | *Removed in v0.3.1 (tag routing replaces KG)* |
 | Promotion logic | `unified_memory_system.py` | `promotion_service.py` |
 | Context analysis | `unified_memory_system.py:1736` | `context_service.py` |
 
@@ -53,48 +55,37 @@ The facade (`unified_memory_system.py`) maintains backwards compatibility with e
 
 ## Performance Benchmarks
 
-### Headline Result (v0.2.5)
+### Headline Result (v0.3.1 — roampal-labs LoCoMo)
 
-> **Outcome learning: +40 pts improvement. Reranker: +10 pts. Learning dominates 4×. (p=0.005)**
+> **TagCascade retrieval: 27.3% Hit@1 on LoCoMo (1,537 questions, p<0.0001 vs Wilson+CE blend).**
 
-See `benchmarks/comprehensive_test/` for full test suite and methodology.
+See [roampal-labs](https://github.com/roampal-ai/roampal-labs) for full benchmark suite and methodology.
 
 ---
 
-### Comprehensive 4-Way Comparison (v0.2.5)
+### LoCoMo Evaluation (v0.3.1)
 
-| Condition | Top-1 | MRR | nDCG@5 |
-|-----------|-------|-----|--------|
-| RAG Baseline | **10%** | 0.550 | 0.668 |
-| Reranker Only | **20%** | 0.600 | 0.705 |
-| Outcomes Only | **50%** | 0.750 | 0.815 |
-| Full Roampal | **44%** | 0.720 | 0.793 |
+From roampal-labs LoCoMo evaluation (1,537 non-adversarial questions):
 
-**Improvement Breakdown:**
-- Reranker contribution: +10 pts
-- Outcomes contribution: +40 pts (4× more impactful)
+| Config | Hit@1 Clean | Hit@1 Poison | p-value |
+|--------|-------------|--------------|---------|
+| **TagCascade + cosine** | **27.3%** | **29.0%** | **baseline** |
+| Overlap + cosine | 25.8% | 28.0% | p=0.0003 |
+| Pure CE | 25.4% | 28.4% | — |
+| TagCascade + Wilson | 23.0% | 25.0% | p<0.0001 |
 
-**Statistical Significance:**
-- Learning Curve (Cold→Mature): p=0.0051**
-- Full vs RAG (MRR): p=0.0150*
-- Full vs Reranker (MRR): p=0.0368*
-
-### Learning Curve (v0.2.5)
-
-| Maturity | Uses | Accuracy |
-|----------|------|----------|
-| Cold Start | 0 | **10%** |
-| Early | 3 | **100%** |
-| Mature | 20 | **100%** |
-
-**+90 percentage points** improvement from cold start to learned state.
+**Key findings:**
+- Wilson scoring hurts retrieval by 4.3 points in every configuration tested
+- Two-lane retrieval adds +6.1 Hit@1 (p<0.0001)
+- Nursery slot: zero benefit (p=1.0)
 
 ### Performance Metrics Summary
 
 | Metric | Measured Performance | Status |
 |--------|---------------------|--------|
-| **4-Way Comparison** | 200 tests, RAG 10% → Roampal 60% | ✅ Verified |
-| **Statistical Significance** | p=0.005 (learning curve) | ✅ Verified |
+| **TagCascade Hit@1** | 27.3% on 1,537 questions | ✅ Verified |
+| **Wilson harm** | -4.3 points (p<0.0001) | ✅ Verified |
+| **Two-lane boost** | +6.1 Hit@1 (p<0.0001) | ✅ Verified |
 | **Learning Curve** | 10% → 100% (+90pp) | ✅ Verified |
 | **Token Efficiency** | Outcome-only 6× more efficient than RAG | ✅ Verified |
 | **Infrastructure** | 14 test suites, 100% pass rate | ✅ Verified |
@@ -140,11 +131,11 @@ The system learns that "what worked before" matters more than "what sounds relat
 │   ┌─────────────────────────────────┐            │
 │   │ Core Features:                  │            │
 │   │ • 5-tier memory collections     │            │
-│   │ • Automatic outcome detection   │            │
-│   │ • Concept relationships graph   │            │
-│   │ • Problem→Solution tracking     │            │ 
+│   │ • TagCascade retrieval          │            │
+│   │ • CE reranking (ONNX)           │            │
+│   │ • Sidecar LLM processing        │            │ 
 │   │ • Score-based promotion         │            │
-│   │ • Adaptive learning             │            │
+│   │ • Two-lane context injection    │            │
 │   └─────────────────────────────────┘            │
 │                                                  │
 │   Collections:                                   │
@@ -196,20 +187,21 @@ The system learns that "what worked before" matters more than "what sounds relat
 #### Memory Bank Collection (NEW - 2025-10-01)
 - **Purpose**: Persistent context for both user AND LLM (identity, preferences, learned knowledge, shared projects)
 - **Retention**: Permanent (never decays)
-- **Capacity**: 1000 items maximum (prevents unbounded growth)
+- **Capacity**: 500 items maximum (MemoryBankService.MAX_ITEMS=500; config.max_memory_bank_items=1000 is unused)
 - **Ranking**: Results boosted by `importance × confidence` score
   - High-quality memories (importance=0.9, confidence=0.9 → quality=0.81) rank significantly higher
   - Low-quality memories (importance=0.3, confidence=0.4 → quality=0.12) rank lower
   - Quality score reduces semantic distance by up to 50% for maximum-quality items
-  - **Content KG Entity Boost**: Documents with high-quality entities matching query get additional 50% boost (max 1.5× multiplier)
+  - ~~Content KG Entity Boost~~ (disabled in v0.3.1 — CE handles relevance ranking instead)
 - **Management**:
   - LLM has full autonomy to store/update/archive
   - User has override via Settings UI (restore/delete)
   - Auto-archives old versions on updates (versioning without complexity)
+- **Always Inject**: Memories with `always_inject: true` metadata are included in EVERY context injection, regardless of query relevance. Used for critical identity facts.
 - **Structure**:
-  - Tags: Soft guidelines (identity, preference, project, context, goal, workflow)
+  - Category tags: Soft guidelines (identity, preference, project, context, goal). v0.3.1 adds noun tags (separate field for retrieval routing).
   - Status: active | archived
-  - Metadata: importance (0-1), confidence (0-1), mentioned_count
+  - Metadata: importance (0-1), confidence (0-1), mentioned_count, always_inject (bool)
 - **Use Case**: Persistent identity and knowledge layer that enables continuity, personalization, and agent growth across all sessions
 - **Purpose**: Three-layer foundation for evolving from stateless assistant to long-term collaborator:
   1. **User Context** - Who you are, what you want (identity, preferences, goals, projects)
@@ -257,11 +249,7 @@ Unlike outcome-based collections (working/history/patterns), memory_bank uses **
    - Preserves quality boost from step 1
    - Fixed in v0.2.1 (was: `1 - min(d, 1)` which capped all distances >1 to 0 similarity)
 
-3. **Cross-Encoder Quality Multiplier:**
-   - For memory_bank only: `final_score = blended_score × (1 + quality)`
-   - High quality (0.93) → 1.93x multiplier
-   - Low quality (0.08) → 1.08x multiplier
-   - Ensures quality advantage survives cross-encoder reranking
+3. ~~Cross-Encoder Quality Multiplier~~ (removed in v0.3.1 — TagCascade uses raw CE score as sole ranking signal, no Wilson blend)
 
 **Example:**
 ```
@@ -442,6 +430,8 @@ combined_score = (embedding_weight × embedding_similarity) + (learned_weight ×
 
 ¹ Memory_bank quality determined by importance × confidence ≥ 0.8
 
+> **v0.3.1 change:** Memory_bank special-case rows will be removed. All collections use the same 5-tier system (PROVEN/ESTABLISHED/EMERGING/FAILING/NEW). Memory_bank facts still rank high when semantically relevant but won't dominate irrelevant queries. See `dev/docs/releases/v0.3.1/RELEASE_NOTES.md`.
+
 **Design Rationale:**
 - **Adaptive Trust**: System trusts learned scores more as memories prove themselves through usage
 - **Query Robustness**: High-value memories rank well even with mediocre query formulation
@@ -593,23 +583,27 @@ After: "User memory, High importance: Gemma is 31"
 **Problem:** First-stage retrieval has false positives
 **Solution:** Score top-30 results with cross-encoder model for precision
 
-**Method:**
-- Uses `cross-encoder/ms-marco-MiniLM-L-6-v2` (BERT-based)
+**Method (v0.3.1):**
+- Uses `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (multilingual, 14+ languages, ONNX)
 - Cross-encoder jointly encodes query + document pairs
 - Provides finer-grained relevance scores than embeddings
-- Blended score: **40% original + 60% cross-encoder** (trust cross-encoder more)
+- v0.3.1 TagCascade: Raw CE score as final ranking (no Wilson blend). Wilson computed as metadata only (display, promotion). Benchmark: Wilson hurts retrieval by 4.3pts (p<0.0001).
 
 **Why cross-encoder vs bi-encoder:**
 - Bi-encoder (what we use for embedding): Encodes query and doc separately, fast but less accurate
 - Cross-encoder: Encodes query+doc together, slow but very accurate
-- Solution: Use bi-encoder for first-stage retrieval (fast), cross-encoder for reranking top-30 (accurate)
+- Solution: Use bi-encoder for first-stage retrieval (fast), cross-encoder for reranking top-40 (accurate)
 
 **Implementation:**
-- `unified_memory_system.py:194-200` - Initialize cross-encoder (optional)
-- `unified_memory_system.py:591-659` - `_rerank_with_cross_encoder()` method
-- `unified_memory_system.py:1308-1309` - Applied when results > limit × 2
-- **Optional Dependency**: Requires `sentence-transformers` package
-- **Graceful Fallback**: Uses original ranking if cross-encoder unavailable
+- `search_service.py` - `_load_ce()`, `_ce_predict()`, `_rerank_with_ce()` methods
+- Lazy-loaded via ONNX Runtime on first search (~471MB download, cached)
+- **No extra deps**: Uses ONNX Runtime (already required). No PyTorch/sentence-transformers.
+- **Graceful Fallback**: Uses Wilson-only ranking if ONNX model unavailable
+
+**Slot allocation (v0.3.1):**
+- Slots 1-3: top 3 by Wilson+CE score (all collections compete on merit)
+- Slot 4: nursery (low-use memory, < 3 uses) for exploration
+- No reserved working/history slots
 
 #### Combined Performance (Estimated)
 
@@ -631,7 +625,7 @@ After: "User memory, High importance: Gemma is 31"
 
 **Dependencies:**
 ```bash
-pip install rank-bm25 sentence-transformers nltk
+pip install rank-bm25 onnxruntime tokenizers nltk
 ```
 
 #### 4. Query Preprocessing (v0.2.2)
@@ -676,13 +670,14 @@ Preprocessed: "User uses API? application programming interface"
    c. RRF fusion
 4. Merge all collections
 5. Dynamic ranking (v0.2.0)
-6. Cross-encoder rerank top-30
-7. Return top-k
+6. v0.3.1 TagCascade: tag matching → tag-routed search (overlap cascade) → cosine fill
+7. Cross-encoder rerank top-40 (ONNX, raw CE score — no Wilson blend)
+8. Two-lane injection: 4 summaries + 4 facts = 8 memories
 ```
 
 **Graceful Degradation:**
 - If BM25 unavailable → Falls back to vector-only search
-- If cross-encoder unavailable → Uses dynamic ranking only
+- If cross-encoder unavailable → Uses Wilson scoring only (cosine + Wilson, no CE)
 - If contextual prefix fails → Uses original text
 
 **Performance Characteristics:**
@@ -714,19 +709,13 @@ The 4 techniques implemented are **production-proven** (used by Google, Anthropi
 - Tracks `last_outcome` metadata: "worked", "failed", "partial", "unknown"
 - Score evolves over time as memory is used and rated
 
-**Score Adjustments (v0.3.0):**
-- ✅ `worked`: +0.2 × time_weight (capped at 1.0), success_delta=1.0
-- ❌ `failed`: -0.3 × time_weight (minimum 0.0), success_delta=0.0
-- ⚠️ `partial`: +0.05 × time_weight (small boost), success_delta=0.5
-- ❓ `unknown`: No score change, but uses+=1, success_delta=0.25 (weak negative signal for noise drift)
+**Score Adjustments (v0.3.1 — flat deltas, matches core v0.4.5):**
+- ✅ `worked`: +0.2 (capped at 1.0), success_delta=1.0
+- ❌ `failed`: -0.3 (minimum 0.0), success_delta=0.0
+- ⚠️ `partial`: +0.05 (small boost), success_delta=0.5
+- ❓ `unknown`: -0.05 (weak negative), success_delta=0.25
 
-**Time-Weighted Scoring (v0.3.0):**
-- Score deltas are multiplied by a time weight based on memory age
-- Formula: `time_weight = 1.0 / (1 + age_days / 30)`
-- Fresh memories (0 days): full weight (1.0)
-- 30-day old memories: half weight (0.5)
-- 90-day old memories: quarter weight (0.25)
-- This prevents stale memories from being over-penalized or over-rewarded
+v0.3.1: Time-weight removed. A score is a score regardless of memory age (matches core v0.3.6+).
 
 **Uses Counter (Wilson Scoring):**
 - `uses` is incremented on ALL outcomes (worked, failed, partial, unknown)
@@ -751,7 +740,8 @@ The 4 techniques implemented are **production-proven** (used by Google, Anthropi
 **Technical Implementation:**
 - [outcome_service.py](modules/memory/outcome_service.py) - `record_outcome()` method
 - [scoring_service.py](modules/memory/scoring_service.py) - Wilson score calculation
-- Score updates logged: `Score update [working]: 0.50 → 0.70 (outcome=worked, delta=+0.20, time_weight=0.95)`
+- v0.3.1: KG calls removed from outcome recording (tags handle routing)
+- Score updates logged: `Score update [working]: 0.50 → 0.70 (outcome=worked, delta=+0.20, uses=1)`
 
 **Example Evolution:**
 ```
@@ -917,115 +907,117 @@ exchange_doc_id = await memory.store(
 
 **Removed in v0.2.3:** All memories now must go through history first to prove themselves over time. The fast-track bypass was too aggressive - 3 consecutive successes in one session doesn't prove long-term value. Memories need to "season" in history before reaching patterns.
 
-#### Unified Outcome-Based Memory Scoring (Updated 2025-10-06)
+#### Unified Outcome-Based Memory Scoring (Updated 2026-04-10)
 
-**Simple, clean system: LLM detects outcomes → scores the previous exchange → mechanical promotion.**
+**Simple, clean system: Sidecar scores exchanges → mechanical promotion.**
 
-The system uses LLM intelligence for outcome detection only. All scoring, promotion, and deletion decisions follow fixed, predictable rules based on accumulated outcomes.
+The sidecar LLM is the sole scorer. All scoring, promotion, and deletion decisions follow fixed, predictable rules based on accumulated outcomes. The main LLM does NOT score memories.
 
-**LLM Service Injection (Internal System Only):** The LLM client is injected into the memory system after initialization via `memory.set_llm_service(llm_client)` ([main.py:295-298](../main.py#L295-L298)). This allows the `OutcomeDetector` to access the LLM for analyzing conversation outcomes. **Note**: MCP system does not use automatic detection - external LLMs provide outcomes **explicitly** via the `outcome` parameter (optional, defaults to "unknown" if not provided).
+**v0.3.1 Sidecar Scoring Architecture:**
 
-**OutcomeDetector API (v0.2.12):** [outcome_detector.py](../ui-implementation/src-tauri/backend/modules/advanced/outcome_detector.py)
+The sidecar fires ONE combined LLM call (matching OpenCode's `scoreExchangeViaLLM()`) that returns:
+- **summary**: ~300 char first-person note (replaces raw exchange text in ChromaDB)
+- **outcome**: worked/failed/partial/unknown (based on user's followup message)
+- **noun_tags**: topic nouns extracted from the exchange
+- **facts**: atomic facts stored as `memory_type: "fact"` memories
+- **memory_scores**: per-memory scoring using the 7-rule guide
 
-```python
-async def analyze(
-    self,
-    conversation: List[Dict[str, Any]],
-    surfaced_memories: Optional[Dict[int, str]] = None,  # v0.2.12 Fix #5
-    llm_marks: Optional[Dict[int, str]] = None           # v0.2.12 Fix #7
-) -> Dict[str, Any]:
-    """
-    Returns:
-        {
-            "outcome": "worked|failed|partial|unknown",
-            "confidence": 0.0-1.0,
-            "indicators": ["explicit_thanks", ...],
-            "reasoning": "User said thanks",
-            "used_positions": [1, 3],           # v0.2.12 Fix #5: inferred usage
-            "upvote": [1],                      # v0.2.12 Fix #7: positions to upvote
-            "downvote": [2]                     # v0.2.12 Fix #7: positions to downvote
-        }
-    """
-```
-
-**Parameters:**
-- `conversation`: Recent turns for outcome analysis
-- `surfaced_memories` (v0.2.12): `{position: content}` - memories shown to main LLM, used for selective scoring
-- `llm_marks` (v0.2.12→v0.3.0): `{position: emoji}` - main LLM's attribution marks (👍🤷👎➖)
-
-**Returns:**
-- `used_positions`: Inferred from response analysis (Fix #5 fallback)
-- `upvote`/`downvote`: Calculated from llm_marks + outcome (Fix #7)
+**Sidecar API:** `score_exchange()` in [sidecar_service.py](../ui-implementation/src-tauri/backend/modules/memory/sidecar_service.py)
 
 **The Clean Flow:**
 
-1. **User:** "What's an IRA?"
-2. **Assistant searches memory** (if relevant) → returns doc_id_X, doc_id_Y from patterns/history
-   - System caches: [doc_id_X, doc_id_Y] for outcome scoring
+1. **Turn N — User:** "What's an IRA?"
+2. **Assistant searches memory** → returns doc_id_X, doc_id_Y from patterns/history
+   - System caches: `_search_cache[conversation_id]` = {position_map, content_map}
 3. **Assistant responds:** "An IRA is a retirement account..."
    - Stores exchange in memory: `"User: What's an IRA?\nAssistant: An IRA is..."`
-   - doc_id: "working_abc123"
-   - Initial score: 0.5
+   - Caches exchange data: `_sidecar_pending[conversation_id]` = {doc_id, user_msg, assistant_msg}
 
-4. **User provides feedback:** "that didn't help"
-   - **BEFORE** generating response, system:
-     - Reads session file to get previous assistant message
-     - Gets doc_id: "working_abc123"
-     - Analyzes: [previous assistant answer, current user feedback]
-     - LLM detects: outcome = "failed"
-     - **Updates previous exchange score**: 0.5 - 0.3 = **0.2**
-     - **Updates cached memories** (doc_id_X, doc_id_Y) with same outcome ("failed")
-     - Clears cache
+4. **Turn N+1 — User follows up:** "that didn't help"
+   - **BEFORE** generating response, system fires sidecar (background task):
+     - Pops `_sidecar_pending` (previous exchange) and `_search_cache` (previous cached memories)
+     - Calls `score_exchange(user_msg, assistant_msg, followup="that didn't help", memories=[...])`
+     - Sidecar returns: summary, outcome="failed", facts, tags, memory_scores={doc_id_X: "failed", doc_id_Y: "unknown"}
+     - Updates exchange text with summary, stores facts, updates tags
+     - Scores each cached memory individually via `record_outcome()`
+   - Then generates new response normally
 
 5. **Assistant responds:** "Let me explain better..."
-   - Stores NEW exchange with doc_id: "working_xyz456", score: 0.5
+   - Stores NEW exchange, caches it for next turn's sidecar
 
-**Key Principle:** The outcome detection scores BOTH:
-- The PREVIOUS exchange that the user is reacting to
-- Any retrieved memories (working/history/patterns) that were used in that response
+**Key Principles:**
+- The sidecar fires on the NEXT user message (the followup signal), matching core/OpenCode
+- Each cached memory gets individually scored using the 7-rule guide
+- The exchange itself also gets scored with its outcome
+- No fallback to emoji/detect_outcome — sidecar is the sole scorer
 
-**v0.3.0 Scoring Architecture (Simplified):**
+**7-Rule Per-Memory Scoring Guide (in sidecar prompt):**
+1. Memory NOT about the topic discussed → "unknown"
+2. Memory IS about topic AND outcome "worked" → "worked"
+3. Memory IS about topic AND outcome "failed" + response echoed memory → "failed"
+4. Memory IS about topic AND outcome "failed" + unrelated → "unknown"
+5. Memory IS about topic AND outcome "partial" → "partial"
+6. Memory contains good advice response IGNORED → "unknown" not "failed" ("failed" means content was WRONG)
+7. When in doubt → "unknown"
 
-The internal system uses a two-tier approach: main LLM attribution (primary) + outcome detector (fallback).
+**v0.3.1.3 Sidecar Queuing and Reliability Architecture:**
 
-1. **Primary: 4-Emoji Attribution** - Main LLM marks each memory with 👍🤷👎➖ at response time:
-   - Main LLM adds hidden annotation: `<!-- MEM: 1👍 2🤷 3👎 4➖ -->` (v0.3.0: 4 emojis)
-   - Parsed and stripped before showing response to user
-   - Passed to OutcomeDetector which combines marks with outcome detection
-   - **v0.3.0 4-Emoji System:**
-     - 👍 (helpful) → worked outcome for this memory
-     - 🤷 (partial) → partial outcome for this memory (v0.3.0 NEW)
-     - 👎 (unhelpful) → failed outcome for this memory
-     - ➖ (no_impact) → unknown outcome for this memory
-   - Scoring matrix (v0.3.0 direct emoji→outcome mapping):
-     ```
-     Emoji     | Direct Outcome | Score Effect           | Wilson Effect
-     ----------|----------------|------------------------|---------------
-     👍        | worked         | +0.2 × time_weight     | success_delta=1.0
-     🤷        | partial        | +0.05 × time_weight    | success_delta=0.5
-     👎        | failed         | -0.3 × time_weight     | success_delta=0.0
-     ➖        | unknown        | no score change        | success_delta=0.25
-     ```
-   - **Key insight:** Each memory gets individually scored based on its emoji mark
+The sidecar now includes robust queuing and retry mechanisms to ensure it always runs, even when models are busy or temporarily unavailable.
 
-2. **Fallback: Simplified Outcome Detector** - If main LLM doesn't provide emoji marks:
-   - OutcomeDetector LLM only answers: "was the user happy?" (worked/failed/partial/unknown)
-   - **v0.3.0 Simplification**: Removed `used_positions` inference - too complex, unreliable on small models
-   - Prompt is now ~50 words: "Grade the USER'S REACTION (not the assistant's quality)"
-   - All cached memories get the overall outcome (simple, predictable)
-   - Returns only `{"outcome": "worked|failed|partial|unknown"}` - defaults filled for backward compat
+**Client Locking and Sharing:**
+- **Shared clients**: When sidecar uses same provider/model as main LLM, it shares the client instance to avoid GPU memory duplication
+- **Client locking**: `execute_with_client_lock()` prevents concurrent model loading for same client
+- **Sequential execution**: Sidecar waits politely if main LLM is using the model, then runs after
 
-**Scoring Rules (v0.3.0):**
-- `worked` → +0.2 × time_weight, success_delta=1.0
-- `failed` → -0.3 × time_weight, success_delta=0.0, uses+=1 (fixed in v0.3.0)
-- `partial` → +0.05 × time_weight, success_delta=0.5
-- `unknown` → no score change, success_delta=0.25, uses+=1 (weak negative signal)
+**Retry Queue with Exponential Backoff:**
+- **Persistent queue**: Failed sidecar tasks are queued for retry (`sidecar_queue.py`)
+- **Exponential backoff**: 1min → 2min → 4min → give up (max 3 retries)
+- **Background processor**: Runs every 30 seconds to process queued tasks
+- **Task types**: `score_exchange`, `extract_facts`, `extract_noun_tags`, `summarize_only`
 
-**Automatic Promotion/Demotion/Deletion** (threshold-based, v0.3.0):
-- score ≥ 0.7 AND uses ≥ 2 → working → history (resets uses=0, success_count=0)
-- score ≥ 0.9 AND uses ≥ 3 AND success_count ≥ 5 → history → patterns
+**Implementation:**
+- `score_exchange_with_retry()` - Wrapper with locking and retry
+- `extract_facts_with_retry()` - Same for fact extraction
+- `extract_noun_tags_with_retry()` - Same for tag extraction  
+- `summarize_only_with_retry()` - Same for summarization
+
+**Key Benefits:**
+1. **Always runs**: Sidecar never silently fails - queued tasks retry automatically
+2. **No GPU duplication**: Shared clients prevent double memory usage
+3. **No user slowdown**: Sidecar runs in background after main LLM responds
+4. **Model consistency**: Same model can be used for both main LLM and sidecar
+5. **Reliability**: Exponential backoff handles temporary unavailability
+
+**Configuration:**
+- Same model allowed for main/sidecar (no blocking)
+- Automatic client sharing when same provider/model
+- Background retry processor started on app startup
+
+**Scoring Rules (v0.3.1 — flat deltas, matches core v0.4.5):**
+- `worked` → +0.2, success_delta=1.0
+- `failed` → -0.3, success_delta=0.0, uses+=1
+- `partial` → +0.05, success_delta=0.5
+- `unknown` → -0.05, success_delta=0.25, uses+=1 (weak negative signal)
+
+**Automatic Promotion/Demotion/Deletion** (threshold-based, v0.3.1):
+- score ≥ 0.7 AND uses ≥ 2 → working → history (resets success_count=0, preserves uses)
+- score ≥ 0.9 AND uses ≥ 3 AND success_count ≥ 5 → history → patterns (resets success_count=0)
 - score < 0.4 → patterns → history (demotion)
 - score < 0.2 → deleted (or score < 0.1 for items < 7 days old)
+
+**v0.3.1.4 Sidecar Input & Scoring Limits:**
+
+Optimized for small sidecar models (3b+). Worst case: ~5,700 tokens total.
+
+| Parameter | Limit | Reason |
+|-----------|-------|--------|
+| `score_exchange` user_msg | 8,000 chars | Full exchange context for accurate scoring |
+| `score_exchange` assistant_msg | 8,000 chars | Full response visible to sidecar |
+| `score_exchange` followup | 4,000 chars | Current user message as outcome signal |
+| `extract_facts` content | 8,000 chars | Full exchange for fact extraction |
+| `extract_noun_tags` text | 2,000 chars | Summary/fact text for tag extraction |
+| Summary output trim | 2,000 chars | Safety net (prompt instructs ~300 chars) |
+| **Scored memories per turn** | **8 (most recent)** | Last 8 from search cache — later searches more likely found the answer. Matches two-lane injection (4+4). Prevents JSON output complexity failures on small models. Unscored memories keep their current Wilson score. |
 
 ### MCP (External LLM) Memory Scoring Flow
 
@@ -1288,21 +1280,16 @@ The system runs automated maintenance tasks to keep memory healthy:
 **Background Tasks** (runs every 30 minutes):
 1. **Memory Promotion**: Promote valuable working memory (score ≥0.7, uses ≥2) to history
 2. **Working Memory Cleanup**: Delete items older than 24 hours
-3. **Knowledge Graph Cleanup**: Remove dead doc_id references from KG
-   - Cleans `problem_categories` and `problem_solutions` mappings
-   - Removes routing patterns with 0 total uses
-   - Prevents KG bloat from deleted documents
-   - **Visualization**: Node size reflects both usage frequency AND success rate
-     - Formula: `√connections × √(strength + 0.1)`
-     - Prevents low-quality high-usage patterns from appearing prominent
-     - Example: 100 uses at 10% success → smaller than 10 uses at 90% success
-     - Display: Top 20 concepts by hybrid score (fits on screen, prevents UI overflow)
-     - Sorting: Highest quality × usage patterns shown first
+3. **History Cleanup**: Delete items older than 30 days (720 hours)
+
+**Batch Cleanup** (v0.3.1, every 50 outcome scores):
+1. Working memory cleanup (24h)
+2. History cleanup (30 days)
+Matches core v0.4.5 `outcome_service.py` pattern.
 
 **Startup Tasks** (runs on system start, non-blocking):
 1. Clean stale working memory from previous session
 2. Clean history older than 30 days
-3. Clean dead KG references
 
 **Automatic Cleanup on Deletion** (v0.2.0 - Prevents Stale Data):
 - **Content KG cleanup** - Automatically called on ALL memory_bank deletions:
@@ -1323,6 +1310,8 @@ The system runs automated maintenance tasks to keep memory healthy:
 - Moved to background task in 2025-10-01 update
 
 #### Dual Knowledge Graph System (v0.2.0)
+
+> **v0.3.1 deprecation:** The entire KG system (Routing KG, Content KG, Action KG) is being replaced by tag-routed overlap cascade. Benchmark data proved KG actively hurts retrieval — edge scores frozen at 0.5, graph expansion adding noise. Wilson+CE without KG scored 78.7% vs KG+CE at 74.6%. See `dev/docs/releases/v0.3.1/RELEASE_NOTES.md` for the replacement design. Code archived to `dev/archive/kg/`.
 
 **Learning-Based Routing KG** (Implemented 2025-11-05)
 
@@ -1420,7 +1409,9 @@ if len(results) < 3 and not_searching_all_tiers:
 
 #### Knowledge Graphs are the Intelligence Layer
 
-**Profound Realization**: The memory collections (books, working, history, patterns, memory_bank) are just **storage**. The real intelligence lives in the **Knowledge Graphs**.
+> **v0.3.1 update:** This section describes the original KG design philosophy. Benchmark results disproved this — KG routing added noise, not intelligence. Tags + Wilson+CE proved simpler and more effective. The intelligence layer is now Wilson outcome scoring + tag routing, not graph traversal.
+
+**Original Realization (v0.2.0)**: The memory collections (books, working, history, patterns, memory_bank) are just **storage**. The real intelligence lives in the **Knowledge Graphs**.
 
 **Three Knowledge Graphs Working Together:**
 
@@ -1430,7 +1421,8 @@ if len(results) < 3 and not_searching_all_tiers:
    - Enables intelligent tier selection
 
 2. **Content KG** (`content_graph`) - *How are entities related?*
-   - Entity relationships from memory content
+   - Entity relationships from **memory_bank text only** (not working/history/patterns)
+   - Entity strength formula: `(co_occurrences ** 0.5) * 2.0` (sqrt diminishing returns)
    - Green/purple nodes in visualization
    - Semantic connections between concepts
 
@@ -1555,12 +1547,11 @@ The system currently uses static stopword lists. A future enhancement would add 
 
 ---
 
-**Content Knowledge Graph** (✅ FULLY INTEGRATED - v0.2.0)
+**Content Knowledge Graph** (⚠️ NEUTRALIZED in v0.3.1)
 
-**⚠️ CRITICAL FEATURE - DO NOT DISABLE OR REMOVE ⚠️**
-This provides entity relationship mapping for the user's personal knowledge graph and enables green/purple node visualization in the KG UI.
+> **v0.3.1:** Content KG entity boost disabled in search hot path. KG visualization tab removed from UI. Files archived to `dev/archive/kg/`. Tag routing + Wilson+CE replaces KG entity boost.
 
-Complements the routing KG with a **content-based entity graph** that indexes relationships from memory_bank content.
+Previously complemented the routing KG with a content-based entity graph. Retained for potential future use but not active in search/retrieval.
 
 **Implementation Status:**
 - ✅ Core class: [content_graph.py](../ui-implementation/src-tauri/backend/modules/memory/content_graph.py)
@@ -1762,7 +1753,7 @@ The **single source of truth** for all memory operations, implemented as a **fac
 > **Refactored in v0.2.7** (December 2025): The original 4,746-line monolithic file was refactored into 9 smaller, focused modules:
 > - `unified_memory_system.py` - Facade (~500 lines) maintaining the public API
 > - `scoring_service.py` - Wilson score calculations and quality metrics
-> - `knowledge_graph_service.py` - Triple KG management (Action, Routing, Content)
+> - ~~`knowledge_graph_service.py`~~ - *Removed in v0.3.1 (tag routing replaces KG)*
 > - `routing_service.py` - Collection routing and concept extraction
 > - `search_service.py` - Vector search with reranking
 > - `promotion_service.py` - Memory lifecycle (working -> patterns/history)
@@ -1789,12 +1780,11 @@ The **single source of truth** for all memory operations, implemented as a **fac
     +------------------------------+------------------------------+
     |                              |                              |
     v                              v                              v
-+-------------+    +-------------+    +---------------------+
-|SearchService|    |ScoringService|   |KnowledgeGraphService|
-| - search()  |    | - wilson()   |   | - Action KG         |
-| - rerank()  |    | - ce_score() |   | - Routing KG        |
-+-------------+    +-------------+    | - Content KG        |
-                                      +---------------------+
++-------------+    +-------------+    +-------------+
+|SearchService|    |ScoringService|   | TagService  |
+| - search()  |    | - wilson()   |   | - extract() |
+| - rerank()  |    | - ce_score() |   | - index()   |
++-------------+    +-------------+    +-------------+
     +------------------------------+------------------------------+
     |                              |                              |
     v                              v                              v
@@ -2007,7 +1997,7 @@ Converts various document formats to plain text before processing by SmartBookPr
 |--------|-----------|---------|-------|
 | Plain Text | .txt | built-in | Direct read with encoding detection |
 | Markdown | .md | built-in | Direct read |
-| PDF | .pdf | PyMuPDF | Text extraction, metadata (title/author) |
+| PDF | .pdf | pypdf | Text extraction, metadata (title/author) |
 | Word | .docx | python-docx | Preserves headings, extracts tables |
 | Excel | .xlsx, .xls | openpyxl + pandas | Row-based chunking with headers |
 | CSV | .csv, .tsv | pandas | Auto-detects delimiter and encoding |
@@ -2286,6 +2276,7 @@ The prompting system builds structured, secure prompts with personality, memory 
   - **Shared Logic**: `memory.get_cold_start_context()` ([unified_memory_system.py:1884-1926](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L1884-L1926))
   - **Protection**: Layer 4 injection filtering built-in
   - **Simplicity**: One search call, no KG ranking, no fallback logic
+  - **Recent Exchanges (v0.3.1.4)**: After user profile injection, fetches 4 most recent exchange summaries sorted by recency (no semantic query). Injected as `RECENT EXCHANGES (last N):` block. Matches core/OpenCode behavior. Filtered to sidecar-generated summaries (`summarized_at` metadata or <500 chars). Gives the chat LLM continuity from past conversations on first message.
   - **Output Format** (v0.2.8 - Simplified):
     ```
     ═══ KNOWN CONTEXT (auto-loaded) ═══
@@ -3273,10 +3264,11 @@ MCP and Internal prompts use different approaches based on system differences:
 ```json
 {
   "name": "add_to_memory_bank",
-  "description": "Store critical information in permanent memory_bank that enables continuity and growth across sessions. Three-layer purpose: (1) User Context - identity, preferences, goals, projects; (2) System Mastery - tool strategies, search patterns, what works/fails; (3) Agent Growth - mistakes learned, relationship dynamics, progress tracking. Be selective - store what enables continuity/learning across sessions, NOT session transcripts or temporary task details.",
+  "description": "Store PERMANENT facts (user identity, preferences, goals, learned strategies). SIZE GUIDANCE: ~300 chars or less per fact, one concept per fact, condense 1000+ char facts.",
   "parameters": {
-    "content": "string (required)",
+    "content": "string (required) — hard cap: 2000 chars (silent truncation)",
     "tags": "array of strings - Categories: identity, preference, goal, project, system_mastery, agent_growth",
+    "noun_tags": "array of strings - Content nouns for TagCascade (auto-extracted if omitted)",
     "importance": "number (0.0-1.0, default: 0.7) - How critical is this memory",
     "confidence": "number (0.0-1.0, default: 0.7) - How certain about this fact"
   }
@@ -3287,10 +3279,10 @@ MCP and Internal prompts use different approaches based on system differences:
 ```json
 {
   "name": "update_memory",
-  "description": "Update existing memory_bank entries",
+  "description": "Update existing memory when information changes or needs correction.",
   "parameters": {
     "old_content": "string (required - text to find)",
-    "new_content": "string (required - replacement text)"
+    "new_content": "string (required - replacement text) — hard cap: 2000 chars (silent truncation)"
   }
 }
 ```
@@ -3706,8 +3698,9 @@ DELETE /api/model/context/{model_name} # Reset to default context size
   3. Component + size matching (prevents `7b` matching `70b`)
 - **Ghost model detection**: New `GET /api/model/ghost-models` and `DELETE /api/model/ghost-models/{id}` endpoints to detect and remove orphaned models that appear in LM Studio but have no matching registry entry.
 - **Download cleanup**: On download failure, partial `.gguf` files are automatically deleted via `finally` block with `download_success` flag.
-- **Provider-specific timeouts**: Health check timeout is 90s for LM Studio (larger models need more time to load from disk), 30s for Ollama.
-- **Better error messages**: Timeout errors now show "Model load timed out. Try a smaller model or pre-load it in LMSTUDIO." instead of raw exception text.
+- **Lightweight health checks**: Model switching performs lightweight availability checks (`/api/tags` for Ollama, `/v1/models` for LM Studio) instead of inference requests. Models load into GPU only on first user message, not during health checks.
+- **Provider-specific timeouts**: Health check timeout is 10s for both providers (lightweight checks only).
+- **Better error messages**: Connection errors show "Ollama not responding. Make sure Ollama is running on port 11434." instead of model load timeouts.
 
 **Model UI Updates** (v0.3.0)
 - `qwen2.5:7b` description updated to "Good tool calling (may struggle with 20+ tools)" - 7B models may output tool JSON as text when many MCP tools are loaded.
@@ -3852,27 +3845,23 @@ Chat models and embedding models serve different purposes. Roampal uses bundled 
 - Backend validates and returns clean error if frontend check bypassed
 - No exception logging for expected states (embedding model active is not an error)
 
-**UI Integration** ([ConnectedChat.tsx](../ui-implementation/src/components/ConnectedChat.tsx)) (Updated 2025-10-31)
+**UI Integration** ([ConnectedChat.tsx](../ui-implementation/src/components/ConnectedChat.tsx)) (Updated 2026-04-10)
+- **Model-first design** (v0.3.1): UI shows all models from all providers in a single list — no provider tabs or toggle
 - **Provider detection**: Checks for available LLM providers on mount, shows modal if none detected
-- **Provider selector** (lines 1760-1803): Dropdown to switch between Ollama/LM Studio (only visible if multiple providers detected)
-  - **Non-blocking switch** (Updated 2025-10-31): Removed `async/await` from onClick handlers to prevent UI freeze during model switch
-  - Closes dropdown immediately, then fires model switch in background
-- **Provider-filtered models** (lines 1029-1033): Model dropdown only shows models from currently selected provider (no duplicates)
-- **Chat input availability** ([ConnectedChat.tsx:1073-1080](../ui-implementation/src/components/ConnectedChat.tsx#L1073)) (Updated 2025-10-31):
-  - `hasChatModel` checks for chat models across ALL providers (not just selected provider)
-  - Prevents input from being disabled during provider auto-switch (when selectedProvider hasn't synced yet but another provider has models)
-  - Filters out embedding models from availability check
-- **Setup banners**: Per-provider setup instructions with download links
-  - Ollama banner: Shows download button for ollama.com
-  - LM Studio banner (lines 2234-2271): Shows download + server setup instructions, hides when server detected on port 1234
-- **Model dropdown** (lines 1823-1895): Select/switch models with live status, filtered by provider
-- **Agent-capable badges**: 🤖 emoji for models with 12K+ context
+- **`getModelOptions()`**: Returns ALL installed models from ALL providers with provider badge in description. No longer filters by `selectedProvider`.
+- **`getSidecarModelOptions()`**: Groups models into "Recommended" (≤7b) and "All Models" for sidecar selection
+- **Chat input availability**: `hasChatModel` checks for chat models across ALL providers, filters out embedding models
+- **Setup banners**: Both Ollama and LM Studio banners shown simultaneously when their respective provider is offline
+- **Chat model dropdown**: All installed models with provider badge, passes model's actual `provider` to `switchModel()` and `handleUninstallModel()`
+- **Sidecar dropdown**: Cross-provider — passes model's actual provider to `/api/model/sidecar/set`. Groups small models as "Recommended".
+ - **GPU memory management**: Sidecar shares client with main LLM when same provider/model to avoid GPU duplication. Client locking prevents concurrent model loading. Retry queue with exponential backoff ensures sidecar always runs even if temporarily unavailable.
+- **Model Library modal**: Unified layout with ~6 curated "Chat Models" and "Sidecar Models". Per-provider install buttons. "Pull from Ollama" text input for any model by name. LM Studio models detected automatically.
+- **Type-to-pull**: Text input in Model Library. Auto-appends `:latest` if no tag. Calls `POST /api/model/pull-stream`.
 - **Download progress popup**: Real-time progress with provider-specific status messages
   - Ollama: `downloading` → `complete`
   - LM Studio: `downloading` → `importing` → `loading` → `loaded`
 - **Download cancellation**: AbortController cancels in-flight downloads
-- **Mid-conversation warning**: Confirms switch if messages exist
-  - **Non-blocking confirmation** (Updated 2025-10-31): Dialog closes immediately when clicking "Switch Model", performs switch in background via `.then()`
+- **Mid-conversation warning**: Confirms switch if messages exist, non-blocking confirmation
 - **Model attribution** ([EnhancedChatMessage.tsx:90-94](../ui-implementation/src/components/EnhancedChatMessage.tsx)): Badge showing which model generated each response
 - **Auto-refresh**: Model list refreshes after install/uninstall
 - **Persistence**: Selected provider and model saved to localStorage
@@ -4229,6 +4218,8 @@ data/
 - **No hardcoded defaults**: System is truly modular - users choose their own models
 - **Embedding model filter**: Filters out non-chat models (nomic-embed, llava, bge-, all-minilm, mxbai-embed) from dropdown ([ConnectedChat.tsx:654](../ui-implementation/src/components/ConnectedChat.tsx#L654))
 - **Smart first model auto-switch**: After downloading first chat model, checks backend's `/api/model/current` to verify no chat model is active. If backend has no chat model (embedding-only or none), automatically switches to newly installed chat model. Subsequent model installs show success toast only - user manually switches via dropdown. ([ConnectedChat.tsx:410-420](../ui-implementation/src/components/ConnectedChat.tsx#L410))
+ - **Lazy model loading**: Models load into GPU memory only on first user message, not during app startup or model switching. Health checks verify model availability without loading. Sidecar operations use client locking to prevent concurrent model loading and retry queue for reliability.
+- **Auto-selection behavior**: If no model is configured in `.env`, app selects first available model from detected provider. **Recommendation**: Configure `OLLAMA_MODEL` or `ROAMPAL_LLM_OLLAMA_MODEL` in `.env` to avoid auto-selection of large models.
 
 #### Model Selection Synchronization
 
@@ -5424,6 +5415,13 @@ Backend generates title → sends SSE event → Frontend handles it → loadSess
    - Prevents accidental deletion of active conversation
    - Each collection deletes independently (no bulk nuke)
 
+3. **Summarize Tab** (v0.3.1) - Legacy memory migration
+   - Scans working + history + patterns for unsummarized memories (>400 chars, no `summarized_at`)
+   - Per-memory pipeline: `summarize_only()` → `extract_tags_regex()` → `extract_facts()` → update + store facts
+   - SSE streaming progress (same pattern as model download)
+   - Requires sidecar model configured
+   - One-time toast notification on app launch when candidates detected (localStorage dismiss flag)
+
 **Components Created**:
 - `ui-implementation/src/components/DataManagementModal.tsx` - Main modal with tab system
 - `ui-implementation/src/components/DeleteConfirmationModal.tsx` - Reusable confirmation dialog
@@ -5439,7 +5437,10 @@ POST /api/data/clear/history          # Clear history
 POST /api/data/clear/patterns         # Clear patterns
 POST /api/data/clear/books            # Clear books
 POST /api/data/clear/sessions         # Delete all session files
-POST /api/data/clear/knowledge-graph  # Clear all KG files (knowledge_graph.json, content_graph.json, memory_relationships.json)
+POST /api/data/clear/knowledge-graph  # Clear all KG files
+GET  /api/data/summarize/scan         # v0.3.1: Count unsummarized memory candidates
+POST /api/data/summarize/run          # v0.3.1: SSE stream — summarize legacy memories
+POST /api/data/summarize/cancel       # v0.3.1: Cancel in-progress summarization
 ```
 
 **Safety Features**:
@@ -5460,7 +5461,7 @@ POST /api/data/clear/knowledge-graph  # Clear all KG files (knowledge_graph.json
 - **Left Sidebar** → Personality & Identity, Document Processor, Settings
   - Settings → Memory Bank (manage individual memories: active/archived/stats tabs)
   - Settings → Voice Settings (coming soon)
-  - Settings → Data Management (export/bulk delete: export/delete tabs)
+  - Settings → Data Management (export/delete/summarize tabs)
 
 **Files Modified**:
 - [SettingsModal.tsx:79-97](ui-implementation/src/components/SettingsModal.tsx#L79) - Replaced export button with data management button
@@ -7797,4 +7798,119 @@ self.reload_kg()
 - `src/components/MemoryBankModal.tsx` - Toast feedback (lines 113-175, 496-503)
 - `modules/memory/unified_memory_system.py` - Migration safety (232-307), health check (309-396)
 - `modules/memory/knowledge_graph_service.py` - KG flush-before-reload (lines 753-768)
+
+---
+
+## v0.3.1 Implemented: Tag-Routed Overlap Cascade (Replaces KG)
+
+> **Status:** Implemented and shipped. Benchmark-validated on roampal-labs LoCoMo dataset (1,537 questions). Mirrors roampal-core v0.4.9.x architecture. See [v0.3.1 Release Notes](releases/v0.3.1/RELEASE_NOTES.md) for full details.
+
+### Why: KG Proved Harmful
+
+Benchmark data across 2000+ turns proved the Knowledge Graph actively hurts retrieval:
+- KG+CE: 74.6% accuracy (graph adding noise, expansion pulling irrelevant entities)
+- Wilson+CE: 78.7% accuracy (no graph, just Wilson scoring + cross-encoder)
+- KG edge scores frozen at 0.5 — the graph never actually learned
+- Graph expansion turned precise queries into vague ones
+
+The Routing KG, Content KG, and Action KG add complexity without improving results. Tags replace all KG functionality with a simpler, faster, proven-better approach.
+
+### What: Tag-Routed Overlap Cascade
+
+**Store time:** LLM extracts topic nouns (people, places, objects) from each memory. Tags stored as pipe-delimited metadata field. Extraction prompt focuses on WHO and WHAT the text is about — skips pronouns, meta-words, generic verbs.
+
+**Query time (v0.3.1 — implemented):** Extract nouns from query using word-boundary matching (prevents `car` matching `caroline`). Run one ChromaDB query per matched tag (max 8) with `noun_tags $contains` filter. Count tag overlaps — memories matching more query tags rank higher.
+
+**TagCascade pool construction (v0.3.1):**
+1. Fill 40-candidate pool from highest overlap tier down (cosine distance tiebreak within each tier)
+2. Cosine-fill remaining pool slots from unfiltered search (catches untagged memories)
+3. CE reranks pool — raw CE score as final ranking (NO Wilson blend)
+4. If no tags match → straight cosine candidates → CE rerank
+
+**Two-lane injection (v0.3.1):**
+- Lane 1: 4 summaries (`memory_type != "fact"`)
+- Lane 2: 4 facts (`memory_type == "fact"`)
+- Total: 8 memories per context injection
+
+**Key properties:**
+- Can never perform worse than cosine — worst case falls back to it
+- No tags match at all → straight cosine search, one CE pass
+- Raw CE score is the only ranking signal (Wilson proved harmful at p<0.0001)
+- Wilson score still computed as metadata (display, promotion thresholds)
+- Single CE pass of 40 candidates — efficient and proven on LoCoMo benchmark
+
+### Desktop-Specific Implementation Plan
+
+**Files to modify:**
+
+| File | Change |
+|------|--------|
+| `modules/memory/tag_service.py` | NEW — Noun tag extraction via LLM (same as core) |
+| `modules/memory/tag_migration.py` | NEW — One-time backfill of noun tags on existing memories |
+| `modules/memory/search_service.py` | Replace KG entity boost with tag-routed overlap cascade + CE quality gate |
+| `modules/memory/unified_memory_system.py` | Tag extraction on `store()`, tag set rebuild on init, remove KG wiring, top-3+nursery slots |
+| `modules/memory/memory_bank_service.py` | Noun tag extraction on `store()` (alongside existing category tags) |
+| `modules/memory/scoring_service.py` | Remove memory_bank special-case `(0.0, 1.0)` weighting — use same 5-tier system for all collections |
+| `modules/memory/config.py` | Remove `graph_backend` references |
+| `modules/memory/knowledge_graph_service.py` | Archive to `dev/archive/kg/` |
+| `modules/memory/content_graph.py` | Archive to `dev/archive/kg/` |
+| `modules/memory/routing_service.py` | Remove KG routing phases, simplify to tag-based routing |
+| `app/routers/agent_chat.py` | Remove KG visualization calls, update outcome recording |
+| `app/routers/memory_visualization_enhanced.py` | Replace KG graph visualization with tag cloud / tag relationship view |
+
+**Desktop-specific implementation notes:**
+- KG visualization (green/purple nodes) replaced by tag cloud in Memory Panel. Substack-style tag filter with typeahead suggestions.
+- Memory bank category tags (`identity`, `preference`, `goal`) remain separate from noun tags. Category tags classify WHAT KIND of memory, noun tags classify WHAT IT'S ABOUT.
+- Cold start context (`get_cold_start_context()`) uses `TAG_PRIORITIES` for category ordering — unaffected by TagCascade.
+- BM25 hybrid search retained. Tag routing narrows the candidate pool BEFORE BM25+cosine+CE.
+- Emoji scoring (👍🤷👎➖) removed — sidecar is sole scorer via 7-rule guide.
+- Backend process lifecycle (Tauri manages Python subprocess) unaffected.
+
+**What stays the same:**
+- 5-tier memory collections (books, working, history, patterns, memory_bank)
+- Scoring & promotion pipeline (Wilson, time-weighted, promotion thresholds)
+- Cross-encoder reranking (mmarco-mMiniLMv2-L12-H384-v1, multilingual, ONNX)
+- BM25 hybrid search
+- Contextual retrieval (Anthropic technique)
+- Memory bank CRUD and category tags
+- Cold start context injection
+- MCP server tools
+- Session management, backup/restore
+- All frontend components except KG visualization
+
+**What gets removed:**
+- `knowledge_graph_service.py` — Routing KG, routing phases, concept extraction via n-grams
+- `content_graph.py` — Entity co-occurrence graph, green/purple nodes
+- Action KG effectiveness tracking (context→action→collection mapping)
+- KG entity boost in `search_service.py`
+- `graph_backend` config option
+- KG visualization in `memory_visualization_enhanced.py`
+
+**What replaces it:**
+- `tag_service.py` — LLM-based noun tag extraction (simpler than n-gram concept extraction)
+- Tag-routed overlap cascade in `search_service.py` (simpler than KG routing phases)
+- Tag cloud visualization (simpler than graph visualization)
+
+### Shared Code with Core
+
+Desktop's memory module (`modules/memory/`) mirrors core's (`roampal/backend/modules/memory/`). The v0.4.5 changes apply identically to both:
+- Same `tag_service.py` can be shared
+- Same `tag_migration.py` backfill logic
+- Same scoring changes in `scoring_service.py`
+- Same cascade logic in `search_service.py`
+
+The only desktop-specific work is updating the frontend visualization and ensuring `agent_chat.py` routes correctly without KG dependencies.
+
+### Final Benchmark Evidence (roampal-labs LoCoMo)
+
+From roampal-labs LoCoMo evaluation (1,537 non-adversarial questions):
+
+| Config | Hit@1 Clean | Hit@1 Poison | p-value |
+|--------|-------------|--------------|---------|
+| **TagCascade + cosine** | **27.3%** | **29.0%** | **baseline** |
+| Overlap + cosine | 25.8% | 28.0% | p=0.0003 |
+| Pure CE | 25.4% | 28.4% | — |
+| TagCascade + Wilson | 23.0% | 25.0% | p<0.0001 |
+
+Wilson hurts retrieval by 4.3 points. Two-lane adds +6.1 Hit@1. Nursery: zero benefit (p=1.0).
 

@@ -72,7 +72,7 @@ class LLMSettings(BaseSettings):
     provider: Literal["ollama", "openchat", "lmstudio"] = "ollama"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "mistral-nemo:12b-instruct-2407-q4_0"  # Using Mistral Nemo for better performance
-    ollama_request_timeout_seconds: int = 30  # 30 seconds - fail fast for MCP (was 300)
+    ollama_request_timeout_seconds: int = 120  # 120 seconds - allows large model reload after sidecar GPU swap
     ollama_keep_alive_seconds: int = 120
     max_keepalive_connections: int = Field(5, description="Max keepalive connections for httpx.")
     max_connections: int = Field(10, description="Max connections for httpx.")
@@ -284,10 +284,6 @@ class PathSettings(BaseModel):
     def get_neuron_cache_path(self) -> Path:
         return self.data_storage_dir / "memory" / "neuron_scores.jsonl"
 
-    def get_knowledge_graph_path(self) -> Path:
-        """Get the knowledge graph directory"""
-        return self.data_storage_dir / "knowledge_graph"
-
     def get_og_sessions_base_dir(self) -> Path:
         return self.data_storage_dir
 
@@ -323,15 +319,6 @@ class ThresholdSettings(BaseModel):
     cosine_dedup_threshold: float = Field(0.95)
     levenshtein_threshold: Optional[int] = Field(None)
     num_bullets_summary: int = Field(5)
-
-class KnowledgeGraphSettings(BaseModel):
-    enabled: bool = True
-    max_relationships_per_concept: int = 10
-    min_relationship_confidence: float = 0.7
-    graph_analysis_prompt: str = "knowledge_graph_analysis.txt"
-    max_graph_hops: int = 3
-    graph_analysis_batch_size: int = 50
-
 
 class MemoryLayerSettings(BaseModel):
     """Simplified memory layer settings - focus on core memory functionality (deprecated)"""
@@ -440,10 +427,23 @@ class FeatureFlags(BaseModel):
     enable_web_fallback: bool = Field(True)
     disable_seeding: bool = Field(False, description="Disable book seeding on startup to improve performance")
 
+class SidecarSettings(BaseSettings):
+    """v0.3.1: Sidecar LLM for exchange summarization, fact extraction, tagging."""
+    enabled: bool = False
+    model: str = ""         # e.g. "qwen2.5:3b"
+    provider: str = ""      # "ollama" or "lmstudio"
+    model_config = SettingsConfigDict(
+        env_prefix='ROAMPAL_SIDECAR_',
+        extra='ignore',
+        case_sensitive=False
+    )
+
+
 class Settings(BaseSettings):
     active_shard: str = Field("roampal", description="The tool name.")
     app: AppSettings = Field(default_factory=AppSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    sidecar: SidecarSettings = Field(default_factory=SidecarSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     og_memory: OGMemorySettings = Field(default_factory=OGMemorySettings)
     fragment_memory_configs: Dict[str, FragmentFileMemorySettings] = Field(default_factory=dict)
@@ -459,7 +459,6 @@ class Settings(BaseSettings):
     paths: PathSettings = PathSettings()
     thresholds: ThresholdSettings = ThresholdSettings()
     memory_layer: MemoryLayerSettings = MemoryLayerSettings()
-    knowledge_graph: KnowledgeGraphSettings = KnowledgeGraphSettings()
     tone: ToneSettings = ToneSettings()
     memory_injector: MemoryInjectorSettings = MemoryInjectorSettings()
     text: TextSettings = TextSettings()

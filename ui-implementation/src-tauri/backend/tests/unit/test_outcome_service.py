@@ -34,15 +34,12 @@ class TestOutcomeServiceInit:
         assert service.config.promotion_score_threshold == 0.8
 
     def test_init_with_services(self):
-        """Should accept KG and promotion services."""
-        kg_mock = MagicMock()
+        """Should accept promotion service (v0.3.1: KG removed)."""
         promo_mock = MagicMock()
         service = OutcomeService(
             collections={},
-            kg_service=kg_mock,
             promotion_service=promo_mock
         )
-        assert service.kg_service == kg_mock
         assert service.promotion_service == promo_mock
 
 
@@ -116,14 +113,14 @@ class TestRecordOutcome:
 
     @pytest.mark.asyncio
     async def test_record_unknown_outcome(self, service, mock_collections):
-        """Should handle unknown outcome (surfaced but not used)."""
+        """Should handle unknown outcome (surfaced but not used). v0.3.1: -0.05 delta."""
         result = await service.record_outcome(
             doc_id="working_test123",
             outcome="unknown"
         )
 
         assert result is not None
-        assert result["score"] == 0.5  # Score unchanged for unknown
+        assert result["score"] == 0.45  # v0.3.1: -0.05 weak negative (was 0.0)
         assert result["uses"] == 1  # Uses still incremented
         assert result["last_outcome"] == "unknown"
 
@@ -195,103 +192,72 @@ class TestRecordOutcome:
         assert contexts[0]["topic"] == "test"
 
 
-class TestTimeWeighting:
-    """Test time-weighted score updates."""
-
-    @pytest.fixture
-    def service(self):
-        return OutcomeService(collections={})
-
-    def test_recent_full_weight(self, service):
-        """Recent items should have full weight."""
-        weight = service._calculate_time_weight(datetime.now().isoformat())
-        assert weight > 0.9
-
-    def test_old_reduced_weight(self, service):
-        """Old items should have reduced weight."""
-        old_time = (datetime.now() - timedelta(days=30)).isoformat()
-        weight = service._calculate_time_weight(old_time)
-        assert 0.4 < weight < 0.6  # ~0.5 after 30 days
-
-    def test_none_full_weight(self, service):
-        """None should return full weight."""
-        weight = service._calculate_time_weight(None)
-        assert weight == 1.0
-
-    def test_invalid_full_weight(self, service):
-        """Invalid timestamp should return full weight."""
-        weight = service._calculate_time_weight("invalid")
-        assert weight == 1.0
-
-
 class TestScoreCalculation:
-    """Test score calculation logic."""
+    """Test score calculation logic. v0.3.1: Flat deltas, no time-weight."""
 
     @pytest.fixture
     def service(self):
         return OutcomeService(collections={})
 
     def test_worked_increases_score(self, service):
-        """Worked should increase score."""
+        """Worked should increase score by +0.2."""
         delta, new_score, uses, success_delta = service._calculate_score_update(
-            "worked", 0.5, 0, 1.0
+            "worked", 0.5, 0
         )
-        assert delta > 0
-        assert new_score > 0.5
+        assert delta == 0.2
+        assert new_score == 0.7
         assert uses == 1
-        assert success_delta == 1.0  # Full success
+        assert success_delta == 1.0
 
     def test_failed_decreases_score(self, service):
-        """Failed should decrease score."""
+        """Failed should decrease score by -0.3."""
         delta, new_score, uses, success_delta = service._calculate_score_update(
-            "failed", 0.5, 0, 1.0
+            "failed", 0.5, 0
         )
-        assert delta < 0
-        assert new_score < 0.5
-        assert uses == 1  # v0.3.0: failed now increments uses
-        assert success_delta == 0.0  # No success
+        assert delta == -0.3
+        assert new_score == 0.2
+        assert uses == 1
+        assert success_delta == 0.0
 
     def test_partial_slightly_increases(self, service):
-        """Partial should slightly increase score."""
+        """Partial should increase score by +0.05."""
         delta, new_score, uses, success_delta = service._calculate_score_update(
-            "partial", 0.5, 0, 1.0
+            "partial", 0.5, 0
         )
-        assert delta > 0
-        assert delta < 0.1  # Small increase
-        assert new_score > 0.5
+        assert delta == 0.05
+        assert new_score == 0.55
         assert uses == 1
-        assert success_delta == 0.5  # Half success
+        assert success_delta == 0.5
 
     def test_score_capped_at_1(self, service):
         """Score should not exceed 1.0."""
         delta, new_score, uses, _ = service._calculate_score_update(
-            "worked", 0.95, 0, 1.0
+            "worked", 0.95, 0
         )
-        assert new_score <= 1.0
+        assert new_score == 1.0
 
     def test_score_capped_at_0(self, service):
         """Score should not go below 0.0."""
         delta, new_score, uses, _ = service._calculate_score_update(
-            "failed", 0.1, 0, 1.0
+            "failed", 0.1, 0
         )
-        assert new_score >= 0.0
+        assert new_score == 0.0
 
-    def test_time_weight_affects_delta(self, service):
-        """Time weight should affect score delta."""
-        delta_full, _, _, _ = service._calculate_score_update("worked", 0.5, 0, 1.0)
-        delta_half, _, _, _ = service._calculate_score_update("worked", 0.5, 0, 0.5)
-
-        assert abs(delta_half - delta_full * 0.5) < 0.01
-
-    def test_unknown_no_score_change(self, service):
-        """Unknown outcome should not change score but count as weak negative."""
+    def test_unknown_weak_negative(self, service):
+        """Unknown should apply -0.05 delta (v0.3.1, matches core)."""
         delta, new_score, uses, success_delta = service._calculate_score_update(
-            "unknown", 0.5, 0, 1.0
+            "unknown", 0.5, 0
         )
-        assert delta == 0.0  # No score change
-        assert new_score == 0.5  # Score unchanged
-        assert uses == 1  # Uses incremented
-        assert success_delta == 0.25  # Weak negative for Wilson drift
+        assert delta == -0.05
+        assert new_score == 0.45
+        assert uses == 1
+        assert success_delta == 0.25
+
+    def test_flat_deltas_no_time_weight(self, service):
+        """v0.3.1: Deltas are flat regardless of memory age."""
+        delta1, _, _, _ = service._calculate_score_update("worked", 0.5, 0)
+        delta2, _, _, _ = service._calculate_score_update("worked", 0.5, 10)
+        assert delta1 == delta2 == 0.2
 
 
 class TestCountSuccesses:
@@ -388,83 +354,6 @@ class TestOutcomeStats:
 
         stats = service.get_outcome_stats("working_nonexistent")
         assert stats["error"] == "not_found"
-
-
-class TestKGIntegration:
-    """Test KG service integration."""
-
-    @pytest.fixture
-    def mock_kg_service(self):
-        kg = MagicMock()
-        kg.extract_concepts = MagicMock(return_value=["test", "concept"])
-        kg.update_kg_routing = AsyncMock()
-        kg.build_concept_relationships = MagicMock()
-        kg.add_problem_category = MagicMock()
-        kg.add_solution_pattern = MagicMock()
-        kg.update_success_rate = MagicMock()
-        kg.add_failure_pattern = MagicMock()
-        kg.add_problem_solution = MagicMock()
-        kg.add_solution_pattern_entry = MagicMock()
-        kg.debounced_save_kg = AsyncMock()
-        return kg
-
-    @pytest.fixture
-    def mock_collections(self):
-        working = MagicMock()
-        working.get_fragment = MagicMock(return_value={
-            "content": "test solution",
-            "metadata": {
-                "text": "test solution",
-                "query": "test problem",
-                "score": 0.5,
-                "uses": 0,
-                "outcome_history": "[]"
-            }
-        })
-        working.update_fragment_metadata = MagicMock()
-        working.collection = MagicMock()
-        working.collection.count = MagicMock(return_value=10)
-        return {"working": working}
-
-    @pytest.fixture
-    def service(self, mock_collections, mock_kg_service):
-        return OutcomeService(
-            collections=mock_collections,
-            kg_service=mock_kg_service
-        )
-
-    @pytest.mark.asyncio
-    async def test_updates_kg_routing(self, service, mock_kg_service):
-        """Should update KG routing on outcome."""
-        await service.record_outcome("working_test123", "worked")
-
-        mock_kg_service.update_kg_routing.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_builds_relationships_on_success(self, service, mock_kg_service):
-        """Should build concept relationships on worked outcome."""
-        await service.record_outcome("working_test123", "worked")
-
-        mock_kg_service.build_concept_relationships.assert_called()
-        mock_kg_service.add_problem_category.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_tracks_failure_patterns(self, service, mock_kg_service):
-        """Should track failure patterns on failed outcome."""
-        await service.record_outcome(
-            "working_test123",
-            "failed",
-            failure_reason="Test failure"
-        )
-
-        mock_kg_service.add_failure_pattern.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_saves_kg_after_update(self, service, mock_kg_service):
-        """Should save KG after updates."""
-        await service.record_outcome("working_test123", "worked")
-
-        mock_kg_service.debounced_save_kg.assert_called()
 
 
 class TestPromotionIntegration:

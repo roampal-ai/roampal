@@ -572,8 +572,39 @@ export const useChatStore = create<ChatState>()((set, get) => ({
             set({ conversationId: data.new_conversation_id });
             break;
 
+          case 'done':
+            // Backend validation error (e.g. no model set) — show as assistant message
+            if (data.content) {
+              console.warn('[WebSocket] Done with message:', data.content);
+              set((state) => {
+                const messages = [...state.messages];
+                const thinkingIdx = messages.findIndex(m => m.role === 'assistant' && m.content === '');
+                if (thinkingIdx >= 0) messages.splice(thinkingIdx, 1);
+                messages.push({
+                  role: 'assistant',
+                  content: data.content,
+                  timestamp: new Date().toISOString(),
+                });
+                return { messages, isStreaming: false, isProcessing: false, processingStage: 'idle', processingStatus: null };
+              });
+            }
+            break;
+
           case 'error':
             console.error('[WebSocket] Error:', data.message);
+            // Show error to user as assistant message
+            set((state) => {
+              const messages = [...state.messages];
+              // Remove any pending "thinking" message
+              const thinkingIdx = messages.findIndex(m => m.role === 'assistant' && m.content === '');
+              if (thinkingIdx >= 0) messages.splice(thinkingIdx, 1);
+              messages.push({
+                role: 'assistant',
+                content: `Sorry, I encountered an error: ${data.message || 'Request timed out'}. Please try again.`,
+                timestamp: new Date().toISOString(),
+              });
+              return { messages, isStreaming: false, processingStage: 'idle', processingStatus: null };
+            });
             break;
 
           // NEW: Handle streaming message types from backend

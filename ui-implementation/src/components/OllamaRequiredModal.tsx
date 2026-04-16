@@ -36,7 +36,7 @@ export const OllamaRequiredModal: React.FC<OllamaRequiredModalProps> = ({ isOpen
                 : 'text-zinc-400 hover:text-zinc-300'
             }`}
           >
-            Setup LLM Provider
+            Getting Started
           </button>
           <button
             onClick={() => setActiveTab('mcp')}
@@ -50,15 +50,15 @@ export const OllamaRequiredModal: React.FC<OllamaRequiredModalProps> = ({ isOpen
           </button>
         </div>
 
-        {/* LLM Provider Tab */}
+        {/* Getting Started Tab */}
         {activeTab === 'llm' && (
           <div className="space-y-4 text-zinc-300 text-sm">
             <p>
-              Roampal requires a local LLM provider to run AI models on your computer.
+              Roampal runs AI models locally on your computer. You'll need a local LLM provider to get started.
             </p>
 
             <div className="bg-zinc-800 border border-zinc-700 rounded p-3">
-              <p className="font-semibold text-white mb-2">Recommended Provider:</p>
+              <p className="font-semibold text-white mb-2">Supported Providers:</p>
               <ul className="space-y-2 text-xs">
                 <li>
                   <span className="font-medium text-green-400">Ollama</span>
@@ -66,25 +66,25 @@ export const OllamaRequiredModal: React.FC<OllamaRequiredModalProps> = ({ isOpen
                 </li>
                 <li>
                   <span className="font-medium text-amber-400">LM Studio</span>
-                  <span className="text-zinc-400"> - Advanced users only</span>
+                  <span className="text-zinc-400"> - GUI-based, load models visually</span>
                   <div className="mt-1 pl-4 text-[11px] text-zinc-500">
-                    Requires manual server setup in app
+                    Start the local server in Developer tab to connect
                   </div>
                 </li>
               </ul>
             </div>
 
             <div className="bg-zinc-800/50 border border-zinc-700/50 rounded p-3">
-              <p className="font-semibold text-white mb-2">Why local providers?</p>
+              <p className="font-semibold text-white mb-2">How Roampal works:</p>
               <ul className="space-y-1 text-xs text-zinc-400">
-                <li>• Runs AI models completely offline</li>
-                <li>• No data leaves your computer</li>
-                <li>• Free and open source</li>
+                <li>• <strong className="text-zinc-300">Chat model</strong> — powers your conversations and uses memory tools</li>
+                <li>• <strong className="text-zinc-300">Sidecar model</strong> — runs in the background to build persistent memory across conversations</li>
+                <li>• All data stays on your machine — nothing leaves your computer</li>
               </ul>
             </div>
 
             <p className="text-xs text-zinc-500">
-              After installing a provider, make sure it's running and click "Get Started" below.
+              Install a provider, then use the Model Library to download your first model.
             </p>
 
             <div className="flex gap-3">
@@ -150,7 +150,7 @@ export const OllamaRequiredModal: React.FC<OllamaRequiredModalProps> = ({ isOpen
                 <li>• <span className="text-zinc-300 font-medium">Cursor</span> - Code-aware memory integration</li>
                 <li>• <span className="text-zinc-300 font-medium">Continue.dev</span> - VS Code memory bridge</li>
                 <li>• <span className="text-zinc-300 font-medium">Cline</span> - Autonomous coding agent</li>
-                <li>• <span className="text-zinc-300 font-medium">Any MCP-compatible tool</span> - 6 core tools via standard protocol</li>
+                <li>• <span className="text-zinc-300 font-medium">Any MCP-compatible tool</span> - 6 memory tools via standard protocol</li>
               </ul>
             </div>
 
