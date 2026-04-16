@@ -414,7 +414,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
       case 'sessions':
         return dataStats.sessions.count;
       case 'knowledge-graph':
-        return dataStats.knowledge_graph.nodes + dataStats.knowledge_graph.edges;
+        return (dataStats.knowledge_graph?.nodes || 0) + (dataStats.knowledge_graph?.edges || 0);
       case 'outcomes':
         return dataStats.outcomes?.exists ? 1 : 0;
       default:
@@ -753,11 +753,11 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
                       <div className="text-xs text-zinc-400">
                         {dataStats ? (
                           <>
-                            {dataStats.knowledge_graph.nodes + dataStats.knowledge_graph.edges} items
+                            {(dataStats.knowledge_graph?.nodes || 0) + (dataStats.knowledge_graph?.edges || 0)} items
                             {sizeEstimate?.breakdown.knowledge_mb !== undefined &&
                               ` • ${(sizeEstimate.breakdown.knowledge_mb < 0.1 ? '< 0.1' : sizeEstimate.breakdown.knowledge_mb.toFixed(1))} MB`
                             }
-                            {(dataStats.knowledge_graph.nodes + dataStats.knowledge_graph.edges) === 0 && sizeEstimate?.breakdown.knowledge_mb && sizeEstimate.breakdown.knowledge_mb > 0 && (
+                            {((dataStats.knowledge_graph?.nodes || 0) + (dataStats.knowledge_graph?.edges || 0)) === 0 && sizeEstimate?.breakdown.knowledge_mb && sizeEstimate.breakdown.knowledge_mb > 0 && (
                               <span className="text-zinc-500"> (empty files)</span>
                             )}
                           </>
@@ -854,7 +854,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({ isOpen
                       { key: 'patterns', label: 'Patterns', desc: 'Proven solutions', count: dataStats?.patterns.count || 0 },
                       { key: 'books', label: 'Books', desc: 'Reference documents', count: dataStats?.books.count || 0 },
                       { key: 'sessions', label: 'Sessions', desc: 'Conversation files', count: dataStats?.sessions.count || 0 },
-                      { key: 'knowledge-graph', label: 'Knowledge Graph', desc: 'Concept relationships', count: (dataStats?.knowledge_graph.nodes || 0) + (dataStats?.knowledge_graph.edges || 0) },
+                      { key: 'knowledge-graph', label: 'Knowledge Graph', desc: 'Concept relationships', count: (dataStats?.knowledge_graph?.nodes || 0) + (dataStats?.knowledge_graph?.edges || 0) },
                       { key: 'outcomes', label: 'Outcomes', desc: 'Scoring history', count: dataStats?.outcomes?.exists ? 1 : 0 }
                     ].map((item) => (
                       <div key={item.key} className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">

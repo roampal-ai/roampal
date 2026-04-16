@@ -26,30 +26,7 @@ Stop re-explaining yourself every conversation. Roampal remembers outcomes, lear
 
 ---
 
-## Quick Start
-
-1. **[Download from roampal.ai](https://roampal.ai)** and extract
-2. Install [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai)
-3. Right-click `Roampal.exe` → **Run as administrator**
-4. Download a model in the UI → Start chatting!
-
-Your AI starts learning about you immediately.
-
----
-
-## Table of Contents
-
-- [Why Roampal?](#why-roampal)
-- [Key Features](#key-features)
-- [MCP Integration](#mcp-integration)
-- [Architecture](#architecture)
-- [Supported Models](#supported-models)
-- [Documentation](#documentation)
-- [Pricing](#pricing)
-
----
-
-### Benchmark Results
+## Benchmark Results
 
 *LoCoMo dataset (1,986 questions, 5 categories, corrected ground truths). Evaluated with [roampal-labs](https://github.com/roampal-ai/roampal-labs). Dual-graded by local 20B + MiniMax M2.7.*
 
@@ -84,6 +61,29 @@ Your AI starts learning about you immediately.
 Full methodology in [roampal-labs](https://github.com/roampal-ai/roampal-labs)
 
 </details>
+
+---
+
+## Quick Start
+
+1. **[Download from roampal.ai](https://roampal.ai)** and extract
+2. Install [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai)
+3. Right-click `Roampal.exe` → **Run as administrator**
+4. Download a model in the UI → Start chatting!
+
+Your AI starts learning about you immediately.
+
+---
+
+## Table of Contents
+
+- [Benchmark Results](#benchmark-results)
+- [Key Features](#key-features)
+- [MCP Integration](#mcp-integration)
+- [Architecture](#architecture)
+- [Supported Models](#supported-models)
+- [Documentation](#documentation)
+- [Pricing](#pricing)
 
 ---
 
