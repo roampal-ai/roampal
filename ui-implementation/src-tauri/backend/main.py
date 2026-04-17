@@ -42,7 +42,6 @@ from modules.embedding.embedding_service import EmbeddingService
 from modules.memory.unified_memory_system import UnifiedMemorySystem
 from modules.memory.types import ActionOutcome
 from modules.llm.ollama_client import OllamaClient
-from services.unified_image_service import UnifiedImageService
 from config.feature_flag_validator import FeatureFlagValidator
 from config.settings import DATA_PATH
 
@@ -560,17 +559,6 @@ async def lifespan(app: FastAPI):
             logger.warning(f"⚠️  Book processor unavailable: {book_error}")
             logger.warning("⚠️  - Document upload features will be disabled")
             app.state.book_processor = None
-
-        # Image service
-        try:
-            app.state.image_service = UnifiedImageService(
-                embedding_service=app.state.embedding_service, memory_adapter=None
-            )
-            logger.info("✓ Image service initialized")
-        except Exception as img_error:
-            logger.warning(f"⚠️  Image service unavailable: {img_error}")
-            logger.warning("⚠️  - Image processing features will be disabled")
-            app.state.image_service = None
 
         # Clean architecture - no longer need OGChatService
         # Agent router handles all chat operations with memory-enhanced responses

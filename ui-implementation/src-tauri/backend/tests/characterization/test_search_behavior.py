@@ -1,14 +1,8 @@
-r"""
+"""
 Characterization Tests for UnifiedMemorySystem.search()
 
 These tests capture the CURRENT behavior of the search() method.
-They serve as a regression safety net during refactoring.
-
-Uses lazy imports inside fixtures to ensure path is set correctly.
-
-Usage:
-    cd C:/ROAMPAL-REFACTOR
-    python -m pytest tests/characterization/ -v
+They serve as a regression safety net against API / return-shape drift.
 """
 
 import asyncio
@@ -18,68 +12,8 @@ from typing import Dict, Any, List
 
 import pytest
 
-
-def clear_memory_modules():
-    """Clear all cached modules.memory.* modules to force fresh import."""
-    import sys
-    to_delete = [key for key in sys.modules if key.startswith("modules.memory") or key == "modules"]
-    for key in to_delete:
-        del sys.modules[key]
-
-
-def get_original_memory_system():
-    """Import and return the original UnifiedMemorySystem.
-
-    Uses importlib to ensure fresh import with correct path.
-    """
-    import sys
-
-    # Clear cached modules first
-    clear_memory_modules()
-
-    # Remove refactor path if present and ensure original is first
-    refactor_path = "C:/ROAMPAL-REFACTOR"
-    backend_path = "C:/ROAMPAL/ui-implementation/src-tauri/backend"
-
-    # Remove refactor path if it's there
-    while refactor_path in sys.path:
-        sys.path.remove(refactor_path)
-
-    # Ensure original backend path is first
-    if backend_path not in sys.path:
-        sys.path.insert(0, backend_path)
-    elif sys.path.index(backend_path) != 0:
-        sys.path.remove(backend_path)
-        sys.path.insert(0, backend_path)
-
-    from modules.memory.unified_memory_system import UnifiedMemorySystem
-    return UnifiedMemorySystem
-
-
-def get_original_wilson_score():
-    """Import and return the original wilson_score_lower function."""
-    import sys
-
-    # Clear cached modules first
-    clear_memory_modules()
-
-    # Remove refactor path if present and ensure original is first
-    refactor_path = "C:/ROAMPAL-REFACTOR"
-    backend_path = "C:/ROAMPAL/ui-implementation/src-tauri/backend"
-
-    # Remove refactor path if it's there
-    while refactor_path in sys.path:
-        sys.path.remove(refactor_path)
-
-    # Ensure original backend path is first
-    if backend_path not in sys.path:
-        sys.path.insert(0, backend_path)
-    elif sys.path.index(backend_path) != 0:
-        sys.path.remove(backend_path)
-        sys.path.insert(0, backend_path)
-
-    from modules.memory.scoring_service import wilson_score_lower
-    return wilson_score_lower
+from modules.memory.unified_memory_system import UnifiedMemorySystem
+from modules.memory.scoring_service import wilson_score_lower
 
 
 # Characterization queries from the plan
@@ -98,13 +32,11 @@ CHARACTERIZATION_QUERIES = [
 class TestSearchBehavior:
     """Capture current search() behavior for regression testing."""
 
-    @pytest.fixture(scope="class")
-    def memory_system(self):
-        """Create a single instance for all tests in this class."""
-        UnifiedMemorySystem = get_original_memory_system()
-        # Use production data directory (read-only access)
+    @pytest.fixture
+    def memory_system(self, tmp_path):
+        """Create a single instance for each test."""
         ms = UnifiedMemorySystem(
-            data_dir="C:/ROAMPAL/ui-implementation/src-tauri/binaries/data",
+            data_dir=str(tmp_path),
             use_server=False  # Don't start embedding server
         )
         return ms
@@ -191,18 +123,15 @@ class TestWilsonScore:
 
     def test_wilson_score_import(self):
         """Wilson score function should be importable."""
-        wilson_score_lower = get_original_wilson_score()
         assert callable(wilson_score_lower)
 
     def test_wilson_score_zero_uses(self):
         """Zero uses should return 0.5 (neutral)."""
-        wilson_score_lower = get_original_wilson_score()
         score = wilson_score_lower(0, 0)
         assert score == 0.5, f"Expected 0.5 for zero uses, got {score}"
 
     def test_wilson_score_perfect_record(self):
         """Perfect record with few uses should be lower than proven record."""
-        wilson_score_lower = get_original_wilson_score()
 
         # 1/1 = 100% but low confidence
         new_score = wilson_score_lower(1, 1)
@@ -216,7 +145,6 @@ class TestWilsonScore:
 
     def test_wilson_score_range(self):
         """Wilson score should always be between 0 and 1."""
-        wilson_score_lower = get_original_wilson_score()
 
         test_cases = [
             (0, 1),
@@ -235,11 +163,10 @@ class TestWilsonScore:
 class TestMCPToolShapes:
     """Verify MCP tool response shapes match expected format."""
 
-    @pytest.fixture(scope="class")
-    def memory_system(self):
-        UnifiedMemorySystem = get_original_memory_system()
+    @pytest.fixture
+    def memory_system(self, tmp_path):
         ms = UnifiedMemorySystem(
-            data_dir="C:/ROAMPAL/ui-implementation/src-tauri/binaries/data",
+            data_dir=str(tmp_path),
             use_server=False
         )
         return ms

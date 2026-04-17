@@ -165,14 +165,14 @@ class TestScoreExchange:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_summary_truncated_to_400(self):
-        long_summary = "A" * 500
+    async def test_summary_truncated_to_2000(self):
+        long_summary = "A" * 2500
         client = MagicMock()
         client.generate_response = AsyncMock(
             return_value=json.dumps({"summary": long_summary, "outcome": "worked"})
         )
         result = await score_exchange("hi", "hello", "ok", [], client, "model")
-        assert len(result["summary"]) == 400
+        assert len(result["summary"]) == 2000
 
     @pytest.mark.asyncio
     async def test_invalid_memory_score_defaults_unknown(self):
@@ -196,13 +196,13 @@ class TestScoreExchange:
         client.generate_response = AsyncMock(
             return_value='{"summary": "Truncation test summary.", "outcome": "worked"}'
         )
-        long_msg = "x" * 5000
+        long_msg = "x" * 10000
         result = await score_exchange("hi", long_msg, "ok", [], client, "model")
         assert result is not None
-        # The prompt builder receives assistant_msg[:1000]
+        # v0.3.1.4: assistant_msg truncated to 8000 chars before prompt building
         call_args = client.generate_response.call_args
         prompt = call_args.kwargs.get("prompt", call_args.args[0] if call_args.args else "")
-        assert "x" * 1001 not in prompt
+        assert "x" * 8001 not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -268,17 +268,18 @@ class TestExtractFacts:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_content_truncated_to_3000(self):
+    async def test_content_truncated_to_8000(self):
         client = MagicMock()
         client.generate_response = AsyncMock(
             return_value='{"facts": ["Content was very long indeed for testing"]}'
         )
-        long_content = "z" * 5000
+        long_content = "z" * 10000
         result = await extract_facts(long_content, client, "model")
         assert result is not None
+        # v0.3.1.4: fact-extraction content truncated to 8000 chars
         call_args = client.generate_response.call_args
         prompt = call_args.kwargs.get("prompt", call_args.args[0] if call_args.args else "")
-        assert "z" * 3001 not in prompt
+        assert "z" * 8001 not in prompt
 
 
 # ---------------------------------------------------------------------------

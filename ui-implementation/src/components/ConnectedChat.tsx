@@ -1834,7 +1834,7 @@ export const ConnectedChat: React.FC = () => {
 
       console.log('[Knowledge Graph] API response:', data);
 
-      // Transform the data to match what ContextBar expects
+      // Transform the data to match the MemoryPanel shape
       const transformedData = {
         concepts: data.total_concepts || 0,
         relationships: data.total_relationships || 0,
