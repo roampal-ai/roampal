@@ -6,7 +6,7 @@
 [![Multi-Provider](https://img.shields.io/badge/LLM-Ollama%20%7C%20LM%20Studio-blue)](https://roampal.ai)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 
-**Memory that learns what works.**
+**Memory that learns what works. So you can do more of it.**
 
 *Say it worked. Say it didn't. The AI remembers.*
 
@@ -188,7 +188,7 @@ Works with any tool-calling model via Ollama or LM Studio:
 **Free & open-source** (Apache 2.0 License)
 
 - Build from source → completely free
-- Pre-built executable: **$9.99 one-time** (saves hours of setup)
+- Pre-built executable: **$19.99 one-time** (saves hours of setup)
 - Zero telemetry, full data ownership
 
 ---
