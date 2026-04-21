@@ -21,8 +21,23 @@ backend_path = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(backend_path))
 
 import chromadb
+from chromadb.config import Settings as ChromaSettings
 from modules.memory.chromadb_adapter import ChromaDBAdapter
 from modules.memory.promotion_service import PromotionService
+
+
+# v0.3.2 Section 0d added anonymized_telemetry=False to ChromaDBAdapter.
+# ChromaDB's SharedSystemClient caches (path -> settings) within a process
+# and rejects subsequent clients at the same path with different settings.
+# Tests that mix raw chromadb.PersistentClient(...) with ChromaDBAdapter(...)
+# must pass the matching Settings on the raw call or the second construction
+# raises "An instance of Chroma already exists for {path} with different
+# settings." This helper standardizes the raw client to match the adapter.
+def _chroma_client(path):
+    return chromadb.PersistentClient(
+        path=path,
+        settings=ChromaSettings(anonymized_telemetry=False),
+    )
 
 
 class TestWorkingMemoryCleanupPersistence:
@@ -65,7 +80,7 @@ class TestWorkingMemoryCleanupPersistence:
         Test that working memories >24h old are deleted.
         """
         # Step 1: Create ChromaDB with old working memories
-        client1 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client1 = _chroma_client(temp_chromadb_path)
 
         # Create test memories - some old, some new
         self._create_working_memory_with_age(client1, "roampal_working", "working_old_1", age_hours=30, score=0.5)
@@ -79,7 +94,7 @@ class TestWorkingMemoryCleanupPersistence:
         del client1
 
         # Step 2: Open new client and run cleanup
-        client2 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client2 = _chroma_client(temp_chromadb_path)
         working = client2.get_collection("roampal_working", embedding_function=None)
 
         # Simulate what promotion_service does - delete items > 24h old
@@ -104,7 +119,7 @@ class TestWorkingMemoryCleanupPersistence:
         del client2
 
         # Step 3: Verify deletion persisted
-        client3 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client3 = _chroma_client(temp_chromadb_path)
         working = client3.get_collection("roampal_working", embedding_function=None)
 
         final_count = working.count()
@@ -129,7 +144,7 @@ class TestWorkingMemoryCleanupPersistence:
         asyncio.run(adapter.initialize(collection_name="roampal_working"))
 
         # Create test memories directly in ChromaDB
-        client = chromadb.PersistentClient(path=temp_chromadb_path)
+        client = _chroma_client(temp_chromadb_path)
         self._create_working_memory_with_age(client, "roampal_working", "working_old", age_hours=30, score=0.5)
         self._create_working_memory_with_age(client, "roampal_working", "working_new", age_hours=2, score=0.5)
         del client
@@ -157,7 +172,7 @@ class TestWorkingMemoryCleanupPersistence:
         asyncio.run(adapter2.cleanup())
 
         # Verify persistence with new client
-        client3 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client3 = _chroma_client(temp_chromadb_path)
         working = client3.get_collection("roampal_working", embedding_function=None)
         final_count = working.count()
         assert final_count == 1, f"Deletion should persist - expected 1, got {final_count}"
@@ -168,7 +183,7 @@ class TestWorkingMemoryCleanupPersistence:
         This is the root cause fix for v0.2.10.
         """
         # Create initial data
-        client1 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client1 = _chroma_client(temp_chromadb_path)
         collection = client1.get_or_create_collection("test_persist", embedding_function=None)
 
         collection.add(
@@ -189,7 +204,7 @@ class TestWorkingMemoryCleanupPersistence:
         del client1
 
         # Reopen and verify deletion persisted
-        client2 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client2 = _chroma_client(temp_chromadb_path)
         collection = client2.get_collection("test_persist", embedding_function=None)
 
         final_count = collection.count()
@@ -241,7 +256,7 @@ class TestPromotionServiceCleanup:
         import asyncio
 
         # Step 1: Create ChromaDB with old working memories
-        client1 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client1 = _chroma_client(temp_chromadb_path)
 
         # Create memories: 2 old (should be cleaned), 1 new (should stay)
         self._create_working_memory_with_age(client1, "roampal_working", "working_old_1", age_hours=30, score=0.3)
@@ -294,7 +309,7 @@ class TestPromotionServiceCleanup:
         asyncio.run(history_adapter.cleanup())
 
         # Step 4: Verify deletion persisted to disk
-        client2 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client2 = _chroma_client(temp_chromadb_path)
         working = client2.get_collection("roampal_working", embedding_function=None)
 
         final_count = working.count()
@@ -313,7 +328,7 @@ class TestPromotionServiceCleanup:
         import asyncio
 
         # Create working memories with different values
-        client1 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client1 = _chroma_client(temp_chromadb_path)
 
         # This one should be PROMOTED (high score, high uses, old)
         self._create_working_memory_with_age(client1, "roampal_working", "working_promote_me",
@@ -360,7 +375,7 @@ class TestPromotionServiceCleanup:
         asyncio.run(history_adapter.cleanup())
 
         # Verify persistence
-        client2 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client2 = _chroma_client(temp_chromadb_path)
         working = client2.get_collection("roampal_working", embedding_function=None)
         history = client2.get_collection("roampal_history", embedding_function=None)
 
@@ -446,7 +461,7 @@ class TestSchemaMigration:
         import sqlite3
 
         # Step 1: Create a ChromaDB database
-        client1 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client1 = _chroma_client(temp_chromadb_path)
         client1.get_or_create_collection("test", embedding_function=None)
         del client1
 
@@ -473,7 +488,7 @@ class TestSchemaMigration:
         # The key is that opening with ChromaDB 1.x doesn't crash
 
         # Step 4: Verify ChromaDB can still be opened after schema is established
-        client2 = chromadb.PersistentClient(path=temp_chromadb_path)
+        client2 = _chroma_client(temp_chromadb_path)
         collection = client2.get_collection("test", embedding_function=None)
         assert collection is not None, "Should be able to open collection after migration"
 
