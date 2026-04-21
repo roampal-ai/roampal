@@ -5,6 +5,7 @@ import { MemoryBankModal } from './MemoryBankModal';
 import { ModelContextSettings } from './ModelContextSettings';
 import { IntegrationsPanel } from './IntegrationsPanel';
 import { MCPServersPanel } from './MCPServersPanel';
+import { SidecarReloadWarningModal } from './SidecarReloadWarningModal';
 import { apiFetch } from '../utils/fetch';
 import { ROAMPAL_CONFIG } from '../config/roampal';
 
@@ -13,9 +14,12 @@ interface SettingsModalProps {
   onClose: () => void;
   initialTab?: 'integrations';
   initialDataTab?: 'summarize';
+  // v0.3.2 (0f follow-up): allow callers (e.g. the top-of-chat sidecar badge)
+  // to deep-link to the Advanced section so users land on sidecar controls.
+  initialFocus?: 'advanced';
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab, initialDataTab }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab, initialDataTab, initialFocus }) => {
   const [showDataManagementModal, setShowDataManagementModal] = useState(false);
   const [showMemoryBankModal, setShowMemoryBankModal] = useState(false);
   const [showModelContextSettings, setShowModelContextSettings] = useState(false);
@@ -25,12 +29,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
   const [currentProvider, setCurrentProvider] = useState<string>('');
   const [providers, setProviders] = useState<any[]>([]);
 
+  // v0.3.2 (0f): Advanced disclosure is collapsed by default — the sidecar
+  // mirror toggle + picker live behind it to keep the 90% path uncluttered.
+  // initialFocus="advanced" lets the chat-header badge deep-link here.
+  const [advancedOpen, setAdvancedOpen] = useState(initialFocus === 'advanced');
+  const [mirrorChat, setMirrorChat] = useState(true);
+  const [sidecarModel, setSidecarModel] = useState('');
+  const [sidecarProvider, setSidecarProvider] = useState('ollama');
+  const [availableModels, setAvailableModels] = useState<Array<{ name: string; provider: string }>>([]);
+  const [pendingSidecarModel, setPendingSidecarModel] = useState<string | null>(null);
+
   // Open Integrations tab if specified by initialTab
   useEffect(() => {
     if (isOpen && initialTab === 'integrations') {
       setShowIntegrationsPanel(true);
     }
   }, [isOpen, initialTab]);
+
+  // v0.3.2: expand Advanced when the chat-header badge deep-links here.
+  useEffect(() => {
+    if (isOpen && initialFocus === 'advanced') {
+      setAdvancedOpen(true);
+    }
+  }, [isOpen, initialFocus]);
 
   // Auto-open Data Management with specific tab (e.g., from migration toast)
   useEffect(() => {
@@ -66,11 +87,104 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
       }
     };
 
+    const fetchSidecarStatus = async () => {
+      try {
+        const resp = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/status`);
+        if (resp.ok) {
+          const data = await resp.json();
+          setSidecarModel(data.model || '');
+          setSidecarProvider(data.provider || 'ollama');
+          // mirror_chat may not be surfaced by /status today; infer from model equality.
+          if (typeof data.mirror_chat === 'boolean') setMirrorChat(data.mirror_chat);
+          else setMirrorChat((data.model || '') === currentModel);
+        }
+      } catch { /* non-fatal */ }
+    };
+
+    const fetchAllModels = async () => {
+      try {
+        const resp = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/providers/all/models`);
+        if (resp.ok) {
+          const data = await resp.json();
+          // v0.3.2 fix: endpoint returns {providers: {ollama: [...], lmstudio: [...]}}
+          // — a dict keyed by provider, NOT an array. Earlier code treated it
+          // as an array so the dropdown stayed empty.
+          const out: Array<{ name: string; provider: string }> = [];
+          const providersDict = data.providers || {};
+          Object.entries(providersDict).forEach(([providerName, models]) => {
+            (Array.isArray(models) ? models : []).forEach((m: any) => {
+              const name = typeof m === 'string' ? m : (m?.name || m?.id || '');
+              if (name) out.push({ name, provider: providerName });
+            });
+          });
+          setAvailableModels(out);
+        }
+      } catch { /* non-fatal */ }
+    };
+
     if (isOpen) {
       fetchCurrentModel();
       fetchProviders();
+      fetchSidecarStatus();
+      fetchAllModels();
     }
+  }, [isOpen, currentModel]);
+
+  // v0.3.2 (0f): Multi-GPU hint — surfaced by /api/model/gpu-info once 0g
+  // ships. Until then treat as undefined (modal will always show when appropriate).
+  const [gpuCount, setGpuCount] = useState<number>(1);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchGpu = async () => {
+      try {
+        const resp = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/gpu-info`);
+        if (resp.ok) {
+          const data = await resp.json();
+          if (!cancelled && typeof data.gpu_count === 'number') setGpuCount(data.gpu_count);
+        }
+      } catch { /* non-fatal */ }
+    };
+    if (isOpen) fetchGpu();
+    return () => { cancelled = true; };
   }, [isOpen]);
+
+  const applySidecarModel = async (model: string) => {
+    try {
+      await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/set`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, provider: sidecarProvider, mirror_chat: false }),
+      });
+      setSidecarModel(model);
+      setMirrorChat(false);
+    } catch (e) {
+      console.error('Failed to set sidecar:', e);
+    }
+  };
+
+  const handleSidecarSelect = (model: string) => {
+    // Skip the reload warning when the pick matches the chat model or the
+    // user has a multi-GPU system.
+    if (model === currentModel || gpuCount > 1) {
+      void applySidecarModel(model);
+      return;
+    }
+    setPendingSidecarModel(model);
+  };
+
+  const handleMirrorToggle = async (next: boolean) => {
+    setMirrorChat(next);
+    try {
+      await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/mirror`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mirror_chat: next }),
+      });
+      if (next) setSidecarModel(currentModel);
+    } catch (e) {
+      console.error('Failed to toggle mirror:', e);
+    }
+  };
 
   const handleDataManagementClick = () => {
     setShowDataManagementModal(true);
@@ -212,6 +326,64 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
               </button>
             </div>
 
+            {/* v0.3.2 (0f): Advanced — collapsed by default. */}
+            <div className="pt-2">
+              <button
+                onClick={() => setAdvancedOpen((v) => !v)}
+                className="w-full flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors text-left"
+                data-testid="advanced-settings-toggle"
+                aria-expanded={advancedOpen}
+              >
+                <svg
+                  className={`w-4 h-4 text-zinc-400 transition-transform ${advancedOpen ? 'rotate-90' : ''}`}
+                  fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+                <span className="flex-1">Advanced</span>
+              </button>
+
+              {advancedOpen && (
+                <div className="mt-2 p-3 bg-zinc-900/50 border border-zinc-800 rounded-lg space-y-3" data-testid="advanced-settings-panel">
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={mirrorChat}
+                      onChange={(e) => handleMirrorToggle(e.target.checked)}
+                      data-testid="sidecar-mirror-toggle"
+                      className="mt-1"
+                    />
+                    <span className="text-sm text-zinc-300">
+                      Use chat model for sidecar
+                      <span className="block text-xs text-zinc-500 mt-0.5">
+                        Recommended. Keeps both lanes on the same model to avoid
+                        10&ndash;30s GPU swaps.
+                      </span>
+                    </span>
+                  </label>
+
+                  {!mirrorChat && (
+                    <div data-testid="sidecar-model-picker">
+                      <label className="block text-xs text-zinc-500 mb-1">Sidecar model</label>
+                      <select
+                        value={sidecarModel}
+                        onChange={(e) => handleSidecarSelect(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-sm text-zinc-200"
+                        data-testid="sidecar-model-select"
+                      >
+                        <option value="">— Select model —</option>
+                        {availableModels.map((m) => (
+                          <option key={`${m.provider}:${m.name}`} value={m.name}>
+                            {m.name} ({m.provider})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Data Management Button */}
             <div className="pt-4 border-t border-zinc-800">
               <button
@@ -278,6 +450,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
       <MCPServersPanel
         isOpen={showMCPServersPanel}
         onClose={() => setShowMCPServersPanel(false)}
+      />
+
+      {/* v0.3.2 (0f): Reload-warning modal — fires when Advanced sidecar
+          picker selects a model different from chat on a single-GPU system. */}
+      <SidecarReloadWarningModal
+        isOpen={pendingSidecarModel !== null}
+        chatModel={currentModel}
+        sidecarModel={pendingSidecarModel || ''}
+        onCancel={() => setPendingSidecarModel(null)}
+        onConfirm={() => {
+          const m = pendingSidecarModel;
+          setPendingSidecarModel(null);
+          if (m) void applySidecarModel(m);
+        }}
       />
     </>
   );

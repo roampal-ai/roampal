@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [master]
 
+# v0.3.2 (Section 3): GitHub Actions runners currently execute JS actions
+# under Node.js 20, which reaches end-of-life in 2026-06 and is forcibly
+# upgraded to Node 24 in mid-2026. Opting in early here avoids a silent
+# breakage window and gives us time to bump action major versions when
+# their v5 / v6 releases ship.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   backend:
     name: Backend (pytest)

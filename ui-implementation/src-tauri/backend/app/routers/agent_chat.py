@@ -40,7 +40,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 
 from fastapi.responses import StreamingResponse
 
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 
 from filelock import FileLock
 
@@ -412,7 +412,8 @@ class AgentChatRequest(BaseModel):
     # Mode removed - RoamPal always uses memory
     # File attachments removed - use Document Processor for file uploads
 
-    @validator("message")
+    @field_validator("message")
+    @classmethod
     def validate_message(cls, v):
         """Validate message input for security"""
 
@@ -434,7 +435,8 @@ class AgentChatRequest(BaseModel):
 
         return v.strip()
 
-    @validator("conversation_id")
+    @field_validator("conversation_id")
+    @classmethod
     def validate_conversation_id(cls, v):
         """Validate conversation ID format"""
 
@@ -1620,30 +1622,31 @@ Recent History: Last 6 messages included in your context
 
 When asked about the date or time, use this information directly - do not search memory or claim lack of access.""")
 
-        # 4. AUTOMATED INTELLIGENCE (What the system does FOR you)
+        # 4. AUTOMATED MEMORY INJECTION (What the LLM actually receives)
         parts.append("""
 
 [How Memory Automation Works]
 
 **Cold Start (Message 1 of every conversation):**
-The system AUTOMATICALLY injects your user profile from the Content Knowledge Graph.
-You receive this as context BEFORE seeing the user's first message.
-• Action: Respond naturally using the provided context - no need to search
-• Example: User says "hey" → You already have context → "Hey [name], continuing work on [project]?"
+A cold-start profile is automatically added to your context BEFORE you see the user's first message. It picks the single highest-quality memory_bank fact from each of these categories (when available): identity, preference, goal, project, system_mastery, agent_growth.
+• Action: Respond naturally using the provided context — no need to search
+• Example: User says "hey" → you already have their name / current project → "Hey [name], continuing work on [project]?"
 
 **Organic Recall (Every message):**
-BEFORE you see the user's message, the system analyzes it and injects:
-• 📋 Past Experience: Proven solutions from similar conversations (from Content KG)
-• ⚠️ Past Failures: What didn't work before (from failure_patterns graph)
-• 📊 Tool Stats: Which tools led to correct answers in similar contexts (from Action-Effectiveness KG)
-• 💡 Recommendations: Best collections to search based on learned patterns
+BEFORE you see the user's message, the system runs a semantic retrieval and injects up to 8 memories: 4 summaries + 4 atomic facts, drawn from working / patterns / history / memory_bank tiers, ranked by relevance.
+
+Each injected memory comes with metadata you WILL see:
+• `wilson` score (0.0-1.0) — reliability from past outcome scoring
+• `uses` — times retrieved
+• `last_outcome` — worked / failed / partial / unknown (from the last time it was used)
+• age (e.g., "2d", "5h")
+• collection / tier name
 
 **How to Use This:**
-1. Read the guidance - it's intelligence extracted from past successful/failed interactions
-2. If guidance mentions proven solutions, reference them in your response
-3. If stats show searching patterns worked 85% in this context, prioritize the patterns collection
-4. If low tool stats (<50%), don't assume tool is broken - it just didn't help answer correctly before
-5. Respond naturally - the system handles learning and promotion automatically""")
+1. Treat injected memories as already-relevant — you don't need to re-search unless the context is insufficient
+2. Memories with high wilson + "worked" outcome are proven; prefer those when answering
+3. Memories with "failed" last_outcome should be treated with caution — they led the conversation astray before
+4. Respond naturally — you're not expected to explain or cite the memory IDs to the user""")
 
         # 5. TOOL CALLING STYLE
         parts.append("""
@@ -1725,8 +1728,23 @@ Store proactively - it's what makes you continuous, not reset-every-session.
 
 **Storage Tips:**
 • Be specific and complete when storing facts
-• Use tags: identity, preference, goal, project, system_mastery, agent_growth
-• Quality ranking uses importance × confidence""")
+• Use tags: identity, preference, goal, project, system_mastery, agent_growth. These drive **cold-start category selection** (which memory_bank facts get surfaced on message 1). TagCascade retrieval on organic recall runs off separately-extracted noun_tags, not these human tags — but tagging properly still matters for cold-start and categorization.
+• Quality ranking uses importance × confidence
+
+**Scope note — update_memory and archive_memory only affect memory_bank.**
+You can ONLY modify memory_bank entries (the ones you or the user created via `create_memory`). You cannot update or archive working/history/patterns memories — those are sidecar-generated summaries and auto-extracted facts, managed by the lifecycle system (promotion, demotion, decay). If the user wants to correct an auto-extracted fact from a past exchange, store the correction via `create_memory` instead; the sidecar's scoring will down-rank the wrong one over time.
+
+**When to use `update_memory` instead of `create_memory`:**
+The user is CORRECTING a fact you previously stored in memory_bank. Examples:
+• "Actually my horse's name is Jerry, not Steve" → update the old name fact
+• "I switched from Python to Rust for that project" → update the language fact
+Pass the old content (semantic match, doesn't need to be exact) + new content. The system finds the closest memory_bank entry and replaces it. Use this instead of create_memory to avoid leaving the stale fact lingering.
+
+**When to use `archive_memory`:**
+A memory_bank fact is no longer true and has no replacement. Examples:
+• You stored "works at Acme" → now they say "I quit Acme last month" → archive the employment fact
+• You stored "planning to visit Japan" → now they say "trip cancelled" → archive the goal
+Archives are soft-deletes: retrieval ignores archived memories so they don't surface as context. Use this when a memory_bank fact becomes obsolete rather than corrected.""")
 
         # 7. SEARCH RESULTS + FORMATTING
         parts.append("""
@@ -1740,53 +1758,17 @@ Use this naturally: "This worked 3 times before" or "According to [source]..."
 
 Use Markdown: **bold**, *italic*, `code`, # headings, lists, ```code blocks```, > blockquotes""")
 
-        # 8. OUTCOME LEARNING (How it actually works)
+        # 8. OUTCOME LEARNING (Background process — what it means for the LLM)
         parts.append("""
 
-[Outcome Scoring - How It Works]
+[Outcome Scoring — Context]
 
-After each exchange, a separate LLM call (OutcomeDetector) analyzes your conversation:
-1. You respond to user
-2. User sends follow-up message
-3. System calls OutcomeDetector to analyze: "Did this help?"
-4. OutcomeDetector (you, in a separate call) evaluates user's reaction:
-   • "worked" = enthusiastic thanks, user moves to new topic
-   • "failed" = user corrects you, repeats question, says "no/wrong"
-   • "partial" = lukewarm "okay", "I guess", helped but incomplete
-   • "unknown" = no clear signal
-5. Memories you retrieved get scored with that outcome
+A background sidecar process scores the memories that were injected into each exchange:
+• After you respond, when the user sends their next message, the sidecar reads both and classifies the outcome as worked / failed / partial / unknown
+• Every memory that was in your context on that turn gets that outcome appended to its history
+• Good memories rise in wilson score (surface more often); bad ones decay (surface less)
 
-What gets scored:
-• Memories from search_memory calls are cached
-• When outcome is detected, ALL cached memories get that score
-• Good memories rise (easier to find), bad ones sink (filtered out)
-
-You can explain this to users - it's not magic, it's you analyzing your own conversations.
-
-[Memory Attribution - v0.3.0]
-
-When memories are surfaced (shown as numbered list before your response), you MUST add a hidden annotation at the END of your response:
-
-<!-- MEM: 1👍 2🤷 3👎 4➖ -->
-
-Markers:
-👍 = this memory definitely helped me answer well
-🤷 = this memory kinda helped (partially useful)
-👎 = this memory was wrong or misleading
-➖ = I didn't use this memory
-
-This annotation is invisible to the user but helps the system learn which memories are helpful vs harmful.
-Only include this annotation when you see numbered memories in your context.""")
-
-        # 9. ACTION-EFFECTIVENESS STATS
-        parts.append("""
-
-[Action-Effectiveness Stats]
-
-When you see stats like "searching patterns: 45% led to correct answers":
-• High % (>70%): Prioritize this tool+collection combo
-• Low % (<40%): Try other approaches first, but don't avoid entirely
-• Stats measure "led to correct answer", not tool reliability. Use to prioritize, not avoid.""")
+You don't need to do anything to trigger this — it happens automatically in the background. The only time it's visible to you is on future turns, when retrieved memories arrive with their updated wilson score and last_outcome visible in metadata.""")
 
         # 10. CRITICAL: ALWAYS RESPOND WITH TEXT (fixes tool-only loop bug)
         parts.append("""
@@ -1802,11 +1784,9 @@ NEVER leave the user without a text response after a tool call.
 If a tool returns no results, tell the user: "I didn't find anything about X."
 If a tool succeeds, summarize what you found and continue the conversation.
 
-Your capabilities are LIMITED to the tools provided. You do NOT have:
-• Web search capability
-• Real-time internet access
-• Ability to fetch URLs
-Only use the memory tools (search_memory, create_memory, update_memory, archive_memory) that are explicitly provided.""")
+Your capabilities are LIMITED to the tools actually provided in this request. Built-in memory tools are search_memory, create_memory, update_memory, archive_memory — but additional tools may be present if the user has connected MCP servers (e.g., filesystem, web search, GitHub). Inspect the tool list you were given; only call tools that are there.
+
+Without explicit tools, you do NOT have: web search, real-time internet access, or URL fetching — don't hallucinate those capabilities.""")
 
         # Add OpenAI-style tool calling instruction for LM Studio
         # v0.3.0: Unified tool guidance for all providers (Ollama + LM Studio)
@@ -2634,23 +2614,40 @@ Respond with ONLY the title, nothing else."""
 
             if content.strip() and self.memory:
                 now = datetime.now().isoformat()
-                await self.memory.store(
+                # v0.3.2: Route through store_memory_bank (not generic store)
+                # so the pre-store fact-dedup gate in UnifiedMemorySystem fires
+                # for in-app saves (asymmetric scope: memory_bank-only scan).
+                # Also fixes two latent bugs with the previous direct store():
+                #   (1) score split-brain — store() defaulted to 0.5, but
+                #       memory_bank_service sets 1.0 (never decays), so items
+                #       created via this tool decayed while MCP-created ones
+                #       didn't.
+                #   (2) capacity cap (MAX_ITEMS=500) was bypassed for in-app
+                #       saves because the cap lives in memory_bank_service.
+                doc_id = await self.memory.store_memory_bank(
                     text=content,
-                    collection="memory_bank",
-                    metadata={
-                        "tags": json.dumps(tags),
-                        "importance": importance,
-                        "confidence": confidence,
-                        "status": "active",
-                        "created_at": now,
-                        "updated_at": now,
-                        "mentioned_count": 1,
-                        "added_by": "ai",
-                        "conversation_id": conversation_id,
-                    },
+                    tags=tags,
+                    importance=importance,
+                    confidence=confidence,
                 )
+                # store_memory_bank doesn't carry these fields; patch them on
+                # so create_memory-created items keep parity with the old
+                # direct-store shape (added_by, conversation_id, updated_at).
+                try:
+                    self.memory.collections["memory_bank"].update_fragment_metadata(
+                        doc_id,
+                        {
+                            "added_by": "ai",
+                            "conversation_id": conversation_id,
+                            "updated_at": now,
+                        },
+                    )
+                except Exception as e:
+                    logger.debug(
+                        f"[MEMORY_BANK TOOL] metadata patch failed for {doc_id}: {e}"
+                    )
                 logger.info(
-                    f"[MEMORY_BANK TOOL] Created: {content[:50]}... with tags={tags} (depth={chain_depth})"
+                    f"[MEMORY_BANK TOOL] Created: {content[:50]}... with tags={tags} (depth={chain_depth}, doc_id={doc_id})"
                 )
 
                 # Set response content for continuation (so LLM responds after storing)
@@ -3160,13 +3157,18 @@ async def _run_generation_task(
     """Background task for async LLM generation with WebSocket streaming and timeout handling."""
     global agent_service
 
-    # Small delay to ensure WebSocket connection is established
-    await asyncio.sleep(0.5)
-
-    # Get WebSocket connection if available
+    # v0.3.2: Poll for the WebSocket instead of a flat 500 ms sleep. Exits
+    # early (typical: <50 ms) once the client has connected, but keeps the
+    # 500 ms upper bound as a safety net.
     websocket = None
     if app_state and hasattr(app_state, "websockets"):
-        websocket = app_state.websockets.get(conversation_id)
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + 0.5
+        while loop.time() < deadline:
+            websocket = app_state.websockets.get(conversation_id)
+            if websocket is not None:
+                break
+            await asyncio.sleep(0.02)
         logger.info(
             f"[WebSocket] Found connection for {conversation_id}: {websocket is not None}"
         )

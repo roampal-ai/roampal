@@ -8,6 +8,7 @@ same ChromaDB collections — zero user-facing change. Existing embeddings
 stay compatible.
 """
 
+import asyncio
 import logging
 import hashlib
 import numpy as np
@@ -177,7 +178,11 @@ class EmbeddingService(EmbeddingServiceInterface):
             if len(text) > 2000:
                 text = text[:2000]
 
-            embedding = self._encode([text])[0].tolist()
+            # v0.3.2: Offload blocking ONNX inference so the event loop
+            # stays free for WebSocket sends etc.
+            loop = asyncio.get_event_loop()
+            vectors = await loop.run_in_executor(None, self._encode, [text])
+            embedding = vectors[0].tolist()
 
             # Verify dimension
             if len(embedding) != self._embedding_dim:
@@ -203,7 +208,9 @@ class EmbeddingService(EmbeddingServiceInterface):
 
         valid_texts = [t if isinstance(t, str) and t.strip() else "" for t in texts]
         try:
-            vectors = self._encode(valid_texts)
+            # v0.3.2: Offload blocking ONNX inference.
+            loop = asyncio.get_event_loop()
+            vectors = await loop.run_in_executor(None, self._encode, valid_texts)
             return vectors.tolist()
         except Exception as e:
             logger.error(f"Batch embedding failed: {e}")

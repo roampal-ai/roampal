@@ -1,5 +1,5 @@
 from typing import Dict, Literal, Optional, Set, List, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import json
@@ -73,7 +73,11 @@ class LLMSettings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "mistral-nemo:12b-instruct-2407-q4_0"  # Using Mistral Nemo for better performance
     ollama_request_timeout_seconds: int = 120  # 120 seconds - allows large model reload after sidecar GPU swap
-    ollama_keep_alive_seconds: int = 120
+    # v0.3.2 (0e): String duration (Ollama accepts "24h", "30m", etc.). Default
+    # bumped from 2 min to 24 h so desktop users chatting intermittently don't
+    # pay a 10-30s model-reload penalty on every idle > 5 min. Ollama will
+    # still evict the model after a full day idle so VRAM isn't pinned forever.
+    ollama_keep_alive: str = "24h"
     max_keepalive_connections: int = Field(5, description="Max keepalive connections for httpx.")
     max_connections: int = Field(10, description="Max connections for httpx.")
     openchat_format: Optional[str] = None
@@ -86,13 +90,12 @@ class LLMSettings(BaseSettings):
     )
 
 class FragmentFileMemorySettings(BaseModel):
+    model_config = ConfigDict(extra='ignore')
     base_data_path: str = OG_DATA_PATH
     goals_filename: Optional[str] = "goals.txt"
     values_filename: Optional[str] = "values.txt"
     conversation_history_subdir: Optional[str] = "conversations"
     arbitrary_store_subdir: Optional[str] = "arbitrary_store"
-    class Config:
-        extra = 'ignore'
     @property
     def file_memory_data_path(self) -> str:
         return self.base_data_path
@@ -125,9 +128,8 @@ class WebSearchSettings(BaseSettings):
     )
 
 class PromptConfigBase(BaseModel):
+    model_config = ConfigDict(extra='ignore')
     template_directory: str = str(PROMPTS_DIR)
-    class Config:
-        extra = 'ignore'
 
 class OGPromptSettings(PromptConfigBase):
     default_system_prompt_name: str = "og_system_prompt"

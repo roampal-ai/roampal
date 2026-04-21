@@ -44,20 +44,21 @@ describe('OllamaRequiredModal', () => {
       expect(screen.getByText('Welcome to Roampal')).toBeInTheDocument()
     })
 
-    // TODO(v0.3.2): Tab labels were changed in the v0.3.1 onboarding redesign.
-    // Update this assertion to match the current tab text in OllamaRequiredModal.tsx.
-    it.skip('shows both tab options', () => {
+    // v0.3.2: Tab labels updated for v0.3.1 onboarding redesign —
+    // "Setup LLM Provider" → "Getting Started"; MCP tab unchanged.
+    it('shows both tab options', () => {
       render(<OllamaRequiredModal {...defaultProps} />)
-      expect(screen.getByText('Setup LLM Provider')).toBeInTheDocument()
+      expect(screen.getByText('Getting Started')).toBeInTheDocument()
       expect(screen.getByText('MCP Integration (Optional)')).toBeInTheDocument()
     })
   })
 
   describe('LLM Tab (Default)', () => {
-    // TODO(v0.3.2): "Recommended Provider:" label was rewritten in the onboarding redesign.
-    it.skip('shows LLM provider information', () => {
+    // v0.3.2: "Recommended Provider:" rewritten to "Supported Providers:" in
+    // the v0.3.1 onboarding redesign.
+    it('shows LLM provider information', () => {
       render(<OllamaRequiredModal {...defaultProps} />)
-      expect(screen.getByText('Recommended Provider:')).toBeInTheDocument()
+      expect(screen.getByText('Supported Providers:')).toBeInTheDocument()
     })
 
     it('shows Ollama as recommended', () => {
@@ -76,11 +77,12 @@ describe('OllamaRequiredModal', () => {
       expect(screen.getByText('Download LM Studio')).toBeInTheDocument()
     })
 
-    // TODO(v0.3.2): "Why local providers?" copy was rewritten in the onboarding redesign.
-    it.skip('explains why local providers', () => {
+    // v0.3.2: The "Why local providers?" heading was merged into the
+    // "How Roampal works:" panel, which now carries the privacy copy.
+    it('explains why local providers', () => {
       render(<OllamaRequiredModal {...defaultProps} />)
-      expect(screen.getByText('Why local providers?')).toBeInTheDocument()
-      expect(screen.getByText(/No data leaves your computer/)).toBeInTheDocument()
+      expect(screen.getByText('How Roampal works:')).toBeInTheDocument()
+      expect(screen.getByText(/nothing leaves your computer/)).toBeInTheDocument()
     })
   })
 

@@ -193,6 +193,24 @@ class TestTagServiceExtractTags:
         tags2 = service.extract_tags("anything")
         assert "custom tag" in tags2
 
+    def test_sync_extract_tags_with_async_llm_returns_empty(self, caplog):
+        """v0.3.2 (Bug 5): sync extract_tags() with an async llm_extract_fn
+        can't await, previously returned a coroutine that _normalize_llm_tags
+        couldn't iterate → AttributeError → silent []. Guard now returns []
+        explicitly and logs at WARNING so future regressions surface."""
+        async def async_llm(text):
+            return ["should not be reached"]
+
+        service = TagService(llm_extract_fn=async_llm)
+        import logging
+        with caplog.at_level(logging.WARNING):
+            tags = service.extract_tags("some text")
+        assert tags == []
+        assert any(
+            "async llm_extract_fn" in rec.getMessage()
+            for rec in caplog.records
+        )
+
 
 # ---------------------------------------------------------------------------
 # TagService — extract_tags_async

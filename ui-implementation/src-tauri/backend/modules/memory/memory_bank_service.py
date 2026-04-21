@@ -60,7 +60,8 @@ class MemoryBankService:
         text: str,
         tags: List[str],
         importance: float = 0.7,
-        confidence: float = 0.7
+        confidence: float = 0.7,
+        embedding: Optional[List[float]] = None,
     ) -> str:
         """
         Store user memory in memory_bank collection.
@@ -70,6 +71,9 @@ class MemoryBankService:
             tags: List of tags (identity, preference, project, context, goal)
             importance: 0.0-1.0 (how critical is this memory)
             confidence: 0.0-1.0 (how sure are we about this)
+            embedding: Pre-computed embedding. v0.3.2: caller (store_memory_bank)
+                computes this for the fact-dedup check and passes it through
+                to avoid re-embedding. If None, computed here.
 
         Returns:
             Document ID
@@ -89,8 +93,9 @@ class MemoryBankService:
 
         doc_id = f"memory_bank_{uuid.uuid4().hex[:8]}"
 
-        # Generate embedding
-        embedding = await self.embed_fn(text)
+        # Generate embedding if caller didn't pre-compute one
+        if embedding is None:
+            embedding = await self.embed_fn(text)
 
         # Build metadata
         metadata = {

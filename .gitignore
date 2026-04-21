@@ -34,10 +34,12 @@ loopsmith.log
 roampal.log
 server*.log
 
-# IDE
+# IDE / local tooling configs (not project scope)
 .vscode/
 .idea/
 *.swp
+opencode.json
+.playwright-mcp/
 *.swo
 .claude/
 

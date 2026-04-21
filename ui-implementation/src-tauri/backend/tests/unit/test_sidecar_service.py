@@ -268,6 +268,21 @@ class TestExtractFacts:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_bare_array_from_small_model(self):
+        """v0.3.2 laptop-testing bug: small models (qwen2.5:3b etc.) sometimes
+        return a bare JSON array instead of the schema-wrapped {"facts": [...]}.
+        Pre-fix, result.get("facts", []) raised AttributeError on list; fix
+        makes extract_facts tolerant of both shapes."""
+        client = MagicMock()
+        client.generate_response = AsyncMock(
+            return_value='["User prefers dark mode for coding", "Logan works in data science"]'
+        )
+        result = await extract_facts("exchange", client, "model")
+        assert result is not None
+        assert len(result) == 2
+        assert "dark mode" in result[0]
+
+    @pytest.mark.asyncio
     async def test_content_truncated_to_8000(self):
         client = MagicMock()
         client.generate_response = AsyncMock(
@@ -348,6 +363,24 @@ class TestExtractNounTags:
         client.generate_response = AsyncMock(return_value='{"tags": ["he", "she", "i"]}')
         result = await extract_noun_tags("text", client, "model")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_bare_array_from_small_model(self):
+        """v0.3.2 laptop-testing: small models (qwen2.5:3b etc.) sometimes emit
+        a bare array ["tag1", "tag2"] instead of the schema-wrapped
+        {"tags": [...]}. Pre-fix, result.get("tags") raised AttributeError on
+        list and the tag lane died silently — leaving TagCascade retrieval
+        with empty tag lists for any memory scored by that model. Mirror of
+        the extract_facts bare-array fix."""
+        client = MagicMock()
+        client.generate_response = AsyncMock(
+            return_value='["calvin", "muscle car", "boston"]'
+        )
+        result = await extract_noun_tags("Calvin drove his muscle car in Boston", client, "model")
+        assert result is not None
+        assert "calvin" in result
+        assert "muscle car" in result
+        assert "boston" in result
 
 
 # ---------------------------------------------------------------------------

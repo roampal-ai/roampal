@@ -113,105 +113,134 @@ describe('MemoryPanelV2', () => {
       expect(screen.queryByText('Clear')).not.toBeInTheDocument()
     })
 
-    // TODO(v0.3.2): tag cloud count rendering changed with the Substack-style input. Rewrite for new UI.
-    it.skip('shows tag counts in the cloud', () => {
+    // v0.3.2: Rewritten for the Substack-style tag input — counts now live
+    // in the typeahead dropdown, not a static cloud.
+    it('shows tag counts in the typeahead suggestions', () => {
       const memories = [
         makeMemory({ tags: ['python'] }),
         makeMemory({ tags: ['python'] }),
         makeMemory({ tags: ['rust'] }),
       ]
       render(<MemoryPanelV2 {...defaultProps} memories={memories} />)
-      // python count = 2 should appear somewhere
-      expect(screen.getByText('2')).toBeInTheDocument()
+      const input = screen.getByPlaceholderText('Filter by tag...')
+      fireEvent.change(input, { target: { value: 'py' } })
+      fireEvent.focus(input)
+      // The typeahead dropdown renders a button per matching tag with the count.
+      const suggestionButtons = screen.getAllByRole('button').filter(
+        btn => btn.textContent?.includes('python') && btn.textContent?.includes('2')
+      )
+      expect(suggestionButtons.length).toBeGreaterThan(0)
     })
   })
 
-  // TODO(v0.3.2): Tag cloud click-to-filter was replaced by Substack-style tag input
-  // with typeahead suggestions in v0.3.1. These tests still exercise the old cloud
-  // flow. Rewrite against the new input/pill UI (MemoryPanelV2.tsx ~L290-325) or
-  // remove if cloud filtering is gone for good.
-  describe.skip('Tag Filtering', () => {
-    it('filters memories when tag is clicked in cloud', () => {
+  // v0.3.2: Tag cloud click-to-filter was replaced by Substack-style tag input
+  // with typeahead suggestions in v0.3.1. Tests rewritten against the new
+  // input/pill UI (MemoryPanelV2.tsx ~L280-327).
+  describe('Tag Filtering', () => {
+    it('filters memories when a tag suggestion is picked', () => {
+      // Need 2+ memories per tag — component hides tags with count < 2.
       const memories = [
         makeMemory({ id: 'mem-1', text: 'Python memory', content: 'Python memory', tags: ['python'] }),
+        makeMemory({ id: 'mem-py2', text: 'More python', content: 'More python', tags: ['python'] }),
         makeMemory({ id: 'mem-2', text: 'Rust memory', content: 'Rust memory', tags: ['rust'] }),
+        makeMemory({ id: 'mem-rust2', text: 'More rust', content: 'More rust', tags: ['rust'] }),
       ]
       render(<MemoryPanelV2 {...defaultProps} memories={memories} />)
 
-      // Both memories visible
+      // Both memories visible before filtering
       expect(screen.getByText('Python memory')).toBeInTheDocument()
       expect(screen.getByText('Rust memory')).toBeInTheDocument()
 
-      // Click python tag in the cloud (first button matching "python")
-      const tagButtons = screen.getAllByRole('button')
-      const pythonButton = tagButtons.find(btn => btn.textContent?.includes('python'))
-      if (pythonButton) fireEvent.click(pythonButton)
+      const input = screen.getByPlaceholderText('Filter by tag...')
+      fireEvent.change(input, { target: { value: 'py' } })
+      fireEvent.focus(input)
+      // Click the python suggestion in the typeahead dropdown.
+      const suggestion = screen.getAllByRole('button').find(
+        btn => btn.textContent?.includes('python') && /\d+/.test(btn.textContent || '')
+      )
+      if (suggestion) fireEvent.mouseDown(suggestion)
 
-      // Only Python memory should be visible
+      // Only Python memory should remain visible
       expect(screen.getByText('Python memory')).toBeInTheDocument()
       expect(screen.queryByText('Rust memory')).not.toBeInTheDocument()
     })
 
-    it('shows Clear button when tags selected', () => {
+    it('shows the Clear X button once a tag pill is added', () => {
       const memories = [
         makeMemory({ tags: ['python'] }),
+        makeMemory({ tags: ['python'] }),
+        makeMemory({ tags: ['rust'] }),
         makeMemory({ tags: ['rust'] }),
       ]
       render(<MemoryPanelV2 {...defaultProps} memories={memories} />)
 
-      // No Clear initially
-      expect(screen.queryByText('Clear')).not.toBeInTheDocument()
+      // Not present before anything is picked.
+      expect(screen.queryByTitle('Clear all tags')).not.toBeInTheDocument()
 
-      // Click a tag
-      const tagButtons = screen.getAllByRole('button')
-      const pythonButton = tagButtons.find(btn => btn.textContent?.includes('python'))
-      if (pythonButton) fireEvent.click(pythonButton)
+      const input = screen.getByPlaceholderText('Filter by tag...')
+      fireEvent.change(input, { target: { value: 'py' } })
+      fireEvent.focus(input)
+      const suggestion = screen.getAllByRole('button').find(
+        btn => btn.textContent?.includes('python') && /\d+/.test(btn.textContent || '')
+      )
+      if (suggestion) fireEvent.mouseDown(suggestion)
 
-      // Clear should appear
-      expect(screen.getByText('Clear')).toBeInTheDocument()
+      // X button surfaces once a pill is in place.
+      expect(screen.getByTitle('Clear all tags')).toBeInTheDocument()
     })
 
-    it('clears tag filter when Clear clicked', () => {
+    it('clears all tag filters when the X button is clicked', () => {
       const memories = [
         makeMemory({ id: 'mem-1', text: 'Python memory', content: 'Python memory', tags: ['python'] }),
+        makeMemory({ id: 'mem-py2', text: 'More python', content: 'More python', tags: ['python'] }),
         makeMemory({ id: 'mem-2', text: 'Rust memory', content: 'Rust memory', tags: ['rust'] }),
+        makeMemory({ id: 'mem-rust2', text: 'More rust', content: 'More rust', tags: ['rust'] }),
       ]
       render(<MemoryPanelV2 {...defaultProps} memories={memories} />)
 
-      // Click python tag
-      const tagButtons = screen.getAllByRole('button')
-      const pythonButton = tagButtons.find(btn => btn.textContent?.includes('python'))
-      if (pythonButton) fireEvent.click(pythonButton)
+      const input = screen.getByPlaceholderText('Filter by tag...')
+      fireEvent.change(input, { target: { value: 'py' } })
+      fireEvent.focus(input)
+      const suggestion = screen.getAllByRole('button').find(
+        btn => btn.textContent?.includes('python') && /\d+/.test(btn.textContent || '')
+      )
+      if (suggestion) fireEvent.mouseDown(suggestion)
 
-      // Only Python visible
       expect(screen.queryByText('Rust memory')).not.toBeInTheDocument()
 
-      // Click Clear
-      fireEvent.click(screen.getByText('Clear'))
+      fireEvent.click(screen.getByTitle('Clear all tags'))
 
-      // Both visible again
+      // Both visible again after clearing.
       expect(screen.getByText('Python memory')).toBeInTheDocument()
       expect(screen.getByText('Rust memory')).toBeInTheDocument()
     })
 
-    it('applies AND logic for multiple tags', () => {
+    it('applies AND logic when two tag pills are picked', () => {
+      // Need count >= 2 for each tag to show in the typeahead.
       const memories = [
         makeMemory({ id: 'mem-1', text: 'Both tags', content: 'Both tags', tags: ['python', 'api'] }),
+        makeMemory({ id: 'mem-1b', text: 'Both again', content: 'Both again', tags: ['python', 'api'] }),
         makeMemory({ id: 'mem-2', text: 'Python only', content: 'Python only', tags: ['python'] }),
         makeMemory({ id: 'mem-3', text: 'API only', content: 'API only', tags: ['api'] }),
       ]
       render(<MemoryPanelV2 {...defaultProps} memories={memories} />)
 
-      // Click python tag
-      const tagButtons = screen.getAllByRole('button')
-      const pythonButton = tagButtons.find(btn => btn.textContent?.includes('python'))
-      if (pythonButton) fireEvent.click(pythonButton)
+      const input = screen.getByPlaceholderText('Filter by tag...')
+      fireEvent.change(input, { target: { value: 'py' } })
+      fireEvent.focus(input)
+      let suggestion = screen.getAllByRole('button').find(
+        btn => btn.textContent?.includes('python') && /\d+/.test(btn.textContent || '')
+      )
+      if (suggestion) fireEvent.mouseDown(suggestion)
 
-      // Click api tag on the memory card (it has an onClick handler too)
-      const apiButton = screen.getAllByRole('button').find(btn => btn.textContent?.includes('api'))
-      if (apiButton) fireEvent.click(apiButton)
+      fireEvent.change(input, { target: { value: 'ap' } })
+      fireEvent.focus(input)
+      suggestion = screen.getAllByRole('button').find(
+        btn => btn.textContent?.includes('api') && /\d+/.test(btn.textContent || '')
+      )
+      if (suggestion) fireEvent.mouseDown(suggestion)
 
-      // Only "Both tags" should remain (has both python AND api)
+      // Only the memory with BOTH tags should remain.
       expect(screen.getByText('Both tags')).toBeInTheDocument()
       expect(screen.queryByText('Python only')).not.toBeInTheDocument()
       expect(screen.queryByText('API only')).not.toBeInTheDocument()

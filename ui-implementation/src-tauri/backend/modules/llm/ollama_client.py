@@ -3,7 +3,9 @@ import httpx
 import json
 import logging
 import asyncio
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import List, Dict, Any, AsyncGenerator, Optional
 
 from core.interfaces.llm_client_interface import LLMClientInterface
@@ -11,6 +13,41 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 logger.info("[OLLAMA MODULE LOADED] This module has the temporary fix to use /api/generate for all models")
+
+# v0.3.2: UNIFIED stale-model signal. Used identically by Ollama `/api/chat`
+# 404 branch AND LM Studio's `/v1/chat/completions` HTTP-status + stream-chunk
+# error branches. One pattern list, one user message, one state clear. Adding
+# a new provider = use the same helpers.
+_STALE_MODEL_PATTERNS = (
+    "not found",
+    "not loaded",
+    "unknown model",
+    "no such model",
+    "model_not_found",
+    "failed to resolve model",
+    "failed to load model",
+    "unable to load model",
+)
+
+
+def _is_stale_model_body(body: str) -> bool:
+    """Return True if the error body matches any universal stale-model signal."""
+    if not body:
+        return False
+    low = body.lower()
+    return any(pat in low for pat in _STALE_MODEL_PATTERNS)
+
+
+def _stale_model_user_message(model_name: str) -> str:
+    """The single user-facing copy shown whenever any provider reports the
+    currently-selected model is gone. Identical wording across Ollama + LM
+    Studio + any future provider."""
+    return (
+        f"**Model '{model_name}' is no longer available.**\n\n"
+        f"Click the **model picker (download icon) at the top of the chat** "
+        f"and choose a new one."
+    )
+
 
 class OllamaException(Exception):
     pass
@@ -25,7 +62,7 @@ class OllamaClient(LLMClientInterface):
         self.model_name: str = settings.llm.ollama_model  # Use default from settings
         self.api_style: str = "ollama"  # NEW: API style (ollama or openai)
         self.request_timeout: int = settings.llm.ollama_request_timeout_seconds
-        self.keep_alive_seconds: int = settings.llm.ollama_keep_alive_seconds
+        self.keep_alive: str = settings.llm.ollama_keep_alive
         # Track request count for connection recycling
         self._request_count = 0
         self._max_requests_per_client = 10  # Recycle client after N requests
@@ -34,7 +71,7 @@ class OllamaClient(LLMClientInterface):
         self.base_url = config.get("ollama_base_url", settings.llm.ollama_base_url)
         self.model_name = config.get("ollama_model", settings.llm.ollama_model)
         self.request_timeout = config.get("ollama_request_timeout_seconds", self.request_timeout)
-        self.keep_alive_seconds = config.get("ollama_keep_alive_seconds", self.keep_alive_seconds)
+        self.keep_alive = config.get("ollama_keep_alive", self.keep_alive)
 
         if not self.model_name:
             raise ValueError("Ollama 'ollama_model' name must be provided in the configuration.")
@@ -122,7 +159,8 @@ class OllamaClient(LLMClientInterface):
             "model": actual_model,
             "messages": messages,
             "stream": False,
-            "think": False  # Disable thinking mode (qwen3, etc.) - much faster responses
+            "think": False,  # Disable thinking mode (qwen3, etc.) - much faster responses
+            "keep_alive": self.keep_alive,  # v0.3.2 (0e): avoid 10-30s reload on idle
         }
 
         # Initialize options to avoid UnboundLocalError in fallback path
@@ -249,7 +287,8 @@ class OllamaClient(LLMClientInterface):
                 generate_payload = {
                     "model": actual_model,
                     "prompt": prompt_text,
-                    "stream": False
+                    "stream": False,
+                    "keep_alive": self.keep_alive,  # v0.3.2 (0e)
                 }
 
                 # Apply model-specific options
@@ -390,7 +429,8 @@ class OllamaClient(LLMClientInterface):
             "model": actual_model,
             "messages": messages,
             "stream": False,
-            "think": False  # Disable thinking mode (qwen3, etc.) - much faster responses
+            "think": False,  # Disable thinking mode (qwen3, etc.) - much faster responses
+            "keep_alive": self.keep_alive,  # v0.3.2 (0e)
         }
 
         # Tools are called via <tool_call> tags in the response, not Ollama's native API
@@ -561,7 +601,8 @@ class OllamaClient(LLMClientInterface):
         payload = {
             "model": actual_model,
             "messages": messages,
-            "stream": True
+            "stream": True,
+            "keep_alive": self.keep_alive,  # v0.3.2 (0e)
         }
 
         try:
@@ -622,26 +663,17 @@ class OllamaClient(LLMClientInterface):
         if messages:
             logger.info(f"[DEBUG MESSAGES] Last 200 chars of last message: {messages[-1]['content'][-200:]}")
 
-        # v0.3.1.3: Blocklist approach — most modern models support tools.
-        # Only block models known to break with tool calling.
-        TOOL_BLOCKLIST = [
-            "dolphin", "dolphin3",  # Causes 400 errors with tools
-            "nomic-embed",  # Embedding model, no chat
-            "all-minilm",  # Embedding model
-            "bge-",  # Embedding model
-        ]
-
-        model_lower = actual_model.lower()
-        supports_native_tools = not any(
-            blocked in model_lower
-            for blocked in TOOL_BLOCKLIST
-        )
-
+        # v0.3.2: No tool-support blocklist. The set of models is effectively
+        # infinite and any hard-coded list goes stale the day a new release
+        # drops. Tool-incompatibility is detected from the server's response
+        # body (see HTTPStatusError handling below) and handled by a
+        # single-retry path that removes tools and tries again.
         payload = {
             "model": actual_model,
             "messages": messages,
             "stream": True,
-            "think": False  # Disable thinking mode (qwen3, etc.) - much faster responses
+            "think": False,  # Disable thinking mode (qwen3, etc.) - much faster responses
+            "keep_alive": self.keep_alive,  # v0.3.2 (0e)
         }
 
         # Use centralized context configuration
@@ -653,13 +685,12 @@ class OllamaClient(LLMClientInterface):
         }
         logger.info(f"[STREAM WITH TOOLS] Set context window to {num_ctx} for {actual_model} (num_gpu=99)")
 
-        # Only pass tools to models that support native API
-        if tools and supports_native_tools:
+        # Pass tools if supplied. Incompatible models are detected from the
+        # server's response body and handled via a no-tools retry path.
+        if tools:
             payload["tools"] = tools
-            logger.info(f"[STREAM WITH TOOLS] {len(tools)} tools passed to {actual_model} (native support)")
+            logger.info(f"[STREAM WITH TOOLS] {len(tools)} tools passed to {actual_model}")
             logger.debug(f"[STREAM WITH TOOLS] Tools: {json.dumps(tools, indent=2)}")
-        elif tools:
-            logger.warning(f"[STREAM WITH TOOLS] Model {actual_model} doesn't support native tools - tools disabled for this request")
 
         try:
             accumulated_content = ""
@@ -706,8 +737,38 @@ class OllamaClient(LLMClientInterface):
                     response.raise_for_status()
                     logger.info(f"[STREAM DEBUG] OpenAI-style Response status: {response.status_code}")
                 except httpx.HTTPStatusError as e:
-                    logger.error(f"OpenAI-style API streaming error: {e}")
-                    raise OllamaException(f"OpenAI API streaming error: {str(e)}")
+                    # v0.3.2 (0c extension to LM Studio path): mirror the Ollama
+                    # 0a pattern — parse the body on any 4xx/5xx and detect
+                    # "model gone" signals. LM Studio typically returns HTTP
+                    # 500 when the requested model isn't loaded, with a body
+                    # describing the issue. Without this, we'd re-raise into
+                    # the outer except which surfaces an ugly httpx default
+                    # message with an MDN link.
+                    error_text = await e.response.aread() if hasattr(e.response, 'aread') else str(e)
+                    body = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
+                    if _is_stale_model_body(body):
+                        logger.warning(
+                            f"[OPENAI STREAM] Stale model detected (HTTP {e.response.status_code}): "
+                            f"'{actual_model}' — {body[:200]}"
+                        )
+                        yield {"type": "text", "content": _stale_model_user_message(actual_model)}
+                        yield_count += 1
+                        self._clear_stale_model()
+                        yield {"type": "done"}
+                        return
+
+                    # Non-stale error (genuine 500, 503, etc.): surface a clean
+                    # user-facing chunk instead of re-raising into the outer
+                    # exception handler (which would expose httpx's default
+                    # MDN-link noise).
+                    short_body = body.strip()[:300] or f"HTTP {e.response.status_code}"
+                    logger.error(
+                        f"[OPENAI STREAM] Unrecoverable HTTP error (status={e.response.status_code}): {short_body}"
+                    )
+                    yield {"type": "text", "content": f"**Model error:** {short_body}"}
+                    yield_count += 1
+                    yield {"type": "done"}
+                    return
 
                 # Stream OpenAI-style SSE responses
                 # Accumulator for tool calls (OpenAI streams them in chunks)
@@ -764,16 +825,30 @@ class OllamaClient(LLMClientInterface):
                                 error_msg = chunk.get("error", {}).get("message", str(chunk.get("error")))
                                 logger.error(f"[OPENAI STREAM] Server returned error: {error_msg}")
 
+                                # v0.3.2: unified stale-model detection via shared helper.
+                                if _is_stale_model_body(error_msg):
+                                    logger.warning(
+                                        f"[OPENAI STREAM] Stale model detected: '{actual_model}' — {error_msg}"
+                                    )
+                                    yield {"type": "text", "content": _stale_model_user_message(actual_model)}
+                                    yield_count += 1
+                                    self._clear_stale_model()
+                                    yield {"type": "done"}
+                                    return
+
                                 # Provide helpful context-specific error messages
                                 if "context" in error_msg.lower() and ("overflow" in error_msg.lower() or "length" in error_msg.lower()):
+                                    # v0.3.2: dropped the "Or use Ollama instead: ollama pull {actual_model}"
+                                    # line — LM Studio model IDs don't match Ollama's naming convention, so
+                                    # that suggested command always failed (e.g., qwen2.5-14b-instruct → not a
+                                    # valid Ollama tag, should be qwen2.5:14b-instruct).
                                     user_msg = (
                                         f"**Context Length Error:** LM Studio loaded this model with only 4096 context, but Roampal needs ~6000 tokens.\n\n"
                                         f"**Fix in LM Studio (must be done there, not in Roampal):**\n"
                                         f"1. In LM Studio, **unload** the model first\n"
                                         f"2. Change the Context Length slider to at least **8192** (16384+ recommended)\n"
                                         f"3. **Load** the model again\n\n"
-                                        f"*LM Studio ignores context settings unless you reload the model. Roampal's context settings only work with Ollama.*\n\n"
-                                        f"*Or use Ollama instead:* `ollama pull {actual_model}` - it handles context automatically."
+                                        f"*LM Studio ignores context settings unless you reload the model. Roampal's context settings only work with Ollama.*"
                                     )
                                 else:
                                     user_msg = f"**Model Error:** {error_msg}"
@@ -884,37 +959,70 @@ class OllamaClient(LLMClientInterface):
                 response.raise_for_status()
                 logger.info(f"[STREAM DEBUG] Response status: {response.status_code}")
             except httpx.HTTPStatusError as e:
-                # Detect OOM: Ollama returns 500 with "terminated" when it runs out of memory
-                if e.response.status_code == 500:
-                    error_text = await e.response.aread() if hasattr(e.response, 'aread') else str(e)
-                    error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
+                # v0.3.2: Universal error handling. Parse the body on any 4xx/5xx
+                # and dispatch by signal (not status code or model name):
+                #   (a) "terminated"                 → OOM, retry at 2048 ctx
+                #   (b) "does not support tools"     → retry once without tools
+                #   (c) 404                          → model no longer installed
+                #   (d) anything else                → surface as user-facing text
+                error_text = await e.response.aread() if hasattr(e.response, 'aread') else str(e)
+                error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
+                body_lower = error_str.lower()
+                status = e.response.status_code
 
-                    if "terminated" in error_str.lower():
-                        logger.warning(f"⚠️ OOM detected (context: {original_ctx}), retrying with 2048")
-                        payload["options"]["num_ctx"] = 2048
-                        oom_retry = True
+                if "terminated" in body_lower:
+                    logger.warning(f"⚠️ OOM detected (context: {original_ctx}), retrying with 2048")
+                    payload["options"]["num_ctx"] = 2048
+                    oom_retry = True
 
-                        # Retry with reduced context
-                        response_stream = self.client.stream("POST", "/api/chat", json=payload, timeout=self.request_timeout)
-                        response = await response_stream.__aenter__()
-                        response.raise_for_status()
-                        logger.info(f"[STREAM DEBUG] OOM recovery successful, Response status: {response.status_code}")
+                    response_stream = self.client.stream("POST", "/api/chat", json=payload, timeout=self.request_timeout)
+                    response = await response_stream.__aenter__()
+                    response.raise_for_status()
+                    logger.info(f"[STREAM DEBUG] OOM recovery successful, Response status: {response.status_code}")
 
-                        # If OOM recovery happened, prepend warning message
-                        warning_msg = (
-                            f"⚠️ **Memory Limit Reached**\n\n"
-                            f"This model ran out of memory with {original_ctx} context window. "
-                            f"Reduced to 2048 tokens for this response.\n\n"
-                            f"**To fix permanently:** Open Settings → Context Window Settings → "
-                            f"Lower context for `{actual_model}` to 8192 or less.\n\n"
-                            f"---\n\n"
-                        )
-                        yield {"type": "text", "content": warning_msg}
-                        yield_count += 1
-                    else:
-                        raise  # Re-raise if not OOM
+                    warning_msg = (
+                        f"⚠️ **Memory Limit Reached**\n\n"
+                        f"This model ran out of memory with {original_ctx} context window. "
+                        f"Reduced to 2048 tokens for this response.\n\n"
+                        f"**To fix permanently:** Open Settings → Context Window Settings → "
+                        f"Lower context for `{actual_model}` to 8192 or less.\n\n"
+                        f"---\n\n"
+                    )
+                    yield {"type": "text", "content": warning_msg}
+                    yield_count += 1
+                elif "does not support tools" in body_lower and payload.get("tools"):
+                    logger.warning(
+                        f"[STREAM WITH TOOLS] Model '{actual_model}' does not support "
+                        f"native tool calls (status {status}); retrying without tools."
+                    )
+                    payload.pop("tools", None)
+                    response_stream = self.client.stream("POST", "/api/chat", json=payload, timeout=self.request_timeout)
+                    response = await response_stream.__aenter__()
+                    response.raise_for_status()
+                    logger.info(f"[STREAM DEBUG] No-tools retry succeeded, status: {response.status_code}")
+                elif status == 404 or _is_stale_model_body(error_str):
+                    # v0.3.2: unified stale-model path. Covers Ollama's 404
+                    # AND any body-level "model not found / unable to load /
+                    # failed to resolve" pattern, matching LM Studio's branch.
+                    logger.warning(
+                        f"[STREAM DEBUG] Ollama stale-model signal for '{actual_model}' — "
+                        f"status={status}, body={error_str[:200]}"
+                    )
+                    yield {"type": "text", "content": _stale_model_user_message(actual_model)}
+                    yield_count += 1
+                    self._clear_stale_model()
+                    yield {"type": "done"}
+                    return
                 else:
-                    raise  # Re-raise if not 500
+                    short_body = error_str.strip()[:300] or f"HTTP {status}"
+                    logger.error(
+                        f"[STREAM DEBUG] Unrecoverable Ollama error (status={status}): {short_body}"
+                    )
+                    user_msg = f"**Model error:** {short_body}"
+                    yield {"type": "text", "content": user_msg}
+                    yield_count += 1
+                    yield {"type": "done"}
+                    return
 
             # Stream the response
             async for line in response.aiter_lines():
@@ -976,7 +1084,77 @@ class OllamaClient(LLMClientInterface):
             yield {"type": "done"}
 
         except Exception as e:
-            raise OllamaException(f"Ollama stream_response_with_tools failed: {e}") from e
+            # v0.3.2: Don't silently kill the stream on unexpected errors —
+            # surface a user-facing text chunk so the UI can display something
+            # actionable instead of "Thinking…" vanishing. Still log the full
+            # traceback for diagnostics.
+            logger.error(f"Ollama stream_response_with_tools failed: {e}", exc_info=True)
+            detail = str(e).strip() or type(e).__name__
+            err_low = f"{type(e).__name__} {detail}".lower()
+            if "timeout" in err_low or "timed out" in err_low:
+                user_msg = (
+                    f"**Model timed out.**\n\n"
+                    f"'{self.chat_model}' took too long to respond. Large models "
+                    f"can be slow to cold-load — try again, or pick a smaller model."
+                )
+            else:
+                user_msg = f"**Model error:** {detail[:300]}"
+            yield {"type": "text", "content": user_msg}
+            yield {"type": "done"}
+            return
+
+    def _clear_stale_model(self) -> None:
+        """v0.3.2: Clear a no-longer-installed model from runtime + disk, but
+        PRESERVE the user's provider preference so next boot stays on the same
+        provider (just picks a different model from that provider's list).
+
+        Called from either the Ollama 404 branch OR the LM Studio HTTP/stream
+        stale-model branch — behavior is identical across providers.
+
+        - Chat side: rewrite main_model_config.json as {provider: <last>, model: ""}.
+          Unlinking the whole file kicks the user off their chosen provider
+          (next boot falls to the env-default), which feels wrong.
+        - Sidecar side: if mirror_chat was on AND sidecar pointed at the SAME
+          stale model, do the same trick on sidecar_config.json. Preserve
+          provider + mirror_chat flag, clear the dead model name, and boot-time
+          mirror-at-boot logic will pick up the new chat model.
+        """
+        import json as _json
+        from app.routers.model_switcher import _atomic_write_json
+
+        stale_model = self.model_name
+        # Infer provider from api_style (openai → lmstudio, ollama → ollama).
+        api_style = getattr(self, "api_style", "ollama")
+        provider = "lmstudio" if api_style == "openai" else "ollama"
+        logger.info(
+            f"[STALE MODEL] Clearing '{stale_model}' from runtime + persisted config "
+            f"(preserving provider={provider})"
+        )
+        self.model_name = ""
+        data_dir = Path(settings.paths.data_dir)
+
+        # Chat-side: keep provider, blank the model.
+        try:
+            config_path = data_dir / "main_model_config.json"
+            _atomic_write_json(config_path, {"model": "", "provider": provider})
+            logger.info(f"[STALE MODEL] Rewrote {config_path.name} with provider={provider}, model=''")
+        except Exception as e:
+            logger.warning(f"[STALE MODEL] Could not rewrite chat config: {e}")
+
+        # Sidecar-side: same pattern — preserve provider + mirror_chat, clear model.
+        try:
+            sidecar_path = data_dir / "sidecar_config.json"
+            if sidecar_path.exists():
+                sc = _json.loads(sidecar_path.read_text(encoding="utf-8"))
+                if sc.get("mirror_chat") and sc.get("model") == stale_model:
+                    sc["model"] = ""
+                    _atomic_write_json(sidecar_path, sc)
+                    logger.info(
+                        f"[STALE MODEL] Mirror was on — cleared sidecar model, "
+                        f"kept provider={sc.get('provider')} and mirror_chat=True"
+                    )
+        except Exception as e:
+            logger.warning(f"[STALE MODEL] Could not clear sidecar config: {e}")
 
     async def _recycle_client(self) -> None:
         """Close and recreate the HTTP client to avoid connection issues"""

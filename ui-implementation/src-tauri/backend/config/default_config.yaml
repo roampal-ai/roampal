@@ -8,7 +8,7 @@ llm:
   ollama_base_url: "http://localhost:11434"
   ollama_model: "llama3:8b"
   ollama_request_timeout_seconds: 300
-  ollama_keep_alive_seconds: 60
+  ollama_keep_alive: "24h"
 
 memory:
   adapter_type: "file"

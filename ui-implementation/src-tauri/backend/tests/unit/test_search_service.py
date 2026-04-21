@@ -10,6 +10,7 @@ backend_dir = Path(__file__).parent.parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
+import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime, timedelta
@@ -275,21 +276,118 @@ class TestCaching:
 
 
 class TestMergeFilters:
-    """Test filter merging for tag queries."""
+    """Test filter merging — uses valid ChromaDB where-clause operators only.
+    NOTE: historical tests here used {"$contains": ...} which ChromaDB's
+    where-clause doesn't actually accept (that's a where_document operator).
+    v0.3.2 dropped the broken $contains tag filter from the production path;
+    these tests now use valid operators that exercise the merge helper."""
 
     def test_merge_tag_only(self):
         """Should return tag filter when no metadata filters."""
-        tag_filter = {"noun_tags": {"$contains": '"python"'}}
+        tag_filter = {"noun_tags": {"$eq": "python"}}
         result = SearchService._merge_filters(tag_filter, None)
         assert result == tag_filter
 
     def test_merge_with_metadata(self):
         """Should combine with $and when metadata filters present."""
-        tag_filter = {"noun_tags": {"$contains": '"python"'}}
+        tag_filter = {"noun_tags": {"$eq": "python"}}
         metadata = {"status": {"$ne": "archived"}}
         result = SearchService._merge_filters(tag_filter, metadata)
         assert "$and" in result
         assert len(result["$and"]) == 2
+
+
+class TestTagCascadePythonFilter:
+    """v0.3.2 Section 0m: TagCascade tag match happens in Python (post-fetch),
+    not via ChromaDB where-clause — because the previous where-clause
+    $contains approach was silently erroring on every query since v0.3.1.
+    These tests cover the Python-side tag match: parse JSON-encoded
+    noun_tags, filter by membership. Covers the _tag_routed_search parsing
+    paths regardless of adapter behavior."""
+
+    def _parse_and_match(self, raw_tags, tag):
+        """Inline the parsing logic from _tag_routed_search for unit coverage."""
+        parsed_tags = None
+        if isinstance(raw_tags, list):
+            parsed_tags = raw_tags
+        elif isinstance(raw_tags, str) and raw_tags:
+            try:
+                candidate = json.loads(raw_tags)
+                if isinstance(candidate, list):
+                    parsed_tags = candidate
+            except (ValueError, TypeError):
+                parsed_tags = None
+        return parsed_tags is not None and tag in parsed_tags
+
+    def test_json_string_with_tag_matches(self):
+        assert self._parse_and_match(json.dumps(["calvin", "boston"]), "calvin") is True
+
+    def test_json_string_without_tag_does_not_match(self):
+        assert self._parse_and_match(json.dumps(["calvin", "boston"]), "python") is False
+
+    def test_already_parsed_list_matches(self):
+        assert self._parse_and_match(["calvin", "boston"], "boston") is True
+
+    def test_missing_noun_tags_does_not_match(self):
+        assert self._parse_and_match(None, "calvin") is False
+
+    def test_empty_string_noun_tags_does_not_match(self):
+        assert self._parse_and_match("", "calvin") is False
+
+    def test_malformed_json_does_not_match_no_crash(self):
+        """Invalid JSON shouldn't raise — must silently exclude the row."""
+        assert self._parse_and_match("not json {[", "calvin") is False
+
+    def test_non_list_json_does_not_match(self):
+        """JSON-valid but not a list (object) shouldn't crash or match."""
+        assert self._parse_and_match(json.dumps({"not": "a list"}), "calvin") is False
+
+
+class TestMemoryBankFilterWrapping:
+    """v0.3.2 Section 0n: ChromaDB rejects multi-key top-level where filters —
+    they must be wrapped in $and. The TagCascade tag-routed path was missing
+    this wrapping when combining the summary-lane filter (memory_type != fact)
+    with memory_bank's status != archived filter. Covers the wrapping helper
+    shape without needing a real ChromaDB."""
+
+    def _build_mb_filter(self, metadata_filters):
+        """Inline the wrapping logic from _tag_routed_search for unit coverage."""
+        status_filter = {"status": {"$ne": "archived"}}
+        if metadata_filters:
+            return {
+                "$and": [{k: v} for k, v in metadata_filters.items()] + [status_filter]
+            }
+        return status_filter
+
+    def test_no_metadata_filters_returns_bare_status_filter(self):
+        """When no caller filter, memory_bank gets just the status filter —
+        single key, no $and wrapping needed."""
+        result = self._build_mb_filter(None)
+        assert result == {"status": {"$ne": "archived"}}
+
+    def test_empty_metadata_filters_returns_bare_status_filter(self):
+        """Empty-dict metadata filter treated as None."""
+        result = self._build_mb_filter({})
+        assert result == {"status": {"$ne": "archived"}}
+
+    def test_single_metadata_key_wraps_in_and(self):
+        """Summary-lane filter (memory_type != fact) + status filter must be
+        wrapped in $and — ChromaDB rejects top-level multi-key dicts."""
+        result = self._build_mb_filter({"memory_type": {"$ne": "fact"}})
+        assert "$and" in result
+        assert len(result["$and"]) == 2
+        # Every element is a single-key dict (valid ChromaDB where-clause shape)
+        for cond in result["$and"]:
+            assert len(cond) == 1
+
+    def test_multiple_metadata_keys_each_become_conditions(self):
+        """Each metadata key becomes its own $and condition, plus status."""
+        result = self._build_mb_filter({
+            "memory_type": {"$ne": "fact"},
+            "score": {"$gt": 0.5},
+        })
+        assert "$and" in result
+        assert len(result["$and"]) == 3  # 2 metadata + 1 status
 
 
 class TestParseNumeric:

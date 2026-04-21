@@ -26,6 +26,7 @@ import type { Message } from './MessageThread';
 import { isTauri, getPlatformBadge } from '../utils/tauri';
 import { setupTauriEventListeners, showNotification } from '../utils/tauriEvents';
 import { apiFetch } from '../utils/fetch';
+import { buildModelDisplay, type ProviderName } from '../utils/modelDisplay';
 // Removed: InlinePermissionDialog (tool-related component)
 import { SettingsModal } from './SettingsModal';
 import { OllamaRequiredModal } from './OllamaRequiredModal';
@@ -89,7 +90,7 @@ export const ConnectedChat: React.FC = () => {
 
   // v0.3.1: Sidecar model state
   const [sidecarModel, setSidecarModel] = useState(() => localStorage.getItem('sidecarModel') || '');
-  const [showSidecarDropdown, setShowSidecarDropdown] = useState(false);
+  const [sidecarProvider, setSidecarProvider] = useState<string>('ollama');
   const [sidecarError, setSidecarError] = useState('');
 
   // GPU/VRAM and quantization selection state
@@ -343,6 +344,9 @@ export const ConnectedChat: React.FC = () => {
         if (!response.ok) return;
         const data = await response.json();
 
+        // v0.3.2: capture provider so error toasts can name the right host.
+        if (data.provider) setCurrentProvider(data.provider);
+
         const nonLLMs = ['llava', 'nomic-embed', 'bge-', 'all-minilm', 'mxbai-embed'];
         const isEmbeddingModel = data.current_model && (
           nonLLMs.some(excluded => data.current_model.toLowerCase().includes(excluded)) ||
@@ -468,6 +472,13 @@ export const ConnectedChat: React.FC = () => {
         successMsg.textContent = `Switched to ${modelName}`;
         document.body.appendChild(successMsg);
         setTimeout(() => successMsg.remove(), 3000);
+
+        // v0.3.2 (0g): surface VRAM warning when the picked model is over
+        // the detected GPU's budget. Curated warnings cite the exact VRAM
+        // requirement; tag-estimated warnings include a "heuristic" note.
+        if (data.vram_warning && data.vram_warning.message) {
+          setVramWarningToast(data.vram_warning.message);
+        }
         return true; // Success
       } else {
         throw new Error('Failed to switch model');
@@ -1159,21 +1170,6 @@ export const ConnectedChat: React.FC = () => {
     }
   }, [showModelDropdown]);
 
-  // v0.3.1: Close sidecar dropdown on click outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.sidecar-dropdown-container')) {
-        setShowSidecarDropdown(false);
-      }
-    };
-
-    if (showSidecarDropdown) {
-      document.addEventListener('click', handleClickOutside);
-      return () => document.removeEventListener('click', handleClickOutside);
-    }
-  }, [showSidecarDropdown]);
-
   // v0.3.1.3: Sync sidecar state — re-initialize if frontend has model but backend lost it
   useEffect(() => {
     const syncSidecar = async () => {
@@ -1181,12 +1177,23 @@ export const ConnectedChat: React.FC = () => {
         const resp = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/status`);
         if (resp.ok) {
           const data = await resp.json();
-          // Track sidecar errors
-          setSidecarError(data.last_error || '');
+          // Track sidecar errors + v0.3.2 toast on first surfaced error.
+          const firstErr = data.last_error || '';
+          if (firstErr && !prevSidecarError.current) {
+            setSidecarErrorToast(firstErr);
+          }
+          prevSidecarError.current = firstErr;
+          setSidecarError(firstErr);
+
+          // v0.3.2: track mirror_chat for the read-only badge label.
+          if (typeof data.mirror_chat === 'boolean') {
+            setSidecarMirrorChat(data.mirror_chat);
+          }
 
           if (data.enabled && data.model) {
             // Backend has sidecar — sync to frontend
             setSidecarModel(data.model);
+            if (data.provider) setSidecarProvider(data.provider);
             localStorage.setItem('sidecarModel', data.model);
           } else {
             // Backend lost sidecar — re-initialize from localStorage if we have one
@@ -1212,7 +1219,19 @@ export const ConnectedChat: React.FC = () => {
         const resp = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/status`);
         if (resp.ok) {
           const data = await resp.json();
-          setSidecarError(data.last_error || '');
+          const nextErr = data.last_error || '';
+          // v0.3.2: fire toast only on transition from clean → error, so a
+          // persistent outage doesn't spam every 30s.
+          if (nextErr && nextErr !== prevSidecarError.current) {
+            setSidecarErrorToast(nextErr);
+          }
+          prevSidecarError.current = nextErr;
+          setSidecarError(nextErr);
+          if (typeof data.mirror_chat === 'boolean') {
+            setSidecarMirrorChat(data.mirror_chat);
+          }
+          if (data.model) setSidecarModel(data.model);
+          if (data.provider) setSidecarProvider(data.provider);
         }
       } catch {}
     }, 30000);
@@ -1274,45 +1293,20 @@ export const ConnectedChat: React.FC = () => {
     return filteredModels.map(model => {
       const modelName = model.name;
       const isAgentCapable = MODEL_TOKEN_LIMITS[modelName] && MODEL_TOKEN_LIMITS[modelName] >= 12000;
-      const baseDescription = modelDescriptions[modelName] || 'Custom model';
-      const providerLabel = model.provider === 'lmstudio' ? 'LM Studio' : 'Ollama';
-
+      // v0.3.2 (0h): labels show the full tag, subtitles fall through
+      // curated → estimated params → provider-only. No "Custom model" label.
+      const display = buildModelDisplay(
+        { name: modelName, provider: model.provider as ProviderName },
+        modelDescriptions,
+      );
       return {
         value: modelName,
-        label: modelName.split(':')[0].replace(/-/g, ' '),
-        description: `${baseDescription} • ${providerLabel}`,
+        label: display.label,
+        description: display.description,
         agentCapable: isAgentCapable,
         provider: model.provider as 'ollama' | 'lmstudio',
       };
     });
-  };
-
-  // v0.3.1: Group models for sidecar selection (small models recommended)
-  const getSidecarModelOptions = () => {
-    const all = getModelOptions().map(m => ({
-      ...m,
-      // Strip tool-calling warnings — sidecar doesn't use tools
-      description: m.description
-        ?.replace(/⚠️\s*Tool calling may be unreliable/g, '')
-        ?.replace(/⚠️\s*Unreliable tools\s*•\s*Use \S+/g, '')
-        ?.replace(/⚠️\s*May output JSON instead of calling tools/g, '')
-        ?.replace(/•\s*Native tools/g, '')
-        ?.replace(/•\s*Excellent tools/g, '')
-        ?.replace(/•\s*Great tools/g, '')
-        ?.replace(/•\s*Superior tools/g, '')
-        ?.replace(/•\s*Tool calling/g, '')
-        ?.replace(/•\s*tool support/g, '')
-        ?.replace(/\s+•\s*$/g, '')
-        ?.trim(),
-    }));
-    const parseSize = (name: string): number => {
-      const m = name.match(/:(\d+(?:\.\d+)?)b/i);
-      return m ? parseFloat(m[1]) : 999;
-    };
-    return {
-      recommended: all.filter(m => parseSize(m.value) <= 7),
-      others: all.filter(m => parseSize(m.value) > 7),
-    };
   };
 
   // Check if chat model is available (from ANY provider, not just selected one)
@@ -1453,10 +1447,25 @@ export const ConnectedChat: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<'integrations' | undefined>(undefined);
   const [settingsDataTab, setSettingsDataTab] = useState<'summarize' | undefined>(undefined);
+  // v0.3.2: deep-link the chat-header sidecar badge into the Advanced section
+  const [settingsInitialFocus, setSettingsInitialFocus] = useState<'advanced' | undefined>(undefined);
+  // v0.3.2: mirror-chat state drives the badge label ("Mirror: <model>" vs the
+  // custom sidecar name); populated by the same /sidecar/status poll that
+  // already updates sidecarModel below.
+  const [sidecarMirrorChat, setSidecarMirrorChat] = useState<boolean>(true);
   const [showMigrationToast, setShowMigrationToast] = useState(false);
   const [migrationCount, setMigrationCount] = useState(0);
   const [showSidecarToast, setShowSidecarToast] = useState(false);
   const sidecarToastShown = React.useRef(false);
+  // v0.3.2: separate-but-equal error toasts for chat LLM + sidecar failures.
+  const [chatErrorToast, setChatErrorToast] = useState<string>('');
+  const [sidecarErrorToast, setSidecarErrorToast] = useState<string>('');
+  // v0.3.2 (0g): VRAM warning toast when a model pick is over GPU budget.
+  const [vramWarningToast, setVramWarningToast] = useState<string>('');
+  // Provider name ("ollama" | "lmstudio") drives provider-aware toast copy.
+  const [currentProvider, setCurrentProvider] = useState<string>('');
+  const lastChatErrorMessageId = React.useRef<string>('');
+  const prevSidecarError = React.useRef<string>('');
   const [showDevPanel, setShowDevPanel] = useState(false);
   const [showPersonalityCustomizer, setShowPersonalityCustomizer] = useState(false);
   const [showMemoryStats, setShowMemoryStats] = useState(false);
@@ -1612,6 +1621,35 @@ export const ConnectedChat: React.FC = () => {
     }
   }, [sidecarModel, currentState?.messages?.length]);
 
+  // v0.3.2: Chat LLM error toast — fires when an assistant message carries
+  // the "**Model error:**" or "**Model '...' is no longer installed**" marker
+  // emitted by ollama_client's universal error handler. Deduped by message ID
+  // so the same error doesn't spam if React re-renders.
+  // Note: Message.sender (not .role) — that mismatch is what broke this
+  // detection in the first hot-reload round.
+  useEffect(() => {
+    const messages = currentState?.messages || [];
+    const last = messages[messages.length - 1];
+    if (!last || (last as any).sender !== 'assistant') return;
+    const content = (last as any).content || (last as any).text || '';
+    const hasErrorMarker =
+      content.includes('**Model error:**') ||
+      content.includes('no longer installed');
+    if (hasErrorMarker && lastChatErrorMessageId.current !== last.id) {
+      lastChatErrorMessageId.current = last.id;
+      // Provider-aware copy: include the active provider + a concrete
+      // "start the service" nudge when the error text smells like a
+      // network-level failure.
+      const firstLine = content.split('\n')[0].replace(/\*\*/g, '').slice(0, 160);
+      const provLabel = currentProvider === 'lmstudio' ? 'LM Studio' : 'Ollama';
+      const looksLikeConnFail = /connection attempts failed|connection refused|ECONNREFUSED|timed out/i.test(content);
+      const body = looksLikeConnFail
+        ? `${firstLine}\n\nIs ${provLabel} running? Start the service or change model in Settings.`
+        : firstLine || 'Chat model unavailable.';
+      setChatErrorToast(body);
+    }
+  }, [currentState?.messages, currentProvider]);
+
   // WebSocket connection is managed by useChatStore to prevent duplicates
 
   // Fetch users from backend (removed - single user system)
@@ -1748,10 +1786,16 @@ export const ConnectedChat: React.FC = () => {
 
       // Convert fragments to the format expected by MemoryPanelV2
       const processedMemories = fragments.map((f: any, idx: number) => {
-        // Parse timestamp - check both top level and metadata
-        let timestamp = f.timestamp ? new Date(f.timestamp) :
-          f.metadata?.timestamp ? new Date(f.metadata.timestamp) :
-            new Date();
+        // Parse timestamp — check top level, then metadata (both `timestamp`
+        // and `created_at`, since roampal-core writes the latter). Fall back
+        // to null rather than `new Date()`: an unknown timestamp must render
+        // as "Unknown" in the panel, not as the current time (which would
+        // tick forward on every refresh and mislead users).
+        const tsRaw =
+          f.timestamp
+          || f.metadata?.timestamp
+          || f.metadata?.created_at;
+        const timestamp = tsRaw ? new Date(tsRaw) : null;
 
         // Get type from collection_type or metadata
         const memoryType = f.collection_type || f.collection || f.type || 'memory';
@@ -2194,94 +2238,37 @@ export const ConnectedChat: React.FC = () => {
                 )}
               </div>
 
-              {/* Sidecar Model Selector (v0.3.1) */}
-              <div className="relative sidecar-dropdown-container">
-                <button
-                  onClick={() => setShowSidecarDropdown(!showSidecarDropdown)}
-                  className={`flex items-center gap-1 px-2 py-1 text-xs bg-zinc-800/50 hover:bg-zinc-700/50 border rounded-lg transition-all focus:outline-none focus:ring-1 focus:ring-zinc-500/30 ${
-                    sidecarError ? 'border-red-500/40' : 'border-zinc-700/50 hover:border-zinc-600'
-                  }`}
-                  title={sidecarError ? `Sidecar error: ${sidecarError}` : "Sidecar model — summarizes exchanges, extracts facts & tags in background"}
-                >
-                  <svg className="w-3 h-3 text-zinc-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  <span className={`truncate max-w-[80px] ${sidecarModel ? 'text-zinc-300' : 'text-zinc-500'}`}>
-                    {sidecarModel ? sidecarModel.split(':')[0] : 'Sidecar'}
-                  </span>
-                  {sidecarError && (
-                    <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0 animate-pulse" />
-                  )}
-                  <svg className={`w-3 h-3 text-zinc-500 transition-transform flex-shrink-0 ${showSidecarDropdown ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-
-                {showSidecarDropdown && (() => {
-                  const { recommended, others } = getSidecarModelOptions();
-                  const renderSidecarOption = (option: ReturnType<typeof getModelOptions>[0]) => (
-                    <button
-                      key={`sidecar-${option.value}-${option.provider}`}
-                      onClick={async () => {
-                        setSidecarModel(option.value);
-                        localStorage.setItem('sidecarModel', option.value);
-                        setShowSidecarDropdown(false);
-                        try {
-                          await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/set`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ model: option.value, provider: option.provider }),
-                          });
-                        } catch {}
-                      }}
-                      className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition-all ${sidecarModel === option.value ? 'bg-zinc-800 border border-blue-500/30' : 'hover:bg-zinc-800/70'}`}
-                    >
-                      <span className={sidecarModel === option.value ? 'text-zinc-200' : 'text-zinc-300'}>{option.label}</span>
-                      <p className="text-[10px] text-zinc-500 mt-0.5">{option.description}</p>
-                    </button>
-                  );
-                  return (
-                  <div className="absolute top-full mt-1 right-0 w-[260px] bg-gradient-to-b from-zinc-900 to-zinc-950 border border-zinc-700 rounded-xl shadow-2xl z-[100] overflow-hidden">
-                    <div className="px-3 py-2 bg-zinc-800/50 border-b border-zinc-700">
-                      <span className="text-xs font-medium text-zinc-400">Sidecar Model</span>
-                      <p className="text-[10px] text-zinc-500 mt-0.5">Summarizes exchanges, extracts facts & tags</p>
-                    </div>
-                    <div className="max-h-[300px] overflow-y-auto custom-scrollbar p-1">
-                      {/* None / Disabled option */}
-                      <button
-                        onClick={async () => {
-                          setSidecarModel('');
-                          localStorage.removeItem('sidecarModel');
-                          setShowSidecarDropdown(false);
-                          try { await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/sidecar/disable`, { method: 'POST' }); } catch {}
-                        }}
-                        className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition-all ${!sidecarModel ? 'bg-zinc-800 border border-zinc-600' : 'hover:bg-zinc-800/70'}`}
-                      >
-                        <span className={!sidecarModel ? 'text-zinc-200' : 'text-zinc-400'}>None (disabled)</span>
-                      </button>
-                      {/* Recommended for sidecar (small models) */}
-                      {recommended.length > 0 && (
-                        <>
-                          <div className="px-2.5 pt-2.5 pb-1">
-                            <span className="text-[10px] text-green-400/80 font-medium uppercase tracking-wider">Recommended</span>
-                          </div>
-                          {recommended.map(renderSidecarOption)}
-                        </>
-                      )}
-                      {/* All other models */}
-                      {others.length > 0 && (
-                        <>
-                          <div className="px-2.5 pt-2.5 pb-1">
-                            <span className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">All Models</span>
-                          </div>
-                          {others.map(renderSidecarOption)}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  );
-                })()}
+              {/* v0.3.2: Read-only sidecar indicator. Purely informational —
+                  shows which sidecar model is running, with a tooltip pointing
+                  users to Settings → Advanced if they want to change it.
+                  Not a button, not clickable, intentionally muted so it reads
+                  as status, not a control. One source of truth lives in
+                  Advanced Settings. */}
+              <div
+                data-testid="sidecar-badge"
+                role="status"
+                aria-label="Sidecar status"
+                className={`inline-flex items-center gap-1 px-2 py-1 text-xs bg-zinc-900/40 border rounded-lg cursor-default select-none ${
+                  sidecarError ? 'border-red-500/40' : 'border-zinc-800/70'
+                }`}
+                title={
+                  sidecarError
+                    ? `Sidecar error: ${sidecarError}\n\nTo adjust the sidecar, open Settings → Advanced.`
+                    : `Sidecar: ${sidecarModel || 'none'}${sidecarMirrorChat ? ' (mirrors chat)' : ''}\n\nTo adjust the sidecar, open Settings → Advanced.`
+                }
+              >
+                <svg className="w-3 h-3 text-zinc-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                <span className={`truncate max-w-[140px] ${sidecarModel ? 'text-zinc-500' : 'text-zinc-600'}`}>
+                  {sidecarModel
+                    ? (sidecarMirrorChat ? `Mirror: ${sidecarModel}` : sidecarModel)
+                    : 'No sidecar'}
+                </span>
+                {sidecarError && (
+                  <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0 animate-pulse" />
+                )}
               </div>
             </div>
 
@@ -2452,10 +2439,76 @@ export const ConnectedChat: React.FC = () => {
           setShowSettings(false);
           setSettingsInitialTab(undefined);
           setSettingsDataTab(undefined);
+          setSettingsInitialFocus(undefined);
         }}
         initialTab={settingsInitialTab}
         initialDataTab={settingsDataTab}
+        initialFocus={settingsInitialFocus}
       />
+
+      {/* v0.3.2 (0g): VRAM warning toast — fires when /switch returns a
+          vram_warning payload. Keeps the pick (user may know better than us)
+          but tells them what they're in for. */}
+      {vramWarningToast && (
+        <Toast
+          message={vramWarningToast}
+          type="info"
+          duration={12000}
+          action="Open Model Settings"
+          onAction={() => {
+            setVramWarningToast('');
+            setShowSettings(true);
+          }}
+          onClose={() => setVramWarningToast('')}
+        />
+      )}
+
+      {/* v0.3.2: Chat LLM error toast — fires when the universal Ollama/LM
+          Studio error handler yields a "**Model error:**" or
+          "no longer installed" marker to the stream. Deduped by message id
+          so repeated renders don't re-fire. */}
+      {chatErrorToast && (
+        <Toast
+          message={chatErrorToast}
+          type="error"
+          duration={10000}
+          action="Open Settings"
+          onAction={() => {
+            setChatErrorToast('');
+            setShowSettings(true);
+          }}
+          onClose={() => setChatErrorToast('')}
+        />
+      )}
+
+      {/* v0.3.2: Sidecar error toast — fires on transition from clean to
+          error (e.g. LM Studio goes down), so persistent outages don't
+          re-fire every 30s. Copy names the sidecar provider so the fix is
+          obvious (start the host) — the Advanced panel remains a secondary
+          path for switching sidecar model entirely. */}
+      {sidecarErrorToast && (() => {
+        // Infer sidecar provider from the badge state so we can be concrete.
+        // sidecarProvider is already tracked for the badge label.
+        const sidecarHost = sidecarProvider === 'ollama' ? 'Ollama' : 'LM Studio';
+        const looksLikeConnFail = /connection attempts failed|connection refused|ECONNREFUSED|timed out/i.test(sidecarErrorToast);
+        const body = looksLikeConnFail
+          ? `Sidecar (${sidecarHost}) not reachable.\n\n${sidecarErrorToast}\n\nStart ${sidecarHost}, or change sidecar in Advanced.`
+          : `Sidecar (${sidecarHost}) error: ${sidecarErrorToast}`;
+        return (
+          <Toast
+            message={body}
+            type="error"
+            duration={12000}
+            action="Open Advanced"
+            onAction={() => {
+              setSidecarErrorToast('');
+              setSettingsInitialFocus('advanced');
+              setShowSettings(true);
+            }}
+            onClose={() => setSidecarErrorToast('')}
+          />
+        );
+      })()}
 
       {/* v0.3.1.3: Sidecar toast — nudge when chatting without sidecar */}
       {showSidecarToast && (
@@ -2466,7 +2519,9 @@ export const ConnectedChat: React.FC = () => {
           action="Set Up"
           onAction={() => {
             setShowSidecarToast(false);
-            setShowSidecarDropdown(true);
+            // v0.3.2: configuration now lives in Settings → Advanced.
+            setSettingsInitialFocus('advanced');
+            setShowSettings(true);
           }}
           onClose={() => setShowSidecarToast(false)}
         />

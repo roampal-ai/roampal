@@ -323,7 +323,12 @@ async def extract_noun_tags(
     if not result:
         return None
 
-    tags = result.get("tags")
+    # v0.3.2: same bare-array tolerance as extract_facts — small models
+    # (qwen2.5:3b etc.) sometimes emit ["tag1", "tag2"] instead of the
+    # schema-wrapped {"tags": [...]}. Pre-fix, .get() raised AttributeError
+    # and the tag lane silently died, leaving TagCascade retrieval with
+    # empty tag lists for any memories scored by that model.
+    tags = result if isinstance(result, list) else result.get("tags")
     if not isinstance(tags, list):
         return None
 
@@ -418,7 +423,10 @@ Respond with ONLY a JSON object:
     if not result:
         return None
 
-    raw_facts = result.get("facts", [])
+    # v0.3.2: tolerate bare JSON arrays from small models (e.g. qwen2.5:3b)
+    # which sometimes return ["fact 1", "fact 2"] instead of {"facts": [...]}.
+    # Without this guard `.get()` raises AttributeError on list.
+    raw_facts = result if isinstance(result, list) else result.get("facts", [])
     if not isinstance(raw_facts, list):
         return None
 

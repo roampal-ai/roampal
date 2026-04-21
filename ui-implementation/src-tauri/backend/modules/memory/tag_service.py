@@ -388,6 +388,19 @@ class TagService:
         Returns: List of lowercase tag strings, max 8.
         """
         if self._llm_extract_fn:
+            # v0.3.2 (Bug 5 guard): a sync call site can't execute an async
+            # llm_extract_fn. Previously returned a coroutine that got passed
+            # to _normalize_llm_tags, AttributeError/TypeError was caught at
+            # DEBUG level, and the call site got [] with no visibility. Fail
+            # loudly so future regressions surface instead of silently empty.
+            import inspect
+            if inspect.iscoroutinefunction(self._llm_extract_fn):
+                logger.warning(
+                    "TagService.extract_tags() called with an async llm_extract_fn — "
+                    "sync path can't await it. Use extract_tags_async() instead. "
+                    "Returning []."
+                )
+                return []
             try:
                 tags = self._llm_extract_fn(text)
                 if tags:  # tags is [] on LLM failure (benchmark behavior)
@@ -397,7 +410,7 @@ class TagService:
                 # tags is [] → return [] (no regex fallback, benchmark-aligned)
                 return []
             except Exception as e:
-                logger.debug(f"LLM tag extraction failed: {e}")
+                logger.warning(f"LLM tag extraction failed: {e}")
                 return []  # Empty list on exception (benchmark-aligned)
 
         # No LLM extract function configured → use regex (for migration/pre-sidecar)

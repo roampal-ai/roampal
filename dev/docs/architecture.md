@@ -7819,7 +7819,9 @@ The Routing KG, Content KG, and Action KG add complexity without improving resul
 
 **Store time:** LLM extracts topic nouns (people, places, objects) from each memory. Tags stored as pipe-delimited metadata field. Extraction prompt focuses on WHO and WHAT the text is about — skips pronouns, meta-words, generic verbs.
 
-**Query time (v0.3.1 — implemented):** Extract nouns from query using word-boundary matching (prevents `car` matching `caroline`). Run one ChromaDB query per matched tag (max 8) with `noun_tags $contains` filter. Count tag overlaps — memories matching more query tags rank higher.
+**Query time (v0.3.1 landed, v0.3.2 corrected):** Extract nouns from query using word-boundary matching (prevents `car` matching `caroline`). For each matched tag (max 8), over-fetch candidates from the collection via vector + text hybrid query (`top_k = limit * 8`), then filter by tag membership in Python by parsing the `noun_tags` metadata string. Count tag overlaps — memories matching more query tags rank higher.
+
+> **v0.3.2 correction:** The v0.3.1 implementation used a ChromaDB `where`-clause filter `{"noun_tags": {"$contains": ...}}`, but ChromaDB rejects `$contains` in `where` (it is only valid in `where_document`). Every TagCascade query silently threw an exception, was caught, and fell through to unfiltered cosine. v0.3.2 Section 0m replaces the broken filter with over-fetch + Python-side tag match. Retrieval quality restored to the benchmark-validated design. See `dev/docs/releases/v0.3.2/RELEASE_NOTES.md` Section 0m.
 
 **TagCascade pool construction (v0.3.1):**
 1. Fill 40-candidate pool from highest overlap tier down (cosine distance tiebreak within each tier)
@@ -7913,4 +7915,40 @@ From roampal-labs LoCoMo evaluation (1,537 non-adversarial questions):
 | TagCascade + Wilson | 23.0% | 25.0% | p<0.0001 |
 
 Wilson hurts retrieval by 4.3 points. Two-lane adds +6.1 Hit@1. Nursery: zero benefit (p=1.0).
+
+---
+
+## v0.3.2 Implemented: Maintenance, Correctness, and Performance
+
+> **Status:** Shipped. See [v0.3.2 Release Notes](releases/v0.3.2/RELEASE_NOTES.md) for the full item-by-item breakdown.
+
+v0.3.2 is a maintenance release — no new retrieval features, no new memory tiers, no benchmark re-run. It ships chat-path performance fixes, a batch of customer-reported bug fixes, test-debt cleanup, and correctness repairs to v0.3.1 systems that were silently broken.
+
+**Retrieval correctness (Sections 0m, 0n):**
+- **TagCascade `$contains` where-clause fix** — the v0.3.1 tag-prefilter silently errored on every query and fell through to unfiltered cosine. Replaced with over-fetch + Python-side tag match. TagCascade's tag-scoping now actually runs in production.
+- **Memory_bank multi-key `where` filter** — a latent sibling bug in the same function, masked by the `$contains` exception throwing first. Fixed with explicit `$and` wrapping, matching the pattern already used in the cosine-fill path.
+
+**LLM tag extraction correctness (Sections 0o, 0p):**
+- **TagService sidecar-swap staleness** — the wrapper function bridging TagService to the sidecar captured client/model as closure locals at boot. Any mid-session sidecar swap (via `/sidecar/set`, `/sidecar/mirror`, or mirror-follow-chat) left the closure pointing at the stale client; extraction calls failed silently at DEBUG level. Refactored to look up `app.state.sidecar_client` dynamically at call time; failures now log at WARNING.
+- **Sync `extract_tags()` vs async `llm_extract_fn`** — `store_memory_bank` called the sync `extract_tags()` which couldn't await the production async `llm_extract_fn`, returning a coroutine that crashed iteration in `_normalize_llm_tags`. Every AI-created memory_bank entry landed with no auto-extracted noun_tags. Caller fixed to use `await extract_tags_async`; service-side guard added to fail loudly if any future caller reintroduces the pattern.
+
+**Memory hygiene (Section 9):**
+- **Fact dedup on store** — semantically identical facts previously produced separate ChromaDB entries. Two write surfaces (`UnifiedMemorySystem.store()` fact branch, `store_memory_bank`) now share `_find_duplicate_fact` with asymmetric scope by write persistence: ephemeral sidecar writes defer to any more-persistent existing copy; permanent-persistence writes never block on an ephemeral working-tier copy. Threshold: cosine distance < 0.32 in L2 space (≈ `cos_sim > 0.95` for unit-normalized 768-d embeddings).
+
+**Chat-path latency (Section 0):**
+- Two retrieval lanes parallelized via `asyncio.gather()`, ONNX models warmed at startup, WebSocket-ready poll replaces a hardcoded 500 ms sleep, blocking ONNX inference offloaded to an executor. Steady-state pre-LLM overhead: ~1.2–2.2 s → ~400–900 ms. Message-1: ~3–6 s → ~400–900 ms. Retrieval quality unchanged.
+
+**Shared-DB safety (Section 0j):**
+- Desktop's Memory Panel and lifecycle read sites now tolerate both `metadata["timestamp"]` (desktop-written) and `metadata["created_at"]` (core-written) for shared-ChromaDB scenarios with the `pip install roampal` MCP server. No data migration; field unification deferred to v0.3.3.
+
+**Provider error handling (Sections 0a, 0c, 0f, 0g):**
+- Universal HTTP-error parsing for Ollama/LM Studio replaces model-specific blocklists. Capability-detected retries on tools-unsupported responses. Stale-model 404s surface as actionable UI text. VRAM-aware warnings. Sidecar defaults to mirror the chat model to avoid single-GPU reload penalty.
+
+**UI surfaces (Sections 0h, 0l, Sections 6-8):**
+- Memory Panel tag pills render correctly (JSON-encoded `noun_tags` flattened in the endpoint). Model dropdown shows full Ollama tag (`gemma4:26b` vs `gemma4:e2b`). Chat-header sidecar picker demoted to a read-only status badge; all configuration moved to Settings → Advanced. Error toasts added for chat + sidecar with parity visibility.
+
+**Test-debt cleanup (Sections 1-3):**
+- MemoryPanelV2 tag tests rewritten against the v0.3.1 Substack-style tag input. OllamaRequiredModal tests updated to match the rewritten onboarding modal. Deprecation warnings cleared across Pydantic V1 decorators, `datetime.utcnow()` usage, and GitHub Actions Node version pinning.
+
+**Benchmark status:** No new benchmark evidence in v0.3.2. All retrieval-quality characterization remains valid against the v0.3.1 roampal-labs LoCoMo run — because v0.3.2's TagCascade correction brings production behavior *into* agreement with the benchmarked design (the v0.3.1 production run was silently using unfiltered cosine due to the `$contains` bug, so the shipping behavior now matches the benchmark-validated design rather than diverging from it).
 

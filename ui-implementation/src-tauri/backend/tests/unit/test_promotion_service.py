@@ -470,5 +470,97 @@ class TestAgeCalculation:
         assert age == 0.0
 
 
+class TestCreatedAtFallback:
+    """
+    v0.3.2: Timestamp tolerance for shared-ChromaDB with roampal-core.
+
+    roampal-core writes metadata["created_at"], desktop writes
+    metadata["timestamp"]. Every lifecycle read site must tolerate both —
+    reading only one silently shields the other side's memories from aging
+    and TTL cleanup.
+    """
+
+    @pytest.mark.asyncio
+    async def test_deletion_age_gate_reads_created_at(self):
+        """A 14-day-old core-written memory (created_at only) with score
+        between thresholds must be deleted by the strict threshold. Without
+        the fallback, age_days stays 0 and the lenient threshold spares it."""
+        working = MagicMock()
+        working.get_fragment = MagicMock(return_value={
+            "content": "old core-written",
+            "metadata": {"text": "old core-written"},
+        })
+        working.delete_vectors = MagicMock()
+
+        service = PromotionService(
+            collections={"working": working, "history": MagicMock(), "patterns": MagicMock()},
+            embed_fn=AsyncMock(),
+        )
+
+        # 0.15 sits between new_item (0.1) and deletion (0.2) thresholds —
+        # only age determines the outcome.
+        await service.handle_promotion(
+            doc_id="working_core_written",
+            collection="working",
+            score=0.15,
+            uses=1,
+            metadata={
+                "text": "old",
+                # created_at only; no "timestamp" — simulates roampal-core write
+                "created_at": (datetime.now() - timedelta(days=14)).isoformat(),
+            },
+        )
+
+        working.delete_vectors.assert_called_once_with(["working_core_written"])
+
+    @pytest.mark.asyncio
+    async def test_cleanup_old_working_reads_created_at(self):
+        """cleanup_old_working_memory must find core-written items via
+        created_at. 48h-old item with created_at only, max_age=24h -> delete."""
+        working = MagicMock()
+        working.list_all_ids = MagicMock(return_value=["working_core_old"])
+        working.get_fragment = MagicMock(return_value={
+            "metadata": {
+                "created_at": (datetime.now() - timedelta(hours=48)).isoformat(),
+            },
+        })
+        working.delete_vectors = MagicMock()
+        working.collection = True
+
+        service = PromotionService(
+            collections={"working": working},
+            embed_fn=AsyncMock(),
+        )
+
+        count = await service.cleanup_old_working_memory(max_age_hours=24.0)
+
+        assert count == 1
+        working.delete_vectors.assert_called_once_with(["working_core_old"])
+
+    @pytest.mark.asyncio
+    async def test_cleanup_old_history_reads_created_at(self):
+        """cleanup_old_history must find core-written items via created_at.
+        40-day-old history item with created_at only, max_age=720h -> delete."""
+        history = MagicMock()
+        history.list_all_ids = MagicMock(return_value=["history_core_old"])
+        history.get_fragment = MagicMock(return_value={
+            "metadata": {
+                "created_at": (datetime.now() - timedelta(days=40)).isoformat(),
+            },
+        })
+        history.delete_vectors = MagicMock()
+        history.collection = True
+
+        service = PromotionService(
+            collections={"history": history},
+            embed_fn=AsyncMock(),
+        )
+
+        count = await service.cleanup_old_history(max_age_hours=720.0)  # 30 days
+
+        assert count == 1
+        history.delete_vectors.assert_called_once_with(["history_core_old"])
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

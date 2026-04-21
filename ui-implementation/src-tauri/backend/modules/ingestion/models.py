@@ -2,7 +2,7 @@
 import datetime
 import uuid
 from typing import List, Dict, Any, Optional, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class IngestionJobForceFlags(BaseModel):
     force_reprocess_chunks: bool = False
@@ -39,7 +39,11 @@ class IngestionJob(BaseModel):
     created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
     updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
-class IngestionJobCreateRequest(BaseModel): 
+class IngestionJobCreateRequest(BaseModel):
+    # v0.3.2 Section 3: migrated from class-based `Config` to ConfigDict
+    # (Pydantic V1 deprecation; V3 removes the old pattern).
+    model_config = ConfigDict(extra='forbid')
+
     source_uri: str
     source_type: Literal["file", "url", "s3_object"] = "file"
     title: Optional[str] = None
@@ -48,8 +52,5 @@ class IngestionJobCreateRequest(BaseModel):
     is_foundational: Optional[bool] = False
     fragment_associated: Optional[str] = None
     license_info: Optional[str] = None
-    target_memory_config_key: str 
+    target_memory_config_key: str
     force_flags: Optional[IngestionJobForceFlags] = None
-
-    class Config:
-        extra = 'forbid' # To catch unexpected fields in the request

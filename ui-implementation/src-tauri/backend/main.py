@@ -378,14 +378,36 @@ async def lifespan(app: FastAPI):
             )
             app.state.llm_client = None
         else:
-            # Select provider (priority: configured > first available)
+            # v0.3.2 (0b follow-up): Persisted-selection file also drives
+            # which PROVIDER we boot with. Earlier logic locked provider to
+            # the env-var default and then skipped persisted if its provider
+            # didn't match — meaning if you switched to LM Studio last
+            # session, restart would fall back to first-available Ollama.
             configured_provider = os.getenv("ROAMPAL_LLM_PROVIDER", "ollama")
 
-            if configured_provider in detected_providers:
-                active_provider = configured_provider
+            from app.routers.model_switcher import (
+                load_main_model_config,
+                save_main_model_config,
+            )
+            from utils.startup_model_selection import (
+                select_startup_model, should_migrate_env_to_json,
+                select_active_provider,
+            )
+            persisted = load_main_model_config()
+
+            active_provider, provider_source = select_active_provider(
+                detected_providers=detected_providers,
+                persisted=persisted,
+                configured_env_provider=configured_provider,
+            )
+            if provider_source == "persisted":
+                logger.info(
+                    f"✓ Using persisted provider: {active_provider} "
+                    f"(model: {persisted['model']})"
+                )
+            elif provider_source == "env":
                 logger.info(f"✓ Using configured provider: {active_provider}")
-            else:
-                active_provider = list(detected_providers.keys())[0]
+            elif provider_source == "first_detected":
                 logger.info(
                     f"✓ Configured provider '{configured_provider}' not available, using: {active_provider}"
                 )
@@ -396,11 +418,31 @@ async def lifespan(app: FastAPI):
                 "OLLAMA_MODEL"
             )
 
-            if configured_model and configured_model in available_models:
-                selected_model = configured_model
-                logger.info(f"✓ Using configured model: {selected_model}")
-            elif available_models:
-                selected_model = available_models[0]
+            # Migration: if no JSON exists yet but env vars are set, seed
+            # the JSON once so future switches persist via the new path.
+            # Only migrate when the env model is actually installed — prevents
+            # writing stale env vars (e.g. OLLAMA_MODEL=codellama:latest) when
+            # that model isn't pulled anymore.
+            if should_migrate_env_to_json(persisted, configured_model, available_models=available_models):
+                try:
+                    save_main_model_config(
+                        model=configured_model, provider=active_provider
+                    )
+                    persisted = {"model": configured_model, "provider": active_provider}
+                except Exception as seed_err:
+                    logger.warning(f"Could not seed main_model_config.json: {seed_err}")
+
+            selected_model, source = select_startup_model(
+                available_models=available_models,
+                configured_env_model=configured_model,
+                persisted=persisted,
+                active_provider=active_provider,
+            )
+            if source == "env":
+                logger.info(f"✓ Using configured model (env): {selected_model}")
+            elif source == "persisted":
+                logger.info(f"✓ Using persisted model: {selected_model}")
+            elif source == "fallback":
                 logger.info(f"✓ Using first available model: {selected_model}")
             else:
                 # Active provider has no models - try other providers
@@ -457,6 +499,20 @@ async def lifespan(app: FastAPI):
         app.state.detected_providers = detected_providers
         # ==================== END MULTI-PROVIDER INITIALIZATION ====================
 
+        # ==================== GPU VRAM DETECTION (v0.3.2 0g) ====================
+        try:
+            from utils.gpu_detection import detect_gpu
+            gpu_info = detect_gpu()
+            app.state.gpu_vram_gb = gpu_info.vram_gb
+            app.state.gpu_count = gpu_info.count
+            app.state.gpu_source = gpu_info.source
+        except Exception as gpu_err:
+            logger.warning(f"GPU detection failed: {gpu_err}")
+            app.state.gpu_vram_gb = None
+            app.state.gpu_count = 0
+            app.state.gpu_source = "none"
+        # ========================================================================
+
         # ==================== SIDECAR INITIALIZATION (v0.3.1) ====================
         app.state.sidecar_model = ""
         app.state.sidecar_provider = ""
@@ -464,9 +520,92 @@ async def lifespan(app: FastAPI):
         app.state.sidecar_last_error = ""  # v0.3.1.3: Track last sidecar failure for UI
 
         sidecar_config_path = Path(DATA_PATH) / "sidecar_config.json"
+
+        # v0.3.2 (0f): First-run seeding. If no sidecar config exists yet,
+        # mirror the chat model so single-GPU users don't accidentally end up
+        # running two different models at once. Seeded before the existing
+        # config-load branch so the rest of the lifespan sees a warm config.
+        if not sidecar_config_path.exists() and app.state.llm_client:
+            try:
+                from app.routers.model_switcher import _atomic_write_json
+                chat_model = app.state.llm_client.model_name
+                chat_api = getattr(app.state.llm_client, "api_style", "ollama")
+                chat_provider = "lmstudio" if chat_api == "openai" else "ollama"
+                if chat_model:
+                    _atomic_write_json(
+                        sidecar_config_path,
+                        {
+                            "enabled": True,
+                            "model": chat_model,
+                            "provider": chat_provider,
+                            "mirror_chat": True,
+                        },
+                    )
+                    logger.info(
+                        f"✓ Sidecar seeded to mirror chat: {chat_provider}/{chat_model}"
+                    )
+            except Exception as seed_err:
+                logger.warning(f"Could not seed sidecar_config.json: {seed_err}")
+
+        # v0.3.2 (0f) migration: existing v0.3.1 configs predate mirror_chat.
+        # Infer a safe default from model equality so we don't silently flip
+        # users who had distinct chat + sidecar models into mirror mode.
+        #
+        # v0.3.2 follow-up: defer migration when the chat LLM client hasn't
+        # finished loading its model yet (e.g. provider-fallback in progress).
+        # At that point chat_model == "" and bool("") would lock mirror_chat
+        # permanently to False — the realign block below is gated on
+        # mirror_chat=True, so the lock-in is unrecoverable without a manual
+        # toggle. Leaving the key absent is safe: other readers treat missing
+        # as falsy (same as False) and the migration retries next boot once
+        # the chat client is populated.
+        if sidecar_config_path.exists():
+            try:
+                existing = json.loads(sidecar_config_path.read_text(encoding="utf-8"))
+                if "mirror_chat" not in existing:
+                    chat_model = getattr(app.state.llm_client, "model_name", "") if app.state.llm_client else ""
+                    if not chat_model:
+                        logger.info(
+                            "Sidecar mirror_chat migration deferred: chat model not loaded yet"
+                        )
+                    else:
+                        matches = existing.get("model") == chat_model
+                        existing["mirror_chat"] = matches
+                        from app.routers.model_switcher import _atomic_write_json
+                        _atomic_write_json(sidecar_config_path, existing)
+                        logger.info(
+                            "✓ Sidecar config migrated: mirror_chat=%s (sidecar=%s, chat=%s)",
+                            matches, existing.get("model"), chat_model,
+                        )
+            except Exception as mig_err:
+                logger.warning(f"Sidecar config migration skipped: {mig_err}")
+
         if sidecar_config_path.exists():
             try:
                 sc = json.loads(sidecar_config_path.read_text(encoding="utf-8"))
+
+                # v0.3.2 follow-up: enforce mirror_chat at BOOT, not just on
+                # switch. If the user's persisted sidecar was the previous
+                # chat model (now stale/deleted/swapped), align it with the
+                # current chat model at startup so we don't boot a dead
+                # sidecar. Re-persist so the file reflects actual state.
+                chat_now = getattr(app.state.llm_client, "model_name", "") if app.state.llm_client else ""
+                chat_api = getattr(app.state.llm_client, "api_style", "ollama") if app.state.llm_client else "ollama"
+                chat_provider_now = "lmstudio" if chat_api == "openai" else "ollama"
+                if sc.get("mirror_chat") and chat_now and (
+                    sc.get("model") != chat_now or sc.get("provider") != chat_provider_now
+                ):
+                    from app.routers.model_switcher import _atomic_write_json
+                    old_model = sc.get("model")
+                    sc["enabled"] = True
+                    sc["model"] = chat_now
+                    sc["provider"] = chat_provider_now
+                    _atomic_write_json(sidecar_config_path, sc)
+                    logger.info(
+                        "✓ Sidecar realigned at boot: mirror_chat=true forced %s → %s",
+                        old_model, chat_now,
+                    )
+
                 if sc.get("enabled") and sc.get("model"):
                     from modules.llm.ollama_client import OllamaClient
 
@@ -492,32 +631,14 @@ async def lifespan(app: FastAPI):
                         f"✓ Sidecar loaded: {sc.get('model')} ({sidecar_provider})"
                     )
 
-                    # Wire TagService with LLM extraction function for benchmark-aligned tagging
+                    # Wire TagService with LLM extraction function for benchmark-aligned tagging.
+                    # v0.3.2 (Bug 4): Factory reads app.state.sidecar_client/model at CALL time,
+                    # not at boot. See utils/sidecar_tag_wrapper.py for the rationale and test.
                     if app.state.memory and hasattr(app.state.memory, "_tag_service"):
-                        from modules.memory.sidecar_service import extract_noun_tags
-
-                        # Capture sidecar client and model in closure
-                        sidecar_client = app.state.sidecar_client
-                        sidecar_model = app.state.sidecar_model
-
-                        # Create async wrapper for TagService's async extract_tags_async method
-                        # Benchmark-aligned: returns [] on failure, not None (no regex fallback)
-                        async def async_llm_tag_extractor(text: str):
-                            try:
-                                if not sidecar_client or not sidecar_model:
-                                    return []  # Sidecar not available → empty list (benchmark behavior)
-                                tags = await extract_noun_tags(
-                                    text=text,
-                                    client=sidecar_client,
-                                    model=sidecar_model,
-                                )
-                                return tags if tags else []  # Ensure [] not None
-                            except Exception as e:
-                                logger.debug(f"LLM tag extraction failed: {e}")
-                                return []  # Empty list on failure (benchmark-aligned)
+                        from utils.sidecar_tag_wrapper import make_llm_tag_extractor
 
                         app.state.memory._tag_service.set_llm_extract_fn(
-                            async_llm_tag_extractor
+                            make_llm_tag_extractor(app.state)
                         )
                         logger.info(
                             "✓ TagService wired with LLM extraction (benchmark-aligned)"

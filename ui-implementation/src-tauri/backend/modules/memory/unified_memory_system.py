@@ -229,6 +229,26 @@ class UnifiedMemorySystem:
         self.initialized = True
         logger.info("UnifiedMemorySystem initialized")
 
+        # v0.3.2: Warm ONNX models in the background so message 1 doesn't pay
+        # the 2-4s cold-load penalty. Errors are logged but don't block init —
+        # the models will cold-load on first use as a fallback.
+        asyncio.create_task(self._warm_onnx_models())
+
+    async def _warm_onnx_models(self):
+        """Preload embedding + cross-encoder ONNX sessions in background threads."""
+        try:
+            loop = asyncio.get_event_loop()
+            if self._embedding_service is None:
+                # Trigger lazy construction via the property so warm-start
+                # mirrors the path first chat would take.
+                _ = self.embedding_service
+            await loop.run_in_executor(None, self._embedding_service._load_model)
+            if self._search_service is not None:
+                await loop.run_in_executor(None, self._search_service._load_ce)
+            logger.info("ONNX models warm (embedding + cross-encoder)")
+        except Exception as e:
+            logger.warning(f"ONNX warm-start failed (will cold-load on first use): {e}")
+
     async def _initialize_collections(self):
         """Initialize ChromaDB collections."""
         collection_names = ["books", "working", "history", "patterns", "memory_bank"]
@@ -597,6 +617,67 @@ Prefix (one sentence, max 20 words):"""
         # Fallback to original text
         return text
 
+    # v0.3.2: Desktop ChromaDB collections use `hnsw:space: l2` (Euclidean),
+    # NOT cosine — so roampal-labs' 0.1 cosine threshold doesn't port directly.
+    # For 768-d unit-normalized embeddings:
+    #   L2² = 2 − 2·cos_sim  ⇒  L2 = √(2 − 2·cos_sim)
+    # So cos_sim > 0.95 ⇒ L2 < √0.1 ≈ 0.316. Using 0.32 gives the same
+    # "near-duplicate" semantics as the benchmark's cosine<0.1 without
+    # changing the collection distance space.
+    FACT_DEDUP_DISTANCE_THRESHOLD = 0.32
+    FACT_DEDUP_TIERS = ("working", "history", "patterns", "memory_bank")
+
+    # Per-tier filter. working/history/patterns hold mixed memory types
+    # (exchanges, summaries, facts) so scan only facts. memory_bank is
+    # fact-shaped by construction (user identity, preferences, learned
+    # facts) and doesn't tag rows with memory_type, so scan unfiltered.
+    FACT_DEDUP_FILTERS = {
+        "working": {"memory_type": "fact"},
+        "history": {"memory_type": "fact"},
+        "patterns": {"memory_type": "fact"},
+        "memory_bank": None,
+    }
+
+    async def _find_duplicate_fact(
+        self,
+        embedding: List[float],
+        tiers: Optional[tuple] = None,
+    ) -> Optional[str]:
+        """Return an existing doc_id if a near-duplicate fact is already stored.
+
+        Scans the given tiers (default: all of FACT_DEDUP_TIERS) with a
+        cosine-distance threshold of 0.32 (~95% similarity). Per-tier filters
+        scope the scan to fact-shaped rows (see FACT_DEDUP_FILTERS). Returns
+        the FIRST match found; None if no duplicate exists. Exceptions during
+        the scan are swallowed and logged — dedup is best-effort and must
+        never block a store.
+
+        Tier-scope is asymmetric by write persistence:
+        - store() fact branch (ephemeral sidecar extraction) scans all 4
+          tiers — cheap writes defer to any more-persistent existing copy.
+        - store_memory_bank (permanent AI/user-curated) scans ONLY
+          memory_bank — a permanent write must never be blocked by an
+          ephemeral working-tier copy that will age out in 24h and leave
+          the user's identity/preferences lost.
+        """
+        scan_tiers = tiers if tiers is not None else self.FACT_DEDUP_TIERS
+        for tier in scan_tiers:
+            col = self.collections.get(tier)
+            if col is None:
+                continue
+            try:
+                hits = await col.query_vectors(
+                    query_vector=embedding,
+                    top_k=1,
+                    filters=self.FACT_DEDUP_FILTERS.get(tier),
+                )
+            except Exception as e:
+                logger.debug(f"[DEDUP] query_vectors failed on tier={tier}: {e}")
+                continue
+            if hits and hits[0].get("distance", 2.0) < self.FACT_DEDUP_DISTANCE_THRESHOLD:
+                return hits[0].get("id")
+        return None
+
     # ==================== Core API ====================
 
     @with_retry(max_attempts=3, delay=0.5)
@@ -615,7 +696,7 @@ Prefix (one sentence, max 20 words):"""
             metadata: Optional metadata
 
         Returns:
-            Document ID
+            Document ID (existing duplicate's id if dedup'd)
         """
         if not self.initialized:
             await self.initialize()
@@ -638,6 +719,19 @@ Prefix (one sentence, max 20 words):"""
             text, final_metadata, collection
         )
         embedding = await self._embed_text(contextual_text)
+
+        # v0.3.2: Fact dedup — if we already have a near-identical fact in
+        # any tier, don't create a second copy. Ports the roampal-labs
+        # TagCascade/CE-lifecycle pattern (distance <0.1 = >95% similarity).
+        # Facts-only; summaries and other memory types still store normally.
+        if final_metadata.get("memory_type") == "fact":
+            existing_id = await self._find_duplicate_fact(embedding)
+            if existing_id:
+                logger.info(
+                    f"[DEDUP] Skipped storing fact — duplicate of {existing_id} "
+                    f"(cosine <{self.FACT_DEDUP_DISTANCE_THRESHOLD})"
+                )
+                return existing_id
 
         # Store in collection
         await self.collections[collection].upsert_vectors(
@@ -792,15 +886,43 @@ Prefix (one sentence, max 20 words):"""
         if not self.initialized:
             await self.initialize()
 
+        # v0.3.2: In-tier fact dedup for memory_bank. Scan ONLY memory_bank —
+        # NOT working/history/patterns. Rationale: store_memory_bank is the
+        # permanent-persistence surface (score 1.0, never decays). If an
+        # ephemeral working-tier copy already exists (sidecar-extracted from
+        # chat), we must still let this write land, or the fact dies when
+        # working rolls over at 24h and the user's identity/preferences are
+        # silently lost. The ephemeral copy ages out naturally; memory_bank's
+        # score-1.0 entry dominates retrieval ranking in the interim.
+        embedding = await self._embed_text(text)
+        existing_id = await self._find_duplicate_fact(
+            embedding, tiers=("memory_bank",)
+        )
+        if existing_id:
+            logger.info(
+                f"[DEDUP] Skipped storing memory_bank fact — duplicate of {existing_id} "
+                f"(cosine <{self.FACT_DEDUP_DISTANCE_THRESHOLD})"
+            )
+            return existing_id
+
         doc_id = await self._memory_bank_service.store(
-            text=text, tags=tags, importance=importance, confidence=confidence
+            text=text,
+            tags=tags,
+            importance=importance,
+            confidence=confidence,
+            embedding=embedding,
         )
 
         # v0.3.1: noun_tags for TagCascade retrieval
+        # v0.3.2 (Bug 5): await the async extractor. The sync extract_tags()
+        # can't await an async llm_extract_fn; the closure returned a coroutine
+        # that _normalize_llm_tags couldn't iterate, AttributeError was caught
+        # silently, and every create_memory call landed in memory_bank with no
+        # auto-extracted noun_tags. Route through extract_tags_async.
         if hasattr(self, "_tag_service") and self._tag_service:
             try:
                 actual_tags = (
-                    noun_tags if noun_tags else self._tag_service.extract_tags(text)
+                    noun_tags if noun_tags else await self._tag_service.extract_tags_async(text)
                 )
                 if actual_tags:
                     self.collections["memory_bank"].update_fragment_metadata(
@@ -1247,22 +1369,24 @@ Session type (1-2 words only):"""
         # v0.3.1: Two-lane retrieval (4 summaries + 4 facts = 8)
         all_collections = ["working", "patterns", "history", "memory_bank"]
 
-        # Lane 1: summaries/context (4 slots)
-        # memory_bank items included (no memory_type field, $ne "fact" includes them)
-        summary_results = await self.search(
-            query=query,
-            limit=4,
-            collections=all_collections,
-            metadata_filters={"memory_type": {"$ne": "fact"}},
-        )
-
-        # Lane 2: facts (4 slots)
-        # memory_bank excluded naturally (no items have memory_type: "fact")
-        fact_results = await self.search(
-            query=query,
-            limit=4,
-            collections=all_collections,
-            metadata_filters={"memory_type": "fact"},
+        # v0.3.2: Run both lanes concurrently. They share no mutable state —
+        # search() only reads self.embed_fn (async) and read-only ChromaDB
+        # collections, so asyncio.gather saves ~500-1000 ms per message.
+        # Lane 1: summaries/context (4 slots) — memory_bank included via $ne "fact"
+        # Lane 2: facts (4 slots) — memory_bank excluded naturally
+        summary_results, fact_results = await asyncio.gather(
+            self.search(
+                query=query,
+                limit=4,
+                collections=all_collections,
+                metadata_filters={"memory_type": {"$ne": "fact"}},
+            ),
+            self.search(
+                query=query,
+                limit=4,
+                collections=all_collections,
+                metadata_filters={"memory_type": "fact"},
+            ),
         )
 
         # Merge: 4 summaries + 4 facts

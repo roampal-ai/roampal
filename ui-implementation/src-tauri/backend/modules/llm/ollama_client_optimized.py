@@ -31,7 +31,7 @@ class OllamaClientOptimized(LLMClientInterface):
         self.base_url: str = ""
         self.model_name: str = ""
         self.request_timeout: int = settings.llm.ollama_request_timeout_seconds
-        self.keep_alive_seconds: int = settings.llm.ollama_keep_alive_seconds
+        self.keep_alive: str = settings.llm.ollama_keep_alive
         
         # Performance tracking
         self.request_count = 0
@@ -49,7 +49,7 @@ class OllamaClientOptimized(LLMClientInterface):
         self.base_url = config.get("ollama_base_url", settings.llm.ollama_base_url)
         self.model_name = config.get("ollama_model", settings.llm.ollama_model)
         self.request_timeout = config.get("ollama_request_timeout_seconds", self.request_timeout)
-        self.keep_alive_seconds = config.get("ollama_keep_alive_seconds", self.keep_alive_seconds)
+        self.keep_alive = config.get("ollama_keep_alive", self.keep_alive)
 
         if not self.model_name:
             raise ValueError("Ollama 'ollama_model' name must be provided in the configuration.")
@@ -141,7 +141,7 @@ class OllamaClientOptimized(LLMClientInterface):
             "model": actual_model,
             "messages": messages,
             "stream": False,
-            "keep_alive": f"{self.keep_alive_seconds}s",
+            "keep_alive": self.keep_alive,
             "options": {
                 "num_ctx": 4096,  # Context window
                 "num_predict": 2048,  # Max tokens to generate
@@ -231,7 +231,7 @@ class OllamaClientOptimized(LLMClientInterface):
             "model": model or self.model_name,
             "messages": messages,
             "stream": True,
-            "keep_alive": f"{self.keep_alive_seconds}s"
+            "keep_alive": self.keep_alive
         }
 
         try:

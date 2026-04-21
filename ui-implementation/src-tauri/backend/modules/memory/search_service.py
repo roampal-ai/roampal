@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 from .config import MemoryConfig
@@ -259,7 +259,12 @@ class SearchService:
         all_results = self.scoring_service.apply_scoring_to_results(all_results)
 
         # v0.3.1 TagCascade: CE reranks pool, raw CE score is final ranking
-        all_results = self._rerank_with_ce(query, all_results)
+        # v0.3.2: Offload blocking ONNX inference to a thread executor so
+        # the event loop stays responsive for WebSocket heartbeats etc.
+        loop = asyncio.get_event_loop()
+        all_results = await loop.run_in_executor(
+            None, self._rerank_with_ce, query, all_results
+        )
 
         # Track and paginate
         paginated_results = all_results[offset:offset + limit]
@@ -306,22 +311,60 @@ class SearchService:
 
             for tag in matched_tags:
                 try:
-                    # ChromaDB $contains with quoted tag prevents substring matches
-                    tag_filter = {"noun_tags": {"$contains": f'"{tag}"'}}
-
-                    # Merge with user metadata filters
+                    # v0.3.2: Python-side tag match. Previous code tried
+                    # {"noun_tags": {"$contains": ...}} in ChromaDB's where-clause,
+                    # but ChromaDB's where only accepts $gt/$gte/$lt/$lte/$ne/$eq/
+                    # $in/$nin — $contains is valid in where_document, not where.
+                    # Every TagCascade retrieval since v0.3.1 hit an exception
+                    # here and fell through to unfiltered cosine (8 error lines
+                    # per query). Fix: over-fetch candidates by vector/text only,
+                    # then filter by tag membership in Python against the
+                    # JSON-encoded noun_tags metadata string.
+                    # v0.3.2: Build memory_bank filter with proper $and wrapping
+                    # when combining status filter with incoming metadata filter.
+                    # ChromaDB rejects multi-key top-level filters (got
+                    # `{"memory_type": {"$ne": "fact"}, "status": {"$ne": "archived"}}`
+                    # before). Matches the pattern already used in
+                    # _search_collection at :547-553.
                     mb_filters = metadata_filters
                     if coll_name == "memory_bank":
-                        mb_filters = dict(metadata_filters) if metadata_filters else {}
-                        mb_filters.setdefault("status", {"$ne": "archived"})
-                    merged = self._merge_filters(tag_filter, mb_filters)
+                        status_filter = {"status": {"$ne": "archived"}}
+                        if metadata_filters:
+                            mb_filters = {
+                                "$and": [
+                                    {k: v} for k, v in metadata_filters.items()
+                                ] + [status_filter]
+                            }
+                        else:
+                            mb_filters = status_filter
 
-                    results = await adapter.hybrid_query(
+                    # Over-fetch to compensate for lost pre-filter selectivity.
+                    # 4× normal top_k is a balance between recall and cost.
+                    raw = await adapter.hybrid_query(
                         query_vector=query_embedding,
                         query_text=processed_query,
-                        top_k=limit * 2,
-                        filters=merged
+                        top_k=limit * 8,
+                        filters=mb_filters
                     )
+
+                    results = []
+                    for r in raw:
+                        meta = r.get("metadata") or {}
+                        raw_tags = meta.get("noun_tags")
+                        parsed_tags: Optional[List] = None
+                        if isinstance(raw_tags, list):
+                            parsed_tags = raw_tags
+                        elif isinstance(raw_tags, str) and raw_tags:
+                            try:
+                                candidate = json.loads(raw_tags)
+                                if isinstance(candidate, list):
+                                    parsed_tags = candidate
+                            except (ValueError, TypeError):
+                                parsed_tags = None
+                        if parsed_tags is not None and tag in parsed_tags:
+                            results.append(r)
+                            if len(results) >= limit * 2:
+                                break
 
                     for r in results:
                         doc_id = r.get("id", "")
@@ -440,8 +483,16 @@ class SearchService:
             except Exception as e:
                 logger.error(f"Error getting all items from {coll_name}: {e}")
 
-        # Sort by timestamp
-        all_results.sort(key=lambda x: x.get('metadata', {}).get('timestamp', ''), reverse=True)
+        # Sort by timestamp. Tolerate `created_at` (roampal-core write field)
+        # alongside desktop's `timestamp` so a shared ChromaDB sorts consistently.
+        all_results.sort(
+            key=lambda x: (
+                x.get('metadata', {}).get('timestamp')
+                or x.get('metadata', {}).get('created_at')
+                or ''
+            ),
+            reverse=True,
+        )
 
         paginated_results = all_results[offset:offset + limit]
 
@@ -557,7 +608,12 @@ class SearchService:
             if result.get("upload_timestamp"):
                 try:
                     upload_time = datetime.fromisoformat(result["upload_timestamp"])
-                    age_days = (datetime.utcnow() - upload_time).days
+                    # v0.3.2 (Section 3): timezone-aware UTC instead of
+                    # deprecated datetime.utcnow(). Both sides must agree on
+                    # awareness, so naive ISO strings get upgraded here.
+                    if upload_time.tzinfo is None:
+                        upload_time = upload_time.replace(tzinfo=timezone.utc)
+                    age_days = (datetime.now(timezone.utc) - upload_time).days
                     if age_days <= 7:
                         result["distance"] = result.get("distance", 1.0) * 0.7
                 except Exception:
@@ -567,9 +623,10 @@ class SearchService:
         """Add recency metadata to working memory results."""
         for r in results:
             metadata = r.get("metadata", {})
-            if metadata.get("timestamp"):
+            ts_str = metadata.get("timestamp") or metadata.get("created_at")
+            if ts_str:
                 try:
-                    timestamp = datetime.fromisoformat(metadata["timestamp"])
+                    timestamp = datetime.fromisoformat(ts_str)
                     minutes_ago = (datetime.now() - timestamp).total_seconds() / 60
 
                     if minutes_ago < 1:

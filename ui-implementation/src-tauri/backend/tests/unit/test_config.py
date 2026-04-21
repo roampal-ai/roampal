@@ -133,3 +133,19 @@ class TestRateLimit:
         except (ValueError, TypeError):
             val = 200
         assert val == 200
+
+
+# ---------------------------------------------------------------------------
+# v0.3.2 (0e): Ollama keep_alive default
+# ---------------------------------------------------------------------------
+
+class TestOllamaKeepAlive:
+    def test_keep_alive_default_is_24h(self):
+        """Idle chat windows shouldn't trigger 10-30s model reloads; default 24h."""
+        from config.settings import settings
+        assert settings.llm.ollama_keep_alive == "24h"
+
+    def test_keep_alive_is_string_type(self):
+        """Must be a duration string (Ollama accepts "24h", "30m"); pydantic int field would reject this."""
+        from config.settings import settings
+        assert isinstance(settings.llm.ollama_keep_alive, str)

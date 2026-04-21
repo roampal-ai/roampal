@@ -3,6 +3,7 @@ Enhanced Memory Visualization Router
 Shows the outcome-based memory system with collections
 """
 
+import json
 import logging
 from typing import List, Optional
 from fastapi import APIRouter, Request, Query
@@ -97,8 +98,14 @@ async def get_collection_memories(
                 total_count = len(all_items)
 
             # Sort ALL items by timestamp (most recent first)
+            # Tolerate both `timestamp` (desktop-written) and `created_at`
+            # (roampal-core-written) so a shared ChromaDB sorts consistently.
             all_items.sort(
-                key=lambda item: item.get('metadata', {}).get('timestamp', ''),
+                key=lambda item: (
+                    item.get('metadata', {}).get('timestamp')
+                    or item.get('metadata', {}).get('created_at')
+                    or ''
+                ),
                 reverse=True
             )
 
@@ -134,8 +141,31 @@ async def get_collection_memories(
                 'score': metadata.get('score', item.get('score', 0.5)),
                 'uses': metadata.get('uses', 0),  # v0.3.0: Flatten uses for frontend
                 'collection': collection_type,
-                'timestamp': metadata.get('timestamp', metadata.get('upload_timestamp'))  # Flatten timestamp for frontend
+                # Flatten timestamp for frontend. Accept `created_at` so memories
+                # written by roampal-core (which uses that field) render with the
+                # correct creation time instead of falling back to "now" in the UI.
+                'timestamp': (
+                    metadata.get('timestamp')
+                    or metadata.get('upload_timestamp')
+                    or metadata.get('created_at')
+                )
             }
+
+            # Flatten noun_tags to top-level `tags` for the frontend.
+            # Stored as a JSON-encoded string by the sidecar write path
+            # (see agent_chat.py — summary_meta["noun_tags"] = json.dumps(...)),
+            # but tolerate already-parsed lists too.
+            raw_tags = metadata.get('noun_tags')
+            if isinstance(raw_tags, list):
+                memory['tags'] = raw_tags
+            elif isinstance(raw_tags, str) and raw_tags:
+                try:
+                    parsed = json.loads(raw_tags)
+                    memory['tags'] = parsed if isinstance(parsed, list) else []
+                except (ValueError, TypeError):
+                    memory['tags'] = []
+            else:
+                memory['tags'] = []
 
             # Add outcome data if available
             if collection_type == "patterns":

@@ -274,11 +274,15 @@ class PromotionService:
 
         logger.info(f"[PROMOTION] Evaluating deletion for {collection}/{doc_id} (score={score:.2f})")
 
-        # Calculate age
+        # Calculate age. Tolerate `created_at` (roampal-core write field) in
+        # addition to desktop's `timestamp` — without this, memories written by
+        # a shared-DB roampal-core install look ageless and always hit the
+        # lenient new-item deletion threshold.
         age_days = 0
-        if metadata.get("timestamp"):
+        ts_str = metadata.get("timestamp") or metadata.get("created_at")
+        if ts_str:
             try:
-                age_days = (datetime.now() - datetime.fromisoformat(metadata["timestamp"])).days
+                age_days = (datetime.now() - datetime.fromisoformat(ts_str)).days
             except Exception:
                 pass
 
@@ -340,7 +344,7 @@ class PromotionService:
                 text = metadata.get("text", "")
                 score = metadata.get("score", 0.5)
                 uses = metadata.get("uses", 0)
-                timestamp_str = metadata.get("timestamp", "")
+                timestamp_str = metadata.get("timestamp") or metadata.get("created_at", "")
 
                 # Calculate age
                 age_hours = self._calculate_age_hours(timestamp_str)
@@ -476,7 +480,7 @@ class PromotionService:
                     continue
 
                 metadata = doc.get("metadata", {})
-                timestamp_str = metadata.get("timestamp", "")
+                timestamp_str = metadata.get("timestamp") or metadata.get("created_at", "")
                 age_hours = self._calculate_age_hours(timestamp_str)
 
                 if age_hours > max_age_hours:
@@ -520,7 +524,7 @@ class PromotionService:
                     continue
 
                 metadata = doc.get("metadata", {})
-                timestamp_str = metadata.get("timestamp", "")
+                timestamp_str = metadata.get("timestamp") or metadata.get("created_at", "")
                 age_hours = self._calculate_age_hours(timestamp_str)
 
                 if age_hours > max_age_hours:

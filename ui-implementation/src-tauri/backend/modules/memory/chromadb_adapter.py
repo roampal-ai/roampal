@@ -112,8 +112,14 @@ class ChromaDBAdapter:
                 )
                 logger.info(f"ChromaDB client connected to server at localhost:8003")
             else:
-                # Use local embedded mode (for testing only)
-                self.client = chromadb.PersistentClient(path=self.db_path)
+                # v0.3.2 (0d): Disable ChromaDB's PostHog-based anonymous
+                # telemetry — it was emitting `capture() takes N args, M given`
+                # tracebacks on every call and bloating log files (3.8 MB+
+                # observed in a single session).
+                self.client = chromadb.PersistentClient(
+                    path=self.db_path,
+                    settings=ChromaSettings(anonymized_telemetry=False),
+                )
                 logger.info(f"ChromaDB client initialized for local path: {self.db_path}")
 
         # Use user-isolated collection if user_id provided
@@ -499,8 +505,15 @@ class ChromaDBAdapter:
             result = self.collection.get(include=[])
             return result.get('ids', [])
         except Exception as e:
-            # ChromaDB can throw "Error finding id" for ghost entries (IDs in index but no document)
-            logger.warning(f"ChromaDB error listing all IDs: {e}")
+            # v0.3.2 (0i): Structured logging so we can tell same-process
+            # vs cross-process collisions (Roampal desktop ↔ `pip install roampal`
+            # CLI both attaching to the same embedded DB). Ship fix in 0.3.3.
+            import os as _os
+            collection_name = getattr(self.collection, "name", "unknown")
+            logger.warning(
+                "chromadb.error call=list_all_ids collection=%s pid=%d err=%r",
+                collection_name, _os.getpid(), e,
+            )
             return []
 
     def delete_vectors(self, ids: List[str]):
@@ -539,9 +552,15 @@ class ChromaDBAdapter:
         try:
             result = self.collection.get(ids=[fragment_id], include=["embeddings", "metadatas", "documents"])
         except Exception as e:
-            # ChromaDB can throw "Error finding id" for ghost entries (IDs in index but no document)
-            # This happens when documents are deleted but index isn't fully cleaned
-            logger.warning(f"ChromaDB error getting fragment {fragment_id}: {e}")
+            # v0.3.2 (0i): Structured logging for "Error finding id" diagnosis.
+            # Suspected cross-process access between desktop + CLI — pid here
+            # lets us correlate across two log streams.
+            import os as _os
+            collection_name = getattr(self.collection, "name", "unknown")
+            logger.warning(
+                "chromadb.error call=get_fragment collection=%s fragment_id=%s pid=%d err=%r",
+                collection_name, fragment_id, _os.getpid(), e,
+            )
             return None
         if not result or not result.get("ids"):
             return None

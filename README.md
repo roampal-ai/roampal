@@ -162,7 +162,7 @@ Works with any tool-calling model via Ollama or LM Studio:
 |----------|-------------|
 | [Architecture](dev/docs/architecture.md) | 5-tier memory, knowledge graphs, technical deep-dive |
 | [Benchmarks](dev/docs/releases/v0.3.1/RELEASE_NOTES.md#benchmark-evidence) | LoCoMo evaluation, TagCascade results |
-| [Release Notes](dev/docs/releases/v0.3.1/RELEASE_NOTES.md) | Latest: TagCascade Retrieval, Sidecar LLM, ONNX CE, Two-Lane Injection |
+| [Release Notes](dev/docs/releases/v0.3.2/RELEASE_NOTES.md) | Latest (v0.3.2): chat-path latency fixes, fact dedup, universal provider error handling, shared-DB timestamp tolerance, TagCascade filter correctness |
 
 ---
 

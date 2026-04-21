@@ -869,6 +869,98 @@ async def list_available_models():
     return {"models": all_models, "count": len(all_models)}
 
 
+@router.get("/gpu-info")
+async def get_gpu_info(request: Request):
+    """v0.3.2 (0g): Report detected GPU VRAM so the UI can size model warnings."""
+    return {
+        "gpu_vram_gb": getattr(request.app.state, "gpu_vram_gb", None),
+        "gpu_count": getattr(request.app.state, "gpu_count", 0),
+        "source": getattr(request.app.state, "gpu_source", "none"),
+    }
+
+
+class _DebugVramRequest(BaseModel):
+    gpu_vram_gb: Optional[float] = None  # None = restore real detected value
+
+
+@router.post("/_debug/set-vram")
+async def _debug_set_vram(request: Request, body: _DebugVramRequest):
+    """v0.3.2 (0g) dev-only: override app.state.gpu_vram_gb for manual QA.
+
+    Gated on `ROAMPAL_DEV=1` — returns 403 in production builds. Lets us
+    exercise the VRAM warning toast without downloading an oversized model.
+    POST body: {"gpu_vram_gb": 2.0} to simulate a 2GB card, or
+    {"gpu_vram_gb": null} to restore the real detected value.
+    """
+    if os.getenv("ROAMPAL_DEV", "").strip() not in ("1", "true", "yes"):
+        raise HTTPException(status_code=403, detail="Dev-only endpoint")
+
+    # Remember the original on first override so we can restore it.
+    if not hasattr(request.app.state, "_gpu_vram_gb_original"):
+        request.app.state._gpu_vram_gb_original = getattr(
+            request.app.state, "gpu_vram_gb", None
+        )
+
+    if body.gpu_vram_gb is None:
+        request.app.state.gpu_vram_gb = request.app.state._gpu_vram_gb_original
+        logger.info(f"[DEV] Restored gpu_vram_gb to {request.app.state.gpu_vram_gb}")
+    else:
+        request.app.state.gpu_vram_gb = float(body.gpu_vram_gb)
+        logger.info(f"[DEV] Overrode gpu_vram_gb to {request.app.state.gpu_vram_gb}")
+
+    return {"gpu_vram_gb": request.app.state.gpu_vram_gb}
+
+
+def _vram_warning_for(model_name: str, available_vram_gb: Optional[float]) -> Optional[Dict[str, Any]]:
+    """v0.3.2 (0g): Return a warning dict if a model likely won't fit in VRAM.
+
+    Strategy (universal, per Logan's rule — no per-model blocklists):
+      1. Curated registry with a `vram_gb` field → exact comparison
+      2. Tag parses as NB → estimate at ~params × 0.75 (Q4_K_M heuristic)
+      3. Otherwise → return None (don't guess)
+    """
+    if available_vram_gb is None:
+        return None  # detection failed — never guess
+
+    # 1. Curated registry
+    try:
+        for base, quants in QUANTIZATION_OPTIONS.items():
+            for level, meta in quants.items():
+                if meta.get("ollama_tag") == model_name or base == model_name:
+                    required = float(meta.get("vram_gb") or 0)
+                    if required and required > available_vram_gb:
+                        return {
+                            "kind": "curated",
+                            "required_gb": required,
+                            "available_gb": available_vram_gb,
+                            "message": (
+                                f"`{model_name}` recommends {required} GB VRAM but "
+                                f"only {available_vram_gb:.1f} GB detected. Expect "
+                                f"slow inference or OOM."
+                            ),
+                        }
+    except Exception:
+        pass  # treat any registry lookup failure as "can't curate — fall through"
+
+    # 2. Tag heuristic
+    from utils.gpu_detection import estimate_vram_from_tag
+    estimated = estimate_vram_from_tag(model_name)
+    if estimated is not None and estimated > available_vram_gb:
+        return {
+            "kind": "estimated",
+            "required_gb": estimated,
+            "available_gb": available_vram_gb,
+            "message": (
+                f"`{model_name}` is estimated to need ~{estimated} GB VRAM but "
+                f"only {available_vram_gb:.1f} GB detected. This is a rough "
+                f"heuristic — confirm quantization before download."
+            ),
+        }
+
+    # 3. No signal — silent pass
+    return None
+
+
 @router.get("/current")
 async def get_current_model(request: Request):
     """Get the currently active model"""
@@ -1234,7 +1326,10 @@ async def switch_model(request: Request, model_request: ModelSwitchRequest):
                         detail=f"{error_msg} Rolled back to {previous_model}.",
                     )
 
-                # Step 4: Update environment variables
+                # v0.3.2 (0b): Persist the selection to DATA_PATH, not the
+                # install dir. The old `.env` write silently failed on default
+                # Windows installs because Program Files isn't user-writable,
+                # so model selection never survived a restart.
                 os.environ["ROAMPAL_LLM_PROVIDER"] = provider
                 if provider == "ollama":
                     os.environ["OLLAMA_MODEL"] = model_name
@@ -1242,42 +1337,32 @@ async def switch_model(request: Request, model_request: ModelSwitchRequest):
                 else:
                     os.environ["ROAMPAL_LLM_LMSTUDIO_MODEL"] = model_name
 
-                # Update .env file
-                async with _env_file_lock:
-                    env_path = Path(__file__).parent.parent.parent / ".env"
-                    if env_path.exists():
-                        lines = env_path.read_text().splitlines()
+                save_main_model_config(model=model_name, provider=provider)
 
-                        # Update ROAMPAL_LLM_PROVIDER
-                        provider_updated = False
-                        for i, line in enumerate(lines):
-                            if line.startswith("ROAMPAL_LLM_PROVIDER="):
-                                lines[i] = f"ROAMPAL_LLM_PROVIDER={provider}"
-                                provider_updated = True
-                                break
-                        if not provider_updated:
-                            lines.append(f"ROAMPAL_LLM_PROVIDER={provider}")
-
-                        # Update model-specific env vars
-                        if provider == "ollama":
-                            for i, line in enumerate(lines):
-                                if line.startswith("OLLAMA_MODEL="):
-                                    lines[i] = f"OLLAMA_MODEL={model_name}"
-                                elif line.startswith("ROAMPAL_LLM_OLLAMA_MODEL="):
-                                    lines[i] = f"ROAMPAL_LLM_OLLAMA_MODEL={model_name}"
-                        else:
-                            lmstudio_updated = False
-                            for i, line in enumerate(lines):
-                                if line.startswith("ROAMPAL_LLM_LMSTUDIO_MODEL="):
-                                    lines[i] = (
-                                        f"ROAMPAL_LLM_LMSTUDIO_MODEL={model_name}"
-                                    )
-                                    lmstudio_updated = True
-                                    break
-                            if not lmstudio_updated:
-                                lines.append(f"ROAMPAL_LLM_LMSTUDIO_MODEL={model_name}")
-
-                        env_path.write_text("\n".join(lines) + "\n")
+                # v0.3.2 (0f): If sidecar is in mirror-chat mode, update it
+                # atomically so the sidecar re-uses the current chat model
+                # and avoids costly single-GPU model swaps on each message.
+                try:
+                    existing = _load_sidecar_config(request)
+                    if existing.get("mirror_chat", True):
+                        _save_sidecar_config(
+                            request,
+                            {
+                                "enabled": True,
+                                "model": model_name,
+                                "provider": provider,
+                                "mirror_chat": True,
+                            },
+                        )
+                        request.app.state.sidecar_model = model_name
+                        request.app.state.sidecar_provider = provider
+                        # Share the freshly-switched main client.
+                        request.app.state.sidecar_client = request.app.state.llm_client
+                        logger.info(
+                            f"[SIDECAR] Mirror updated to {provider}/{model_name}"
+                        )
+                except Exception as mirror_err:
+                    logger.warning(f"[SIDECAR] Mirror update failed: {mirror_err}")
 
                 # v0.3.0: Validate state after switch
                 actual_model = request.app.state.llm_client.model_name
@@ -1287,11 +1372,18 @@ async def switch_model(request: Request, model_request: ModelSwitchRequest):
                     )
                     request.app.state.llm_client.model_name = model_name
 
+                # v0.3.2 (0g): surface a VRAM warning alongside the success
+                # response so the UI can render a badge without a second RTT.
+                warning = _vram_warning_for(
+                    model_name,
+                    getattr(request.app.state, "gpu_vram_gb", None),
+                )
                 return {
                     "status": "success",
                     "message": f"Switched to {provider} model: {model_name}",
                     "current_model": model_name,
                     "provider": provider,
+                    "vram_warning": warning,
                 }
             else:
                 raise HTTPException(
@@ -2531,6 +2623,13 @@ async def cleanup_ghost_model(model_id: str):
 class SidecarSetRequest(BaseModel):
     model: str
     provider: str = "ollama"  # "ollama" or "lmstudio"
+    # v0.3.2 (0f): Explicit override — when set, sidecar stops mirroring chat.
+    mirror_chat: bool = False
+
+
+class SidecarMirrorRequest(BaseModel):
+    """v0.3.2 (0f): Toggle sidecar mirror-chat mode from the Advanced settings panel."""
+    mirror_chat: bool
 
 
 def _get_sidecar_config_path(request: Request) -> Path:
@@ -2540,22 +2639,78 @@ def _get_sidecar_config_path(request: Request) -> Path:
     return Path(settings.paths.data_dir) / "sidecar_config.json"
 
 
+def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
+    """v0.3.2: Atomic JSON write — temp file + os.replace.
+
+    A plain `write_text(json.dumps(data))` can leave a truncated/corrupt file
+    if the process crashes mid-write. This helper writes to a sibling `.tmp`
+    file and then renames it, which is atomic on both POSIX and NTFS.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(str(tmp_path), str(path))
+
+
+def _get_main_model_config_path(data_dir: Optional[Path] = None) -> Path:
+    """Return the path to main_model_config.json under DATA_PATH."""
+    if data_dir is None:
+        from config.settings import settings as _settings
+        data_dir = Path(_settings.paths.data_dir)
+    return Path(data_dir) / "main_model_config.json"
+
+
+def load_main_model_config(data_dir: Optional[Path] = None) -> Optional[Dict[str, str]]:
+    """Read {"model": ..., "provider": ...} from main_model_config.json, or None."""
+    path = _get_main_model_config_path(data_dir)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("provider"):
+            return {"model": data.get("model") or "", "provider": data["provider"]}
+    except Exception as e:
+        logger.warning(f"Could not read {path}: {e}")
+    return None
+
+
+def save_main_model_config(model: str, provider: str, data_dir: Optional[Path] = None) -> None:
+    """Persist the user's main-model selection atomically."""
+    path = _get_main_model_config_path(data_dir)
+    _atomic_write_json(path, {"model": model, "provider": provider})
+    logger.info(f"[MAIN MODEL] Persisted selection to {path}: {provider}/{model}")
+
+
 def _load_sidecar_config(request: Request) -> Dict[str, Any]:
-    """Load persisted sidecar config."""
+    """Load persisted sidecar config.
+
+    v0.3.2 migration: if the persisted config predates `mirror_chat`, infer
+    it by comparing the stored sidecar model against the live chat model.
+    Matching → True (safe to mirror). Differing → False (preserve the v0.3.1
+    user's explicit intent to run two different models).
+    """
     path = _get_sidecar_config_path(request)
+    defaults = {"enabled": False, "model": "", "provider": "", "mirror_chat": True}
     if path.exists():
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            for k, v in defaults.items():
+                if k == "mirror_chat" and k not in data:
+                    main_client = getattr(getattr(request, "app", None), "state", None)
+                    chat_model = getattr(getattr(main_client, "llm_client", None), "model_name", "") if main_client else ""
+                    data["mirror_chat"] = bool(chat_model) and (data.get("model") == chat_model)
+                else:
+                    data.setdefault(k, v)
+            return data
         except Exception:
             pass
-    return {"enabled": False, "model": "", "provider": ""}
+    return defaults
 
 
 def _save_sidecar_config(request: Request, config: Dict[str, Any]):
-    """Persist sidecar config to disk."""
+    """Persist sidecar config to disk (atomic write — crash-safe)."""
     path = _get_sidecar_config_path(request)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config), encoding="utf-8")
+    _atomic_write_json(path, config)
 
 
 @router.get("/sidecar/status")
@@ -2564,11 +2719,19 @@ async def sidecar_status(request: Request):
     model = getattr(request.app.state, "sidecar_model", "")
     provider = getattr(request.app.state, "sidecar_provider", "")
     last_error = getattr(request.app.state, "sidecar_last_error", "")
+    # v0.3.2 (0f): surface mirror_chat so the chat-header badge can render
+    # "Mirror: <model>" vs an explicit sidecar selection.
+    try:
+        persisted = _load_sidecar_config(request)
+        mirror_chat = bool(persisted.get("mirror_chat", True))
+    except Exception:
+        mirror_chat = True
     return {
         "enabled": bool(model),
         "model": model,
         "provider": provider,
         "last_error": last_error,
+        "mirror_chat": mirror_chat,
     }
 
 
@@ -2659,14 +2822,50 @@ async def sidecar_set(request: Request, body: SidecarSetRequest):
     request.app.state.sidecar_provider = provider
     request.app.state.sidecar_client = sidecar_client
 
-    # Persist
+    # Persist — honor the caller's explicit mirror_chat flag (default False
+    # since picking a specific sidecar is an override of the mirror default).
     _save_sidecar_config(
-        request, {"enabled": True, "model": model, "provider": provider}
+        request,
+        {
+            "enabled": True,
+            "model": model,
+            "provider": provider,
+            "mirror_chat": bool(getattr(body, "mirror_chat", False)),
+        },
     )
 
     request.app.state.sidecar_last_error = ""  # Clear any prior error
     logger.info(f"[SIDECAR] Set model: {model} ({provider})")
     return {"status": "ok", "model": model, "provider": provider}
+
+
+@router.post("/sidecar/mirror")
+async def sidecar_mirror(request: Request, body: SidecarMirrorRequest):
+    """v0.3.2 (0f): Toggle sidecar mirror-chat mode.
+
+    When enabled, the sidecar is kept in lockstep with the chat model so
+    single-GPU users don't pay a 10-30 s model swap on every sidecar call.
+    Turning it off leaves the current sidecar selection in place as an
+    independent model — the Advanced settings picker can then change it.
+    """
+    config = _load_sidecar_config(request)
+    config["mirror_chat"] = bool(body.mirror_chat)
+
+    if body.mirror_chat:
+        # Snap to chat model immediately.
+        main_client = getattr(request.app.state, "llm_client", None)
+        if main_client and getattr(main_client, "model_name", ""):
+            config["enabled"] = True
+            config["model"] = main_client.model_name
+            config["provider"] = getattr(main_client, "api_style", "ollama")
+            if config["provider"] == "openai":
+                config["provider"] = "lmstudio"
+            request.app.state.sidecar_model = config["model"]
+            request.app.state.sidecar_provider = config["provider"]
+            request.app.state.sidecar_client = main_client
+
+    _save_sidecar_config(request, config)
+    return {"status": "ok", "mirror_chat": config["mirror_chat"], "model": config.get("model", "")}
 
 
 @router.post("/sidecar/disable")
