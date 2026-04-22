@@ -3223,7 +3223,7 @@ dependencies = [
 
 [[package]]
 name = "roampal"
-version = "0.3.2"
+version = "0.3.2-hotfix.1"
 dependencies = [
  "futures-util",
  "reqwest",

@@ -170,7 +170,11 @@ class OllamaClient(LLMClientInterface):
         from config.model_contexts import get_context_size
         num_ctx = get_context_size(actual_model)
         options["num_ctx"] = num_ctx
-        options["num_gpu"] = 99  # Force max GPU layers - Ollama is too conservative by default
+        # v0.3.2.1: Removed hardcoded num_gpu=99 override. Forcing max GPU offload
+        # produced "memory layout cannot be allocated with num_gpu = 99" errors on
+        # hardware where Ollama's preferred backend couldn't fit all layers. Modern
+        # Ollama auto-detection picks an appropriate layer count per host; users
+        # can still override via `OLLAMA_NUM_GPU` env var if they want max offload.
 
         # Universal generation params - apply for all models from configuration
         from config.model_limits import get_generation_params
@@ -442,7 +446,8 @@ class OllamaClient(LLMClientInterface):
         if "deepseek" not in actual_model.lower():
             from config.model_limits import get_generation_params
             gen_params = get_generation_params(actual_model)
-            options = {"num_gpu": 99}  # Force max GPU layers
+            # v0.3.2.1: Removed hardcoded num_gpu=99. Let Ollama auto-detect.
+            options = {}
 
             if gen_params.get("num_predict"):
                 options["num_predict"] = gen_params["num_predict"]
@@ -453,7 +458,8 @@ class OllamaClient(LLMClientInterface):
             if gen_params.get("stop"):
                 options["stop"] = gen_params["stop"]
 
-            payload["options"] = options  # Always set options now (at minimum num_gpu)
+            if options:
+                payload["options"] = options
 
             if format:
                 payload["format"] = format
@@ -677,13 +683,13 @@ class OllamaClient(LLMClientInterface):
         }
 
         # Use centralized context configuration
+        # v0.3.2.1: Removed num_gpu=99 override; Ollama auto-detects layer offload.
         from config.model_contexts import get_context_size
         num_ctx = get_context_size(actual_model)
         payload["options"] = {
             "num_ctx": num_ctx,
-            "num_gpu": 99  # Force full GPU offload - fixes Ollama's conservative default
         }
-        logger.info(f"[STREAM WITH TOOLS] Set context window to {num_ctx} for {actual_model} (num_gpu=99)")
+        logger.info(f"[STREAM WITH TOOLS] Set context window to {num_ctx} for {actual_model}")
 
         # Pass tools if supplied. Incompatible models are detected from the
         # server's response body and handled via a no-tools retry path.
