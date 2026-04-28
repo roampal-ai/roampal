@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/roampal-ai-roampal-badge.png)](https://mseep.ai/app/roampal-ai-roampal)
+
 # Roampal
 
 [![Status](https://img.shields.io/badge/status-alpha-orange)](https://roampal.ai)
