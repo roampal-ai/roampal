@@ -122,7 +122,9 @@ describe('ConnectedCommandInput', () => {
       fireEvent.change(textarea, { target: { value: 'Hello' } })
       fireEvent.keyDown(textarea, { key: 'Enter' })
 
-      expect(mockSendMessage).toHaveBeenCalledWith('Hello')
+      // v0.3.3 Section 4: onSendMessage signature is (text, images?) — images
+      // is undefined when no attachments are present. Match the actual call shape.
+      expect(mockSendMessage).toHaveBeenCalledWith('Hello', undefined)
     })
 
     it('allows new line with Shift+Enter', () => {
