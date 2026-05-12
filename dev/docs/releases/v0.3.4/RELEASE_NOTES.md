@@ -85,6 +85,62 @@ Storage strategy chosen: sidecar `attachments/` dir keyed by SHA-256 hash (the s
 
 ---
 
+## 4. Zero-yield stream fallback (latent since v0.1.0; user-visible since v0.2.5)
+
+**Origin:** v0.3.3 post-ship diagnosis (2026-05-12). When a streaming response completes cleanly but emits no visible content, the UI sees nothing — no error, no message, no indication anything happened. The most common trigger is a thinking-mode model (qwen3 family especially) where the model exhausts its context budget on `reasoning_content` and never reaches `content`. Reasoning is intentionally discarded by `ollama_client.py` (introduced v0.2.5 — `# v0.2.5: Discard reasoning content entirely`), so when reasoning is the *only* output, the stream completes with `yield_count == 0` and the chat shows silence.
+
+**Git-blame confirms the gap is from day one:** the stream-finish logging line has been at the same spot since the initial commit (`a4dbfb1` v0.1.0). `git log -S "yield_count == 0"` returns no matches across the entire history of `ollama_client.py` — a zero-yield fallback path has never existed.
+
+**Why this wasn't caught earlier:**
+
+- Pre-v0.2.5: no reasoning-content path existed, so the only way to get to zero-yield was a hard provider error (which already surfaced through the error-handling branches).
+- v0.2.5 → v0.3.3: zero-yield became reachable for any thinking-mode model whose budget was exhausted by reasoning. Specific symptom: open new chat with low-ctx LM Studio + qwen3 thinking model, send a question that needs more than `loaded_context_length` tokens of reasoning to answer — model emits reasoning, never gets to the answer, stream closes, UI is silent.
+- v0.3.3 Defect 22 broadened the *pre-stream* error matcher and added a `loaded_context_length` pre-validation gate, which catches a large fraction of these cases before the stream starts. The remaining slice — where the request begins streaming successfully but reasoning consumes the whole budget mid-stream — still falls into the silent-yield bucket and is what this item closes.
+
+**Scope.**
+
+- Helper at top of `modules/llm/ollama_client.py`:
+
+  ```python
+  def _zero_yield_fallback_message(reasoning_seen: bool) -> str:
+      """Surface SOMETHING when a stream completes cleanly but yielded no content."""
+      if reasoning_seen:
+          return (
+              "**Model produced only reasoning, no visible answer.**\n\n"
+              "This usually means the model's context window is too small to both "
+              "think and respond. Try a larger context (16384+) or switch to a "
+              "non-thinking model."
+          )
+      return (
+          "**Model returned no output.**\n\n"
+          "The provider closed the stream without producing visible content. "
+          "This can happen on context overflow, OOM, or a provider hiccup. "
+          "Check LM Studio / Ollama logs."
+      )
+  ```
+
+- **OpenAI-style stream finish (LM Studio path, ~line 1171):** before the final `[STREAM DEBUG] OpenAI stream finished` log, check `if yield_count == 0:` and yield the fallback. Pass the existing `in_reasoning_mode` flag (already tracked at the reasoning-content branch, ~line 1104) so the helper picks the more specific "reasoning-only" message variant.
+
+- **Ollama-native stream finish (~line 1313):** mirror the same guard. For Ollama-native streams there's no equivalent `in_reasoning_mode` flag, but `'<think' in accumulated_content or '</think' in accumulated_content` reliably detects reasoning-mode output from Ollama-side thinking models.
+
+**Files affected.**
+
+| File | Change |
+|---|---|
+| `modules/llm/ollama_client.py` | Add `_zero_yield_fallback_message()` helper; add `yield_count == 0` guards in both OpenAI and Ollama-native stream-finish paths |
+
+**Acceptance criteria.**
+
+- Send a non-trivial prompt to an LM Studio qwen3 thinking model with low `loaded_context_length` (~2048). When reasoning eats the budget without reaching an answer, the user-visible UI shows the "produced only reasoning" fallback rather than silence.
+- Backend log shows `[OPENAI STREAM] 0 yields after N lines — emitting fallback` (or the Ollama variant).
+- Provider-side errors continue to flow through the existing error-handling branch — the fallback only triggers on clean stream completion with zero yields.
+
+**Note on Defect 22 relationship.** Defect 22 catches *pre-stream* overflows (request never sent). This item catches *mid-stream* exhaustion (request sent, stream opens, reasoning consumes budget, stream closes silent). Both are real failure modes for thinking models on small contexts; the pair covers the full envelope.
+
+**Estimated effort.** ~30 LOC + 2-3 tests (one per stream path, exercising the zero-yield branch), ~20 minutes.
+
+---
+
 ## Additional items under consideration
 
 The following items were noted during v0.3.3 verification but have not yet been scoped for v0.3.4. They will be promoted, deferred further, or rejected during v0.3.4 planning.
