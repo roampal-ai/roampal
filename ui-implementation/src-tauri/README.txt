@@ -14,6 +14,13 @@ IMPORTANT: Run as Administrator
 For best performance and to avoid permission issues, RIGHT-CLICK on Roampal.exe
 and select "Run as administrator".
 
+Running a DEV install side-by-side
+----------------------------------
+To run an isolated DEV install on the same machine as a prod install,
+double-click "Start Roampal DEV.bat" instead of Roampal.exe. The dev launcher
+sets ROAMPAL_DEV=1 and uses port 8766, so its data lives under
+%APPDATA%\Roampal_DEV\data and won't touch your prod ChromaDB.
+
 System Requirements
 -------------------
 - Windows 10/11 (64-bit)

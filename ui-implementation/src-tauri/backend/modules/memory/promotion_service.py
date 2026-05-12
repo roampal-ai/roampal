@@ -170,7 +170,10 @@ class PromotionService:
             return None
 
         # Only delete from working AFTER successful promotion
-        self.collections["working"].delete_vectors([doc_id])
+        try:
+            self.collections["working"].delete_vectors([doc_id])
+        except Exception as e:
+            logger.warning(f"Could not delete source {doc_id} after promotion: {e}")
 
         # Track evolution relationship
         if self.add_relationship_fn:
@@ -222,7 +225,10 @@ class PromotionService:
             logger.error(f"Failed to create patterns memory {new_id}: {e}")
             return None
 
-        self.collections["history"].delete_vectors([doc_id])
+        try:
+            self.collections["history"].delete_vectors([doc_id])
+        except Exception as e:
+            logger.warning(f"Could not delete source {doc_id} after promotion: {e}")
 
         if self.add_relationship_fn:
             await self.add_relationship_fn(new_id, "evolution", {"parent": doc_id})
@@ -254,7 +260,11 @@ class PromotionService:
             logger.error(f"Failed to demote {doc_id}: {e}")
             return None
 
-        self.collections["patterns"].delete_vectors([doc_id])
+        try:
+            self.collections["patterns"].delete_vectors([doc_id])
+        except Exception as e:
+            logger.warning(f"Could not delete source {doc_id} after demotion: {e}")
+
         logger.info(f"Demoted {doc_id} to history (score: {score:.2f})")
         return new_id
 
@@ -294,7 +304,10 @@ class PromotionService:
         )
 
         if score < deletion_threshold:
-            self.collections[collection].delete_vectors([doc_id])
+            try:
+                self.collections[collection].delete_vectors([doc_id])
+            except Exception as e:
+                logger.warning(f"Could not delete {doc_id} from {collection}: {e}")
             logger.info(f"Deleted {doc_id} from {collection} (score {score:.2f} < threshold {deletion_threshold})")
 
     # =========================================================================
@@ -333,45 +346,51 @@ class PromotionService:
             all_ids = working_adapter.list_all_ids()
 
             for doc_id in all_ids:
-                doc = working_adapter.get_fragment(doc_id)
-                if not doc:
+                try:
+                    doc = working_adapter.get_fragment(doc_id)
+                    if not doc:
+                        continue
+
+                    metadata = doc.get("metadata", {})
+                    checked_count += 1
+
+                    # Get promotion criteria
+                    text = metadata.get("text", "")
+                    score = metadata.get("score", 0.5)
+                    uses = metadata.get("uses", 0)
+                    timestamp_str = metadata.get("timestamp") or metadata.get("created_at", "")
+
+                    # Calculate age
+                    age_hours = self._calculate_age_hours(timestamp_str)
+
+                    # Promote if: high score AND used multiple times
+                    if score >= self.config.promotion_score_threshold and uses >= 2:
+                        new_id = doc_id.replace("working_", "history_")
+
+                        await self.collections["history"].upsert_vectors(
+                            ids=[new_id],
+                            vectors=[await self.embed_fn(text)],
+                            metadatas=[{
+                                **metadata,
+                                "promoted_from": "working",
+                                "promotion_time": datetime.now().isoformat(),
+                                "promotion_reason": "batch_promotion"
+                            }]
+                        )
+
+                        working_adapter.delete_vectors([doc_id])
+                        promoted_count += 1
+                        logger.info(f"Promoted {doc_id} to history (score: {score:.2f}, uses: {uses}, age: {age_hours:.1f}h)")
+
+                    # Cleanup: Remove items older than 24 hours that weren't promoted
+                    elif age_hours > 24:
+                        working_adapter.delete_vectors([doc_id])
+                        logger.info(f"Cleaned up old working memory {doc_id} (age: {age_hours:.1f}h, score: {score:.2f})")
+
+                except Exception as e:
+                    # v0.3.3: Per-ID error handling — one phantom/corrupt ID doesn't kill the batch
+                    logger.warning(f"Error processing working memory {doc_id}: {e}")
                     continue
-
-                metadata = doc.get("metadata", {})
-                checked_count += 1
-
-                # Get promotion criteria
-                text = metadata.get("text", "")
-                score = metadata.get("score", 0.5)
-                uses = metadata.get("uses", 0)
-                timestamp_str = metadata.get("timestamp") or metadata.get("created_at", "")
-
-                # Calculate age
-                age_hours = self._calculate_age_hours(timestamp_str)
-
-                # Promote if: high score AND used multiple times
-                if score >= self.config.promotion_score_threshold and uses >= 2:
-                    new_id = doc_id.replace("working_", "history_")
-
-                    await self.collections["history"].upsert_vectors(
-                        ids=[new_id],
-                        vectors=[await self.embed_fn(text)],
-                        metadatas=[{
-                            **metadata,
-                            "promoted_from": "working",
-                            "promotion_time": datetime.now().isoformat(),
-                            "promotion_reason": "batch_promotion"
-                        }]
-                    )
-
-                    working_adapter.delete_vectors([doc_id])
-                    promoted_count += 1
-                    logger.info(f"Promoted {doc_id} to history (score: {score:.2f}, uses: {uses}, age: {age_hours:.1f}h)")
-
-                # Cleanup: Remove items older than 24 hours that weren't promoted
-                elif age_hours > 24:
-                    working_adapter.delete_vectors([doc_id])
-                    logger.info(f"Cleaned up old working memory {doc_id} (age: {age_hours:.1f}h, score: {score:.2f})")
 
             if promoted_count > 0:
                 logger.info(f"Batch promotion: checked {checked_count}, promoted {promoted_count} memories")
@@ -475,20 +494,26 @@ class PromotionService:
             logger.info(f"Working memory cleanup: checking {len(all_ids)} items (max_age={max_age_hours}h)")
 
             for doc_id in all_ids:
-                doc = working_adapter.get_fragment(doc_id)
-                if not doc:
+                try:
+                    doc = working_adapter.get_fragment(doc_id)
+                    if not doc:
+                        continue
+
+                    metadata = doc.get("metadata", {})
+                    timestamp_str = metadata.get("timestamp") or metadata.get("created_at", "")
+                    age_hours = self._calculate_age_hours(timestamp_str)
+
+                    if age_hours > max_age_hours:
+                        working_adapter.delete_vectors([doc_id])
+                        cleaned_count += 1
+                        logger.info(f"Cleaned up old working memory {doc_id} (age: {age_hours:.1f}h)")
+                    else:
+                        logger.debug(f"Keeping working memory {doc_id} (age: {age_hours:.1f}h < {max_age_hours}h)")
+
+                except Exception as e:
+                    # v0.3.3: Per-ID error handling — one phantom/corrupt ID doesn't kill the batch
+                    logger.warning(f"Error processing working memory {doc_id}: {e}")
                     continue
-
-                metadata = doc.get("metadata", {})
-                timestamp_str = metadata.get("timestamp") or metadata.get("created_at", "")
-                age_hours = self._calculate_age_hours(timestamp_str)
-
-                if age_hours > max_age_hours:
-                    working_adapter.delete_vectors([doc_id])
-                    cleaned_count += 1
-                    logger.info(f"Cleaned up old working memory {doc_id} (age: {age_hours:.1f}h)")
-                else:
-                    logger.debug(f"Keeping working memory {doc_id} (age: {age_hours:.1f}h < {max_age_hours}h)")
 
             logger.info(f"Working memory cleanup complete: removed {cleaned_count} of {len(all_ids)} items")
             return cleaned_count
@@ -519,17 +544,23 @@ class PromotionService:
             all_ids = history_adapter.list_all_ids()
 
             for doc_id in all_ids:
-                doc = history_adapter.get_fragment(doc_id)
-                if not doc:
+                try:
+                    doc = history_adapter.get_fragment(doc_id)
+                    if not doc:
+                        continue
+
+                    metadata = doc.get("metadata", {})
+                    timestamp_str = metadata.get("timestamp") or metadata.get("created_at", "")
+                    age_hours = self._calculate_age_hours(timestamp_str)
+
+                    if age_hours > max_age_hours:
+                        history_adapter.delete_vectors([doc_id])
+                        cleaned_count += 1
+
+                except Exception as e:
+                    # v0.3.3: Per-ID error handling — one phantom/corrupt ID doesn't kill the batch
+                    logger.warning(f"Error processing history memory {doc_id}: {e}")
                     continue
-
-                metadata = doc.get("metadata", {})
-                timestamp_str = metadata.get("timestamp") or metadata.get("created_at", "")
-                age_hours = self._calculate_age_hours(timestamp_str)
-
-                if age_hours > max_age_hours:
-                    history_adapter.delete_vectors([doc_id])
-                    cleaned_count += 1
 
             if cleaned_count > 0:
                 logger.info(f"History cleanup: removed {cleaned_count} items older than {max_age_hours/24:.0f} days")

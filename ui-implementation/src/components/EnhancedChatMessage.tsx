@@ -11,6 +11,7 @@ interface EnhancedChatMessageProps {
     sender: 'user' | 'assistant';
     content: string;
     timestamp: Date;
+    images?: string[];  // v0.3.3 Section 4: base64 image URLs
     streaming?: boolean;
     thinking?: string;
     toolExecutions?: Array<{
@@ -126,8 +127,25 @@ export const EnhancedChatMessage: React.FC<EnhancedChatMessageProps> = ({
 
         {/* Message body */}
         {isUser ? (
-          // User messages are simple text
-          <div className="text-zinc-300 whitespace-pre-wrap">{message.content}</div>
+          // User messages: images + text
+          <div className="space-y-2">
+            {/* v0.3.3 Section 4: Image attachments */}
+            {message.images && message.images.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {message.images.map((img, idx) => (
+                  <img
+                    key={idx}
+                    src={img}
+                    alt={`attachment ${idx + 1}`}
+                    className="max-w-xs max-h-48 rounded-lg ring-1 ring-white/10 object-contain"
+                  />
+                ))}
+              </div>
+            )}
+            {message.content && (
+              <div className="text-zinc-300 whitespace-pre-wrap">{message.content}</div>
+            )}
+          </div>
         ) : (
           // Assistant messages have enhanced display with citations only
           <div className="space-y-3">

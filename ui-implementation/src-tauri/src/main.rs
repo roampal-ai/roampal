@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use futures_util::stream::TryStreamExt;
 
+// v0.3.3 Fix A: orphan-sidecar killer via Windows Job Object.
+mod job_object;
+use job_object::JobObjectGuard;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct FileContent {
     path: String,
@@ -149,6 +153,11 @@ async fn stream_llm_response(
 // Backend process state
 struct BackendProcess(Arc<Mutex<Option<Child>>>);
 
+// v0.3.3 Fix A: long-lived holder for the sidecar's Job Object guard. The
+// guard's Drop closes the job handle, which (because KILL_ON_JOB_CLOSE was
+// set at creation) kills every process inside — preventing orphans.
+struct BackendJob(Arc<Mutex<Option<JobObjectGuard>>>);
+
 // Read API port from backend/.env file
 fn read_api_port_from_env(backend_dir: &std::path::Path) -> u16 {
     let env_file = backend_dir.join(".env");
@@ -195,7 +204,7 @@ fn is_port_in_use(port: u16) -> bool {
 
 // Start the Python backend
 #[tauri::command]
-fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProcess>) -> Result<String, String> {
+fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProcess>, job_state: State<BackendJob>) -> Result<String, String> {
     println!("[start_backend] Command invoked");
 
     let mut backend = backend_state.0.lock().unwrap();
@@ -287,11 +296,15 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
             .env("PYTHONPATH", pythonpath)
             .env("ROAMPAL_API_PORT", api_port.to_string());
 
-        // Set ROAMPAL_DEV based on build type
-        #[cfg(debug_assertions)]
-        child_cmd.env("ROAMPAL_DEV", "1");
-        #[cfg(not(debug_assertions))]
-        child_cmd.env("ROAMPAL_DEV", "0");
+        // v0.3.3 Section 11: honor parent ROAMPAL_DEV if set; fall back to build type.
+        // Lets `Start Roampal DEV.bat` (which sets ROAMPAL_DEV=1 before launching the
+        // exe) actually reach the sidecar instead of being clobbered by the release
+        // build's hardcoded "0" — fixes the 2026-05-02 near-miss where a release
+        // build silently read prod ChromaDB despite the user setting ROAMPAL_DEV.
+        let dev_value = std::env::var("ROAMPAL_DEV").unwrap_or_else(|_| {
+            if cfg!(debug_assertions) { "1".to_string() } else { "0".to_string() }
+        });
+        child_cmd.env("ROAMPAL_DEV", dev_value);
 
         // v0.3.0: Pass ROAMPAL_DATA_DIR if set in .env (v0.2.12 compatibility)
         // This takes priority over ROAMPAL_DEV in settings.py
@@ -314,6 +327,28 @@ fn start_backend(app_handle: tauri::AppHandle, backend_state: State<BackendProce
             })?;
 
         println!("[start_backend] Backend process spawned successfully on port {}", api_port);
+
+        // v0.3.3 Fix A: assign the sidecar PID to a kernel-managed Job
+        // Object so the OS guarantees no orphan if Tauri dies. Replaces
+        // any previous job from an earlier start_backend call (the old
+        // guard's Drop kills its old child if still alive — defensive
+        // but normally the previous Child has already exited).
+        let pid = child.id();
+        match JobObjectGuard::create() {
+            Ok(guard) => match guard.assign(pid) {
+                Ok(()) => {
+                    println!("[start_backend] Assigned sidecar PID {} to KILL_ON_JOB_CLOSE job", pid);
+                    *job_state.0.lock().unwrap() = Some(guard);
+                }
+                Err(e) => {
+                    eprintln!("[start_backend] WARN: failed to assign sidecar to job: {} (sidecar will run unmanaged this session)", e);
+                }
+            },
+            Err(e) => {
+                eprintln!("[start_backend] WARN: failed to create job object: {} (sidecar will run unmanaged this session)", e);
+            }
+        }
+
         *backend = Some(child);
         Ok(format!("Backend started from {} on port {}", main_py.display(), api_port))
     }
@@ -405,11 +440,11 @@ fn run_mcp_backend() -> ! {
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
 
-        // Set ROAMPAL_DEV based on build type (single source of truth for data path)
-        #[cfg(debug_assertions)]
-        cmd.env("ROAMPAL_DEV", "1");
-        #[cfg(not(debug_assertions))]
-        cmd.env("ROAMPAL_DEV", "0");
+        // v0.3.3 Section 11: honor parent ROAMPAL_DEV if set; fall back to build type.
+        let dev_value = std::env::var("ROAMPAL_DEV").unwrap_or_else(|_| {
+            if cfg!(debug_assertions) { "1".to_string() } else { "0".to_string() }
+        });
+        cmd.env("ROAMPAL_DEV", dev_value);
 
         let mut child = cmd.spawn()
             .expect("Failed to start MCP server");
@@ -428,11 +463,11 @@ fn run_mcp_backend() -> ! {
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
 
-        // Set ROAMPAL_DEV based on build type (single source of truth for data path)
-        #[cfg(debug_assertions)]
-        cmd.env("ROAMPAL_DEV", "1");
-        #[cfg(not(debug_assertions))]
-        cmd.env("ROAMPAL_DEV", "0");
+        // v0.3.3 Section 11: honor parent ROAMPAL_DEV if set; fall back to build type.
+        let dev_value = std::env::var("ROAMPAL_DEV").unwrap_or_else(|_| {
+            if cfg!(debug_assertions) { "1".to_string() } else { "0".to_string() }
+        });
+        cmd.env("ROAMPAL_DEV", dev_value);
 
         let mut child = cmd.spawn()
             .expect("Failed to start MCP server");
@@ -451,9 +486,22 @@ fn main() {
 
     tauri::Builder::default()
         .manage(BackendProcess(Arc::new(Mutex::new(None))))
+        // v0.3.3 Fix A: paired state holding the sidecar's Job Object guard.
+        .manage(BackendJob(Arc::new(Mutex::new(None))))
         .setup(|app| {
             let main_window = app.get_window("main").unwrap();
-            main_window.set_title("Roampal - Your Private Intelligence")?;
+            // v0.3.3 Section 11: mark window title (DEV) when ROAMPAL_DEV is set,
+            // so screenshots / at-a-glance checks make the active install
+            // unmistakable. Mirrors the parent-env passthrough in start_backend.
+            let is_dev = std::env::var("ROAMPAL_DEV")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(cfg!(debug_assertions));
+            let title = if is_dev {
+                "Roampal (DEV) - Your Private Intelligence"
+            } else {
+                "Roampal - Your Private Intelligence"
+            };
+            main_window.set_title(title)?;
             main_window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
                 width: 1400,
                 height: 900,

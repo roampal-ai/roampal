@@ -38,6 +38,23 @@ def _is_stale_model_body(body: str) -> bool:
     return any(pat in low for pat in _STALE_MODEL_PATTERNS)
 
 
+def _strip_data_url_prefix(url: str) -> str:
+    """v0.3.3 Defect 3 fix: Ollama's /api/chat multimodal `images` field wants
+    raw base64, not the `data:image/...;base64,...` data-URL form the browser
+    FileReader produces. Strip the prefix if present; pass through otherwise.
+
+    Idempotent — already-raw base64 strings round-trip unchanged. LM Studio's
+    OpenAI-style endpoint keeps the full data URL inside its content_blocks.
+    """
+    if not isinstance(url, str):
+        return url
+    marker = ";base64,"
+    idx = url.find(marker)
+    if url.startswith("data:") and idx != -1:
+        return url[idx + len(marker):]
+    return url
+
+
 def _stale_model_user_message(model_name: str) -> str:
     """The single user-facing copy shown whenever any provider reports the
     currently-selected model is gone. Identical wording across Ollama + LM
@@ -141,7 +158,25 @@ class OllamaClient(LLMClientInterface):
                 response.raise_for_status()
                 data = response.json()
 
-                return data['choices'][0]['message']['content']
+                # v0.3.3 Defect 16: port reasoning_content fallback from
+                # roampal-core's sidecar_service.py:220-226 (the v0.5.3.1
+                # hotfix). qwen3-family thinking-mode models on LM Studio
+                # burn their max_tokens budget on `<think>...</think>` in
+                # the `reasoning_content` field and emit an empty `content`
+                # field. Without this fallback the sidecar's non-streaming
+                # `_call_llm` (modules/memory/sidecar_service.py:64-74)
+                # treats empty content as failure, the retry queue burns
+                # 3 attempts on the same condition, and `extract_facts`
+                # tasks get dropped after ~7 minutes — exact symptom Logan
+                # hit with qwen3.6-35b-a3b + mirror_chat.
+                #
+                # The streaming chat path (stream_response_with_tools) is
+                # unaffected: it discards reasoning_content chunks at line
+                # 1003 and renders only `content` chunks. This fix patches
+                # the parallel non-streaming path used by the sidecar.
+                message = data.get('choices', [{}])[0].get('message', {})
+                text = message.get('content', '') or message.get('reasoning_content', '')
+                return text
 
             except Exception as e:
                 logger.error(f"OpenAI-style API error: {e}")
@@ -167,8 +202,9 @@ class OllamaClient(LLMClientInterface):
         options = {}
 
         # Use centralized context configuration - no more duplicates!
-        from config.model_contexts import get_context_size
-        num_ctx = get_context_size(actual_model)
+        from config.model_contexts import get_context_size_async
+        provider = "lmstudio" if self.api_style == "openai" else "ollama"
+        num_ctx = await get_context_size_async(actual_model, provider=provider, base_url=self.base_url)
         options["num_ctx"] = num_ctx
         # v0.3.2.1: Removed hardcoded num_gpu=99 override. Forcing max GPU offload
         # produced "memory layout cannot be allocated with num_gpu = 99" errors on
@@ -500,6 +536,24 @@ class OllamaClient(LLMClientInterface):
             logger.error(f"Tool-enabled response failed: {e}")
             raise OllamaException(f"generate_response_with_tools failed: {e}") from e
 
+    def _clean_model_artifacts_streaming(self, text: str) -> str:
+        """v0.3.3 hotfix: streaming-safe subset of _clean_model_artifacts.
+
+        Per-chunk cleaning must NOT call .strip(), the newline collapser, or the
+        prefix remover — those eat the leading space SentencePiece-tokenized
+        models (Gemma, Llama, etc.) emit on every token, mashing words together.
+
+        Only the Harmony control-token regex is safe to apply per-chunk because
+        it matches whole tag literals (e.g. `<|channel|>`) that never straddle
+        normal whitespace. Full cleaning runs once on the accumulated response.
+        """
+        if not text:
+            return text
+        import re
+        text = re.sub(r'<\|[a-z_]+\|>', '', text)
+        text = re.sub(r'<channel\|[^>]*>', '', text, flags=re.IGNORECASE)
+        return text
+
     def _clean_model_artifacts(self, text: str, model: str, strip_thinking: bool = False) -> str:
         """Format model-specific artifacts for better display.
 
@@ -523,6 +577,11 @@ class OllamaClient(LLMClientInterface):
         # Remove common artifacts from any model
         # Remove excessive newlines
         text = re.sub(r'\n{4,}', '\n\n\n', text)
+
+        # v0.3.3: Strip OpenAI Harmony control tokens leaked by non-Harmony models
+        # Matches <channel|>, <|start|>, <|end|>, <|message|>, etc.
+        text = re.sub(r'<\|[a-z_]+\|>', '', text)
+        text = re.sub(r'<channel\|[^>]*>', '', text, flags=re.IGNORECASE)
 
         # Remove trailing/leading whitespace
         text = text.strip()
@@ -638,7 +697,8 @@ class OllamaClient(LLMClientInterface):
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        prompt_role: str = "user"
+        prompt_role: str = "user",
+        images: Optional[List[str]] = None,  # v0.3.3 Section 4: multimodal image support
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Stream response with tool support for function calling.
 
@@ -658,16 +718,89 @@ class OllamaClient(LLMClientInterface):
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         if history:
-            messages.extend(history)
-        # Only add prompt message if not empty - use specified role (default: user)
-        if prompt:
-            messages.append({"role": prompt_role, "content": prompt})
+            # v0.3.3 Section 4 Defect 5 fix: history entries are stored in
+            # provider-neutral Ollama-native shape ({role, content: str, images: [data_url]}).
+            # Convert to the active provider's expected wire format here so
+            # replayed turns don't crash Ollama with "unmarshal array".
+            for _h in history:
+                if isinstance(_h, dict) and _h.get("images"):
+                    _imgs = _h["images"]
+                    if self.api_style == "openai":
+                        # LM Studio: convert to OpenAI content_blocks (full data URLs)
+                        messages.append({
+                            "role": _h.get("role", "user"),
+                            "content": [
+                                {"type": "text", "text": _h.get("content", "")},
+                                *[{"type": "image_url", "image_url": {"url": img}} for img in _imgs],
+                            ],
+                        })
+                    else:
+                        # Ollama native: string content + sibling raw-base64 images
+                        messages.append({
+                            "role": _h.get("role", "user"),
+                            "content": _h.get("content", ""),
+                            "images": [_strip_data_url_prefix(img) for img in _imgs],
+                        })
+                elif isinstance(_h, dict) and isinstance(_h.get("content"), list):
+                    # Legacy content_blocks shape from pre-fix sessions — normalize.
+                    _text_parts = [b.get("text", "") for b in _h["content"] if isinstance(b, dict) and b.get("type") == "text"]
+                    _img_urls = [b["image_url"]["url"] for b in _h["content"] if isinstance(b, dict) and b.get("type") == "image_url" and isinstance(b.get("image_url"), dict) and b["image_url"].get("url")]
+                    if self.api_style == "openai":
+                        # Re-emit as content_blocks
+                        messages.append(_h)
+                    else:
+                        messages.append({
+                            "role": _h.get("role", "user"),
+                            "content": "\n".join(_text_parts),
+                            "images": [_strip_data_url_prefix(u) for u in _img_urls],
+                        } if _img_urls else {
+                            "role": _h.get("role", "user"),
+                            "content": "\n".join(_text_parts),
+                        })
+                else:
+                    messages.append(_h)
+        # v0.3.3 §4 Defect 6 fix: image-only sends (prompt="" + images present) must
+        # still emit a user message — previously this branch's `if prompt:` gate
+        # dropped the entire user turn when text was empty, leaving the model with
+        # only system context (generic response, image never seen).
+        _has_images = bool(images and len(images) > 0)
+        if prompt or _has_images:
+            # v0.3.3 Section 4 + Defect 3 fix: multimodal payload shape depends on provider.
+            # - Ollama /api/chat expects: {"content": "<text>", "images": ["<raw base64>"]}
+            #   (plain string content + sibling images array; base64 WITHOUT the data: prefix)
+            # - LM Studio /v1/chat/completions expects OpenAI content_blocks:
+            #   [{"type": "text", ...}, {"type": "image_url", ...}]
+            # Sending content_blocks to Ollama returns:
+            #   "json: cannot unmarshal array into Go struct field ChatRequest.messages.content of type string"
+            if images and len(images) > 0:
+                if self.api_style == "openai":
+                    # LM Studio: nested content_blocks with full data URLs
+                    msg_payload: Dict[str, Any] = {
+                        "role": prompt_role,
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            *[{"type": "image_url", "image_url": {"url": img}} for img in images],
+                        ],
+                    }
+                else:
+                    # Ollama native: string content + sibling images of raw base64
+                    msg_payload = {
+                        "role": prompt_role,
+                        "content": prompt,
+                        "images": [_strip_data_url_prefix(img) for img in images],
+                    }
+                messages.append(msg_payload)
+            else:
+                messages.append({"role": prompt_role, "content": prompt})
 
         actual_model = model or self.model_name
         logger.info(f"[STREAM WITH TOOLS] Using model: {actual_model}")
         logger.info(f"[DEBUG MESSAGES] Message count: {len(messages)}, Roles: {[m['role'] for m in messages]}")
         if messages:
-            logger.info(f"[DEBUG MESSAGES] Last 200 chars of last message: {messages[-1]['content'][-200:]}")
+            # Multimodal content may be a list; defensively render for the debug log only
+            _last = messages[-1].get("content", "")
+            _last_str = _last if isinstance(_last, str) else str(_last)
+            logger.info(f"[DEBUG MESSAGES] Last 200 chars of last message: {_last_str[-200:]}")
 
         # v0.3.2: No tool-support blocklist. The set of models is effectively
         # infinite and any hard-coded list goes stale the day a new release
@@ -684,12 +817,88 @@ class OllamaClient(LLMClientInterface):
 
         # Use centralized context configuration
         # v0.3.2.1: Removed num_gpu=99 override; Ollama auto-detects layer offload.
-        from config.model_contexts import get_context_size
-        num_ctx = get_context_size(actual_model)
+        from config.model_contexts import get_context_size_async
+        provider = "lmstudio" if self.api_style == "openai" else "ollama"
+        num_ctx = await get_context_size_async(actual_model, provider=provider, base_url=self.base_url)
         payload["options"] = {
             "num_ctx": num_ctx,
         }
         logger.info(f"[STREAM WITH TOOLS] Set context window to {num_ctx} for {actual_model}")
+
+        # v0.3.3 Defect 22 belt-and-suspenders: pre-validate prompt size against the
+        # model's ACTUAL loaded context window (LM Studio specifically), where overflow
+        # surfaces as an opaque server error whose exact wording varies. If we can
+        # statically determine the prompt won't fit, yield the friendly "unload →
+        # resize → reload" message without making the round trip.
+        #
+        # CRITICAL: `num_ctx` above is the model's MAX context (from MODEL_CONTEXTS
+        # priority chain), not LM Studio's currently-loaded context. The user's UI
+        # slider in LM Studio controls the loaded value independently, and overflow
+        # happens against the loaded value. We must query `/api/v0/models` to read
+        # `loaded_context_length` directly — that's the only reliable source.
+        #
+        # The estimator is intentionally CONSERVATIVE — `approximate_token_count`
+        # (whitespace split) under-counts real tokens, so the gate only fires when
+        # we're confident the prompt overflows. Real-token-count overflows that slip
+        # past this gate still hit the broadened error-string matcher (Defect 22 core).
+        if self.api_style == "openai":
+            try:
+                from utils.text_utils import approximate_token_count
+                # Fetch LM Studio's actual loaded_context_length for this model.
+                loaded_ctx = None
+                try:
+                    v0_resp = await self.client.get("/api/v0/models", timeout=2.0)
+                    if v0_resp.status_code == 200:
+                        for _m in v0_resp.json().get("data", []):
+                            if _m.get("id") == actual_model:
+                                loaded_ctx = _m.get("loaded_context_length")
+                                break
+                except Exception as _e:
+                    logger.debug(f"[PRE-VALIDATE] /api/v0/models unreachable: {_e}")
+
+                if loaded_ctx and loaded_ctx > 0:
+                    est_tokens = 0
+                    for _msg in messages:
+                        _content = _msg.get("content", "")
+                        if isinstance(_content, str):
+                            est_tokens += approximate_token_count(_content)
+                        elif isinstance(_content, list):
+                            # OpenAI content_blocks shape (multimodal). Count text blocks only;
+                            # image-url blocks are tokenized by the vision encoder separately
+                            # and we don't try to estimate them here.
+                            for _block in _content:
+                                if isinstance(_block, dict) and _block.get("type") == "text":
+                                    est_tokens += approximate_token_count(_block.get("text", ""))
+                    if est_tokens > loaded_ctx:
+                        logger.warning(
+                            f"[PRE-VALIDATE] Prompt estimated at {est_tokens} tokens exceeds "
+                            f"{actual_model}'s LM-Studio-loaded context window of {loaded_ctx}; "
+                            f"yielding friendly LM Studio context-overflow message without sending."
+                        )
+                        yield {
+                            "type": "text",
+                            "content": (
+                                f"**Context Length Error:** LM Studio loaded `{actual_model}` with only {loaded_ctx} tokens "
+                                f"of context, but this conversation is approximately {est_tokens} tokens.\n\n"
+                                f"**Fix in LM Studio (must be done there, not in Roampal):**\n"
+                                f"1. In LM Studio, **unload** the model first\n"
+                                f"2. Change the Context Length slider to at least **8192** (16384+ recommended)\n"
+                                f"3. **Load** the model again\n\n"
+                                f"*LM Studio ignores context settings unless you reload the model. Roampal's context settings only work with Ollama.*"
+                            ),
+                        }
+                        yield {"type": "done"}
+                        return
+                    else:
+                        logger.debug(
+                            f"[PRE-VALIDATE] Prompt {est_tokens} tokens fits within "
+                            f"loaded context {loaded_ctx} for {actual_model}; sending."
+                        )
+            except Exception as e:
+                # Pre-validation is best-effort. If anything goes wrong, fall through
+                # to the actual request and let the post-response error matcher handle
+                # the overflow (Defect 22 core fix covers that path).
+                logger.debug(f"[PRE-VALIDATE] Skipping pre-flight check: {e}")
 
         # Pass tools if supplied. Incompatible models are detected from the
         # server's response body and handled via a no-tools retry path.
@@ -842,8 +1051,16 @@ class OllamaClient(LLMClientInterface):
                                     yield {"type": "done"}
                                     return
 
-                                # Provide helpful context-specific error messages
-                                if "context" in error_msg.lower() and ("overflow" in error_msg.lower() or "length" in error_msg.lower()):
+                                # Provide helpful context-specific error messages.
+                                # v0.3.3 Defect 22: LM Studio's actual wording is
+                                # "Context size has been exceeded." — broaden the
+                                # keyword set so the friendly handler fires regardless
+                                # of which exact phrasing the backend uses.
+                                err_lower = error_msg.lower()
+                                if "context" in err_lower and any(
+                                    k in err_lower
+                                    for k in ("overflow", "length", "exceeded", "size", "too long")
+                                ):
                                     # v0.3.2: dropped the "Or use Ollama instead: ollama pull {actual_model}"
                                     # line — LM Studio model IDs don't match Ollama's naming convention, so
                                     # that suggested command always failed (e.g., qwen2.5-14b-instruct → not a
@@ -1068,12 +1285,19 @@ class OllamaClient(LLMClientInterface):
                             content = message["content"]
                             accumulated_content += content
 
+                            # v0.3.3: Strip Harmony control tokens per chunk
+                            # (safe — Harmony tags never straddle whitespace). The full
+                            # _clean_model_artifacts pass with .strip() etc. happens once
+                            # at end of stream on accumulated_content, so per-token leading
+                            # spaces from SentencePiece tokenizers (Gemma, Llama) survive.
+                            cleaned = self._clean_model_artifacts_streaming(content)
+
                             # DEBUG: Log chunks containing think tags to diagnose splitting
                             if '<think' in content or '</think' in content or 'think>' in content:
                                 logger.info(f"[OLLAMA THINK DEBUG] Raw chunk from Ollama: '{content}'")
 
-                            logger.debug(f"[STREAM DEBUG] Yielding text chunk (length: {len(content)})")
-                            yield {"type": "text", "content": content}
+                            logger.debug(f"[STREAM DEBUG] Yielding text chunk (length: {len(cleaned)})")
+                            yield {"type": "text", "content": cleaned}
                             yield_count += 1
                         else:
                             logger.debug(f"[STREAM DEBUG] Message has no 'content' field")

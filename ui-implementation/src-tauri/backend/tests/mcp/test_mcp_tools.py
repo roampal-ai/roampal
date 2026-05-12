@@ -371,7 +371,6 @@ class TestRecordResponseTool:
         memory = MagicMock()
         memory.store = AsyncMock(return_value="working_123")
         memory.record_outcome = AsyncMock()
-        memory.record_action_outcome = AsyncMock()
         memory._update_kg_routing = AsyncMock()
         return memory
 
@@ -461,30 +460,6 @@ class TestRecordResponseTool:
         metadata = call_args.kwargs.get("metadata", {})
         # Worked should have higher initial score
         assert metadata.get("score", 0.7) >= 0.7
-
-    @pytest.mark.asyncio
-    async def test_record_tracks_actions(self, mock_memory):
-        """Should score cached actions with outcome."""
-        from tests.mcp.mcp_tool_harness import (
-            call_record_response, set_action_cache
-        )
-
-        # Pre-populate action cache
-        set_action_cache("test_session", [{
-            "action_type": "search_memory",
-            "context_type": "coding",
-            "outcome": "unknown",
-            "collection": "books"
-        }])
-
-        await call_record_response(
-            memory=mock_memory,
-            arguments={"key_takeaway": "Test", "outcome": "worked"},
-            session_id="test_session"
-        )
-
-        # Should have called record_action_outcome
-        mock_memory.record_action_outcome.assert_called()
 
 
 class TestToolSchemaCompliance:

@@ -562,5 +562,107 @@ class TestCreatedAtFallback:
         history.delete_vectors.assert_called_once_with(["history_core_old"])
 
 
+class TestPhantomIDResilience:
+    """Test that phantom/corrupt IDs don't crash batch operations (v0.3.3)."""
+
+    @pytest.mark.asyncio
+    async def test_batch_promotion_skips_phantom_id(self):
+        """Batch promotion must continue when one ID throws an error."""
+        working = MagicMock()
+        working.list_all_ids = MagicMock(return_value=[
+            "working_good",
+            "working_phantom",  # will raise on get_fragment
+        ])
+
+        call_count = [0]
+        def side_effect_get(doc_id):
+            if doc_id == "working_phantom":
+                raise Exception("Error finding id 'working_phantom'")
+            return {
+                "metadata": {
+                    "created_at": datetime.now().isoformat(),
+                    "text": "good memory",
+                    "score": 0.5,
+                    "uses": 1,
+                }
+            }
+
+        working.get_fragment = MagicMock(side_effect=side_effect_get)
+        working.delete_vectors = MagicMock()
+
+        service = PromotionService(
+            collections={"working": working},
+            embed_fn=AsyncMock(),
+        )
+
+        count = await service.promote_valuable_working_memory()
+
+        # Should not crash, and should process 1 item (the good one)
+        assert count == 0  # score too low to promote
+        assert call_count[0] >= 0  # didn't raise
+
+    @pytest.mark.asyncio
+    async def test_cleanup_old_working_skips_phantom_id(self):
+        """cleanup_old_working_memory must continue when one ID throws."""
+        working = MagicMock()
+        working.list_all_ids = MagicMock(return_value=[
+            "working_good",
+            "working_phantom",  # will raise on get_fragment
+        ])
+
+        def side_effect_get(doc_id):
+            if doc_id == "working_phantom":
+                raise Exception("Error finding id 'working_phantom'")
+            return {
+                "metadata": {
+                    "created_at": (datetime.now() - timedelta(hours=48)).isoformat(),
+                }
+            }
+
+        working.get_fragment = MagicMock(side_effect=side_effect_get)
+        working.delete_vectors = MagicMock()
+
+        service = PromotionService(
+            collections={"working": working},
+            embed_fn=AsyncMock(),
+        )
+
+        count = await service.cleanup_old_working_memory(max_age_hours=24.0)
+
+        assert count == 1  # only the good one was cleaned
+        working.delete_vectors.assert_called_once_with(["working_good"])
+
+    @pytest.mark.asyncio
+    async def test_cleanup_old_history_skips_phantom_id(self):
+        """cleanup_old_history must continue when one ID throws."""
+        history = MagicMock()
+        history.list_all_ids = MagicMock(return_value=[
+            "history_good",
+            "history_phantom",  # will raise on get_fragment
+        ])
+
+        def side_effect_get(doc_id):
+            if doc_id == "history_phantom":
+                raise Exception("Error finding id 'history_phantom'")
+            return {
+                "metadata": {
+                    "created_at": (datetime.now() - timedelta(days=40)).isoformat(),
+                }
+            }
+
+        history.get_fragment = MagicMock(side_effect=side_effect_get)
+        history.delete_vectors = MagicMock()
+
+        service = PromotionService(
+            collections={"history": history},
+            embed_fn=AsyncMock(),
+        )
+
+        count = await service.cleanup_old_history(max_age_hours=720.0)
+
+        assert count == 1  # only the good one was cleaned
+        history.delete_vectors.assert_called_once_with(["history_good"])
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

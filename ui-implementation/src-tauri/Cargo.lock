@@ -3223,7 +3223,7 @@ dependencies = [
 
 [[package]]
 name = "roampal"
-version = "0.3.2-hotfix.1"
+version = "0.3.3"
 dependencies = [
  "futures-util",
  "reqwest",
@@ -3233,6 +3233,7 @@ dependencies = [
  "tauri-build",
  "tokio",
  "tokio-util",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

@@ -409,3 +409,78 @@ class TestFormatSearchResultsAsCitations:
         citations = _format_search_results_as_citations(results)
 
         assert citations[0]["source"] == "custom_source"
+
+
+class TestAgentChatRequestValidation:
+    """v0.3.3 Section 4 / Defect 1: image-only sends must be accepted.
+
+    Pre-fix, the per-field validator on `message` rejected empty strings
+    unconditionally with HTTP 422, even when an image attachment was present.
+    Section 4's acceptance criterion explicitly permits image-only sends
+    (send button enabled in the UI with no text caption).
+    """
+
+    def _build(self, **kwargs):
+        from app.routers.agent_chat import AgentChatRequest
+        return AgentChatRequest(**kwargs)
+
+    def test_text_only_accepted(self):
+        req = self._build(message="hello")
+        assert req.message == "hello"
+        assert req.images is None
+
+    def test_image_only_accepted_with_empty_message(self):
+        req = self._build(
+            message="",
+            images=["data:image/png;base64,iVBORw0KGgo="],
+        )
+        assert req.message == ""
+        assert req.images == ["data:image/png;base64,iVBORw0KGgo="]
+
+    def test_image_only_accepted_with_whitespace_message(self):
+        req = self._build(
+            message="   ",
+            images=["data:image/png;base64,iVBORw0KGgo="],
+        )
+        assert req.images == ["data:image/png;base64,iVBORw0KGgo="]
+
+    def test_text_plus_images_accepted(self):
+        req = self._build(
+            message="describe this",
+            images=["data:image/png;base64,iVBORw0KGgo="],
+        )
+        assert req.message == "describe this"
+        assert len(req.images) == 1
+
+    def test_empty_message_no_images_rejected(self):
+        import pydantic
+        with pytest.raises(pydantic.ValidationError) as exc:
+            self._build(message="")
+        assert "Either message or images must be provided" in str(exc.value)
+
+    def test_whitespace_message_no_images_rejected(self):
+        import pydantic
+        with pytest.raises(pydantic.ValidationError) as exc:
+            self._build(message="   ")
+        assert "Either message or images must be provided" in str(exc.value)
+
+    def test_empty_message_empty_images_list_rejected(self):
+        import pydantic
+        with pytest.raises(pydantic.ValidationError) as exc:
+            self._build(message="", images=[])
+        assert "Either message or images must be provided" in str(exc.value)
+
+    def test_long_message_still_capped_when_present(self):
+        """Per-field length cap remains enforced when message is non-empty."""
+        import pydantic
+        long_text = "x" * 10_001
+        with pytest.raises(pydantic.ValidationError) as exc:
+            self._build(message=long_text)
+        assert "exceeds maximum length" in str(exc.value)
+
+    def test_control_characters_stripped(self):
+        """Per-field control-char strip still runs."""
+        req = self._build(message="hello\x00world\x01")
+        assert "\x00" not in req.message
+        assert "\x01" not in req.message
+        assert "helloworld" in req.message

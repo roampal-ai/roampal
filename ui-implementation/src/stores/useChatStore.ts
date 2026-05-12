@@ -74,7 +74,7 @@ interface ChatState {
   // Mode system removed - RoamPal always uses memory
 
   // Actions
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, imageFiles?: File[]) => Promise<void>;
   createConversation: () => Promise<void>;
   switchConversation: (newId: string) => Promise<void>;
   searchMemory: (query: string) => Promise<void>;
@@ -368,6 +368,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
               }));
             }
 
+            // v0.3.3 §4 Defect 4: image attachments are persisted as filenames.
+            // Resolve each to a /api/attachments/<filename> URL the <img> tag can fetch.
+            const resolvedImages = Array.isArray(msg.images)
+              ? msg.images.map((f: string) => `${ROAMPAL_CONFIG.apiUrl}/api/attachments/${f}`)
+              : undefined;
+
             return {
               id: `msg-${msg.timestamp || Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
               sender: msg.role === 'user' ? 'user' : 'assistant',
@@ -376,6 +382,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
               thinking: thinking,
               toolExecutions: toolExecutions,
               events: events,  // v0.3.0: Interleaved events for proper tool ordering
+              images: resolvedImages && resolvedImages.length > 0 ? resolvedImages : undefined,
               streaming: false
             };
           });
@@ -1131,7 +1138,21 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   },
 
   // Send message with proper conversation tracking
-  sendMessage: async (text: string) => {
+  // v0.3.3 Section 4: Convert File[] to base64 strings for backend
+  fileToBase64: (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Strip "data:image/...;base64," prefix — backend expects raw base64 or data URL
+        resolve(result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  },
+
+  sendMessage: async (text: string, imageFiles?: File[]) => {
     const state = get();
 
     // Abort any existing request before starting new one (prevents rapid-fire race)
@@ -1164,12 +1185,26 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       }
     }
 
+    // v0.3.3 Section 4: Convert image files to base64 for backend + UI display
+    let imageUrls: string[] = [];
+    if (imageFiles && imageFiles.length > 0) {
+      const fileToBase64 = (file: File): Promise<string> =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      imageUrls = await Promise.all(imageFiles.map(fileToBase64));
+    }
+
     // Add user message to UI
     const userMessage: any = {
       id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       sender: 'user' as const,
       content: text,
       timestamp: new Date(),
+      images: imageUrls.length > 0 ? imageUrls : undefined,
     };
 
     set((state) => ({
@@ -1203,11 +1238,26 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         abortController
       }));
 
-      const requestBody = {
+      const requestBody: any = {
         message: text,
         conversation_id: conversationId,
         transparency_level: localStorage.getItem('transparencyLevel') || 'summary'
       };
+      if (imageUrls.length > 0) {
+        requestBody.images = imageUrls;  // v0.3.3 Section 4: multimodal images
+      }
+      // v0.3.3 Defect 4 diagnostic: confirm images make it into the request body
+      const _serializedBody = JSON.stringify(requestBody);
+      console.log('[IMAGE DIAG]', {
+        imageFilesArgLength: imageFiles ? imageFiles.length : 'undef',
+        imageUrlsLength: imageUrls.length,
+        firstImageUrlPrefix: imageUrls.length > 0 ? imageUrls[0].substring(0, 60) : 'none',
+        firstImageUrlFullLength: imageUrls.length > 0 ? imageUrls[0].length : 0,
+        requestBodyHasImages: 'images' in requestBody,
+        requestBodyImagesLength: requestBody.images ? requestBody.images.length : 'absent',
+        serializedBodyByteLength: _serializedBody.length,
+        serializedBodyContainsImages: _serializedBody.includes('"images"'),
+      });
 
       // Start async generation task
       console.log('[POLLING] Starting async generation');
@@ -1524,6 +1574,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
             ? new Date(msg.timestamp.replace('T', ' '))
             : new Date();
 
+          // v0.3.3 §4 Defect 4: image attachments stored as filenames; resolve to URLs.
+          const resolvedImages = Array.isArray(msg.images) && msg.images.length > 0
+            ? msg.images.map((f: string) => `${ROAMPAL_CONFIG.apiUrl}/api/attachments/${f}`)
+            : undefined;
+
           return {
             id: `msg-${Date.now()}-${Math.random()}`,
             sender: msg.role === 'user' ? 'user' : 'assistant',
@@ -1535,6 +1590,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
             ...(msg.metadata?.hybridEvents ? { hybridEvents: msg.metadata.hybridEvents } : {}),
             ...(msg.actions ? { actions: msg.actions } : {}),
             ...(msg.citations ? { citations: msg.citations } : {}),
+            ...(resolvedImages ? { images: resolvedImages } : {}),
             // v0.3.0: Build interleaved events array from toolEvents with content_position
             ...(() => {
               const toolEvents = msg.metadata?.toolEvents;

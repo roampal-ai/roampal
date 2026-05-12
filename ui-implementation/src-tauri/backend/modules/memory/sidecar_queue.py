@@ -18,6 +18,36 @@ _sidecar_retry_queue: List[Dict[str, Any]] = []
 _busy_clients = set()
 _client_locks = {}  # per-client locks for sequential execution
 
+# v0.3.3 Defect 14: callbacks for terminal-failure notification + retry success.
+# The retry queue is decoupled from app.state, so the agent_chat side registers
+# callbacks at startup that mutate `app.state.sidecar_last_error`. This keeps
+# the queue module free of HTTP/Tauri concerns while letting the UI's
+# sidecar-status indicator reflect the queue's actual outcome (NOT the first
+# transient failure that the queue is designed to absorb).
+_terminal_failure_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+_retry_success_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+
+
+def register_terminal_failure_callback(cb: Callable[[Dict[str, Any]], None]) -> None:
+    """Set the callback fired when a retry task exhausts its budget.
+
+    Callback receives the dead-letter item: `{task_type, doc_id, retry_count,
+    last_error, ...}`. Use it to surface a user-visible "sidecar dropped a
+    score" indicator. NOT fired on transient single-attempt failures.
+    """
+    global _terminal_failure_callback
+    _terminal_failure_callback = cb
+
+
+def register_retry_success_callback(cb: Callable[[Dict[str, Any]], None]) -> None:
+    """Set the callback fired when a previously-queued task succeeds on retry.
+
+    Callback receives the successful item. Use it to clear a previously-set
+    failure indicator now that the queue self-healed.
+    """
+    global _retry_success_callback
+    _retry_success_callback = cb
+
 
 def get_client_lock(client_id: str) -> asyncio.Lock:
     """Get or create a lock for a specific client."""
@@ -139,6 +169,16 @@ async def process_retry_queue() -> None:
 
                     if result is not None:
                         logger.info(f"[SIDECAR] Retry successful for {item['doc_id']}")
+                        # v0.3.3 Defect 14: notify the status surface that the
+                        # previously-queued task self-healed — clears any stale
+                        # last-error message on app.state.
+                        if _retry_success_callback is not None:
+                            try:
+                                _retry_success_callback(item)
+                            except Exception as cb_err:
+                                logger.warning(
+                                    f"[SIDECAR] retry_success_callback raised (non-fatal): {cb_err}"
+                                )
                         processed.append(item)
                     else:
                         # Task failed again
@@ -158,6 +198,18 @@ async def process_retry_queue() -> None:
 
             elif item["retry_count"] >= item["max_retries"]:
                 logger.error(f"[SIDECAR] Max retries exceeded for {item['doc_id']}")
+                # v0.3.3 Defect 14: terminal failure — queue exhausted its
+                # budget and is dropping this score. Notify the status surface
+                # so the UI's sidecar-status indicator can flip red. This is
+                # the only path that should alarm the user; transient single-
+                # attempt failures get absorbed silently by the retry queue.
+                if _terminal_failure_callback is not None:
+                    try:
+                        _terminal_failure_callback(item)
+                    except Exception as cb_err:
+                        logger.warning(
+                            f"[SIDECAR] terminal_failure_callback raised (non-fatal): {cb_err}"
+                        )
                 processed.append(item)
 
         # Remove processed items

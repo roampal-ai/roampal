@@ -499,20 +499,53 @@ class ChromaDBAdapter:
             return {}
 
     def list_all_ids(self) -> List[str]:
+        """List all valid IDs in the collection.
+
+        ChromaDB can throw "Error finding id" for ghost entries (IDs in HNSW index
+        but no document). This is caught and returns [] to prevent cascade failures
+        during batch loops (promotion, cleanup, etc.).
+
+        v0.3.3: Matches core v0.5.5 approach. Soft delete + startup phantom migration
+        prevents new phantoms; this try/except catches any that slip through.
+        """
         if self.collection is None:
             raise RuntimeError("ChromaDB collection not initialized")
+
         try:
-            result = self.collection.get(include=[])
-            return result.get('ids', [])
+            result = self.collection.get(include=["documents", "metadatas"])
+            ids = result.get('ids', [])
+            # v0.3.3 Section 8B: OR-form phantom filter (mirrors core v0.5.6 Item 6).
+            # Reject when EITHER document or metadata is missing/empty. Previous
+            # AND-form only rejected when both were absent, letting mid-state
+            # phantoms (one field cleared, the other still HNSW-cached) leak
+            # through as "valid." Legitimate ChromaDB entries always have both.
+            documents = result.get("documents", [])
+            metadatas = result.get("metadatas", [])
+            valid_ids = []
+            phantom_count = 0
+            for i, doc_id in enumerate(ids):
+                doc = documents[i] if isinstance(documents, (list, tuple)) and i < len(documents) else None
+                meta = metadatas[i] if isinstance(metadatas, (list, tuple)) and i < len(metadatas) else None
+                is_phantom = doc is None or meta is None or not meta
+                if is_phantom:
+                    phantom_count += 1
+                else:
+                    valid_ids.append(doc_id)
+
+            if phantom_count > 0:
+                import os as _os
+                collection_name = getattr(self.collection, "name", "unknown")
+                logger.warning(
+                    f"[PHANTOM] Filtered {phantom_count} phantom entries from {collection_name} "
+                    f"({len(valid_ids)} valid remaining) — pid={_os.getpid()}"
+                )
+            return valid_ids
+
         except Exception as e:
-            # v0.3.2 (0i): Structured logging so we can tell same-process
-            # vs cross-process collisions (Roampal desktop ↔ `pip install roampal`
-            # CLI both attaching to the same embedded DB). Ship fix in 0.3.3.
             import os as _os
             collection_name = getattr(self.collection, "name", "unknown")
             logger.warning(
-                "chromadb.error call=list_all_ids collection=%s pid=%d err=%r",
-                collection_name, _os.getpid(), e,
+                f"[PHANTOM] ChromaDB error listing IDs for {collection_name}: {e} — pid={_os.getpid()}"
             )
             return []
 

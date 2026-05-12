@@ -186,10 +186,19 @@ async def delete_memory(
     doc_id: str
 ):
     """
-    User permanently deletes memory (hard delete).
+    User soft-deletes (archives) an active memory_bank entry.
+
+    v0.3.3 Section 7: this endpoint routes through `user_delete_memory()`
+    which calls `archive(reason="user_delete")` — the entry stays on disk
+    with status=archived, becomes invisible to retrieval/dedup, and can be
+    restored later via `/restore/{doc_id}`. The docstring previously claimed
+    "hard delete" which was misleading after Section 7's refactor (Defect 13
+    fix 2026-05-11 — docstring corrected; new `/permanent-delete/{doc_id}`
+    endpoint added below for the actual hard-delete path used from the
+    archived view).
 
     Args:
-        doc_id: Memory ID to delete
+        doc_id: Memory ID to archive
 
     Returns:
         Success status
@@ -213,6 +222,60 @@ async def delete_memory(
     except Exception as e:
         logger.error(f"Error deleting memory: {e}", exc_info=True)
         raise HTTPException(500, f"Failed to delete memory: {str(e)}")
+
+
+@router.delete("/permanent-delete/{doc_id}")
+async def permanent_delete_memory(
+    request: Request,
+    doc_id: str
+):
+    """
+    User permanently hard-deletes an archived memory_bank entry.
+
+    v0.3.3 Defect 13: closes the gap left by Section 7 + 8F. Section 7
+    re-routed `user_delete_memory()` to soft-archive, and Section 8F
+    renamed the backend `delete()` method to `delete_permanent(force=True)`,
+    but no HTTP route was exposed for the new hard-delete path. The
+    archived view's "Delete" button silently called `/delete/{doc_id}`
+    which is now a no-op on already-archived entries.
+
+    This endpoint:
+      1. Hard-deletes the underlying ChromaDB vector via
+         `user_permanent_delete_memory()` (internally calls
+         `delete_permanent(force=True)`).
+      2. Immediately runs a phantom sweep to clean up the HNSW debris
+         this kind of delete leaves behind, so future dedup writes
+         against the same content are not blocked.
+
+    Caller contract: meant for "I never want to see this again" from the
+    archived view. For "remove from active list, keep recoverable" use
+    `/delete/{doc_id}` (soft-archive).
+
+    Args:
+        doc_id: Memory ID to permanently delete
+
+    Returns:
+        Success status
+    """
+    memory = request.app.state.memory
+    if not memory:
+        raise HTTPException(503, "Memory system not available")
+
+    try:
+        success = await memory.user_permanent_delete_memory(doc_id)
+        if not success:
+            raise HTTPException(404, "Memory not found or delete failed")
+
+        return {
+            "status": "permanently_deleted",
+            "doc_id": doc_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error permanently deleting memory: {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to permanently delete memory: {str(e)}")
 
 
 @router.get("/search")

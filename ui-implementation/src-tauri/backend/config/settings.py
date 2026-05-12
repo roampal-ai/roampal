@@ -37,9 +37,13 @@ else:  # Linux
     DATA_PATH = os.path.expanduser(f'~/.local/share/{app_folder.lower()}/data')
 
 os.makedirs(DATA_PATH, exist_ok=True)
+# v0.3.3 Section 11: promote mode/path report to logger so it lands in
+# roampal.log, not just stdout. Anyone tracking down a dev/prod data-dir
+# mix-up (2026-05-02 incident) can read this from the log file.
+ROAMPAL_MODE = "DEV" if ROAMPAL_DEV or (ROAMPAL_DATA_DIR and "DEV" in ROAMPAL_DATA_DIR.upper()) else "PROD"
 if "--mcp" not in sys.argv:
-    mode = "DEV" if ROAMPAL_DEV or (ROAMPAL_DATA_DIR and "DEV" in ROAMPAL_DATA_DIR.upper()) else "PROD"
-    print(f"[Roampal] {mode} mode: {DATA_PATH}")
+    print(f"[Roampal] {ROAMPAL_MODE} mode: {DATA_PATH}")
+logger.info(f"[Roampal] {ROAMPAL_MODE} mode: {DATA_PATH}")
 
 ROAMPAL_DATA_PATH = DATA_PATH
 

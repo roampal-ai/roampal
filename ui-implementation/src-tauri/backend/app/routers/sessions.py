@@ -159,7 +159,10 @@ async def load_session(session_id: str, request: Request) -> SessionLoadResponse
                             "content": msg_data.get("content"),
                             "timestamp": msg_data.get("timestamp"),
                             "metadata": msg_data.get("metadata", {}),
-                            "citations": msg_data.get("citations", [])
+                            "citations": msg_data.get("citations", []),
+                            # v0.3.3 §4 Defect 4: image attachments stored as filenames;
+                            # frontend resolves each to /api/attachments/<filename>.
+                            "images": msg_data.get("images", []),
                         })
                     else:
                         # Old format - has user and/or assistant fields in same entry

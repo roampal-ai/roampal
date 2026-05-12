@@ -6,8 +6,8 @@ Roampal is fully open source. You can build from source for development or perso
 
 - **Backend:** Python FastAPI + embedded Python runtime at `ui-implementation/src-tauri/binaries/python/`
 - **Frontend:** Tauri (Rust) + React + TypeScript
-- **Database:** ChromaDB (vector store) + SQLite
-- **LLM:** Ollama (local)
+- **Storage:** ChromaDB (vector store) + JSONL session logs
+- **LLM:** Ollama or LM Studio (local)
 
 ## Development
 

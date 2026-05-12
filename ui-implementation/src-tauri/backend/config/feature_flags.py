@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, field, asdict
 
+from utils.atomic_json import write_json_atomic
+
 logger = logging.getLogger(__name__)
 
 
@@ -120,16 +122,14 @@ class FeatureFlagManager:
                 logger.info(f"Override {key} from environment: {value}")
 
     def save_flags(self):
-        """Save current flags to file"""
+        """Save current flags to file (crash-safe atomic write, v0.3.3)"""
         try:
             self.config_path.parent.mkdir(exist_ok=True)
-            with open(self.config_path, 'w') as f:
-                # Convert to dict, excluding private attributes
-                config = {
-                    k: v for k, v in asdict(self.flags).items()
-                    if not k.startswith('_')
-                }
-                json.dump(config, f, indent=2)
+            config = {
+                k: v for k, v in asdict(self.flags).items()
+                if not k.startswith('_')
+            }
+            write_json_atomic(self.config_path, config)
             logger.info(f"Saved feature flags to {self.config_path}")
         except Exception as e:
             logger.error(f"Failed to save feature flags: {e}")

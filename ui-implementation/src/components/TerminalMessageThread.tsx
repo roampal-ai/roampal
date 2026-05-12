@@ -376,11 +376,28 @@ const MessageRow = memo(({
               <div className="text-zinc-300 text-sm leading-relaxed">{message.content}</div>
               {message.attachments && message.attachments.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {message.attachments.map((att: any, idx: number) => (
-                    <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 bg-zinc-800 rounded text-xs text-zinc-400">
-                      {att.name} {att.size ? `(${Math.ceil(att.size / 1024)}KB)` : ''}
-                    </span>
-                  ))}
+                  {message.attachments.map((att: any, idx: number) => {
+                    // v0.3.3 Defect 2 fix: image-type attachments render as thumbnails,
+                    // not text pills. ConnectedChat.tsx converts the `images` array on
+                    // each user message into `attachments` with `type: 'image/...'` and
+                    // `url` carrying the base64 data URL; render that as an <img>.
+                    const isImage = typeof att.type === 'string' && att.type.startsWith('image/');
+                    if (isImage && att.url) {
+                      return (
+                        <img
+                          key={idx}
+                          src={att.url}
+                          alt={att.name || `attachment ${idx + 1}`}
+                          className="max-w-xs max-h-48 rounded-lg ring-1 ring-white/10 object-contain"
+                        />
+                      );
+                    }
+                    return (
+                      <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 bg-zinc-800 rounded text-xs text-zinc-400">
+                        {att.name} {att.size ? `(${Math.ceil(att.size / 1024)}KB)` : ''}
+                      </span>
+                    );
+                  })}
                 </div>
               )}
             </div>

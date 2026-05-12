@@ -17,12 +17,37 @@ import json
 
 # Ghost registry for clearing ghost IDs after collection nuke (v0.2.9)
 from modules.memory.ghost_registry import get_ghost_registry
+from config.settings import DATA_PATH
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data", tags=["data-management"])
 
 # v0.3.1: Cancel flag for migration summarization
 _cancel_flags: Dict[str, bool] = {}
+
+
+def _reset_completion_state() -> bool:
+    """v0.3.3 Section 9.1: Unlink MCP hook's _completion_state.json.
+
+    Called from bulk-clear handlers for working/history/patterns. The file
+    holds per-conversation_id scoring lifecycle flags. When the user nukes
+    the conversational tiers, this metadata is stale by construction;
+    leaving it in place enables core's cross-session fallback to misroute
+    stale flags onto the current turn.
+
+    Idempotent. Returns True if unlinked, False if absent or unlink failed.
+    """
+    state_file = Path(DATA_PATH) / "mcp_sessions" / "_completion_state.json"
+    try:
+        state_file.unlink()
+        logger.info(f"Section 9.1: unlinked {state_file}")
+        return True
+    except FileNotFoundError:
+        logger.info(f"Section 9.1: {state_file} absent — nothing to unlink")
+        return False
+    except OSError as e:
+        logger.warning(f"Section 9.1: could not unlink {state_file}: {e}")
+        return False
 
 
 @router.get("/stats")
@@ -112,20 +137,21 @@ async def clear_memory_bank(request: Request):
         adapter = memory.collections["memory_bank"]
         count_before = await adapter.get_collection_count()
 
-        # Delete all documents in collection (preserves schema)
-        # ChromaDB requires either getting all IDs first or using where_document
+        # v0.3.3 Section 9: Nuke and recreate ChromaDB collection.
+        # collection.delete(ids=...) leaves HNSW phantoms that block dedup
+        # and break new writes — actual root cause of issue #8 for users
+        # who triggered bulk-delete from the GUI's "Delete data" tab.
         if count_before > 0:
-            # Get all IDs and delete them
-            all_docs = adapter.collection.get(include=[])
-            if all_docs.get("ids"):
-                # Delete in batches to avoid ChromaDB batch size limits (max 166)
-                batch_size = 100
-                all_ids = all_docs["ids"]
-                for i in range(0, len(all_ids), batch_size):
-                    batch = all_ids[i : i + batch_size]
-                    adapter.collection.delete(ids=batch)
+            collection_name = adapter.collection_name
+            client = adapter.client
 
-        logger.info(f"Cleared memory_bank collection ({count_before} entries deleted)")
+            client.delete_collection(name=collection_name)
+            adapter.collection = client.get_or_create_collection(
+                name=collection_name,
+                embedding_function=None,  # We provide our own embeddings
+                metadata={"hnsw:space": "l2"},
+            )
+            logger.info(f"Nuked {collection_name} collection ({count_before} entries deleted)")
 
         return {
             "status": "success",
@@ -154,17 +180,23 @@ async def clear_working_memory(request: Request):
         adapter = memory.collections["working"]
         count_before = await adapter.get_collection_count()
 
+        # v0.3.3 Section 9: Nuke and recreate (see clear_memory_bank for rationale).
         if count_before > 0:
-            all_docs = adapter.collection.get(include=[])
-            if all_docs.get("ids"):
-                # Delete in batches to avoid ChromaDB batch size limits (max 166)
-                batch_size = 100
-                all_ids = all_docs["ids"]
-                for i in range(0, len(all_ids), batch_size):
-                    batch = all_ids[i : i + batch_size]
-                    adapter.collection.delete(ids=batch)
+            collection_name = adapter.collection_name
+            client = adapter.client
 
-        logger.info(f"Cleared working memory ({count_before} entries deleted)")
+            client.delete_collection(name=collection_name)
+            adapter.collection = client.get_or_create_collection(
+                name=collection_name,
+                embedding_function=None,
+                metadata={"hnsw:space": "l2"},
+            )
+            logger.info(f"Nuked {collection_name} collection ({count_before} entries deleted)")
+
+        # v0.3.3 Section 9.1: reset MCP hook lifecycle metadata. Working tier
+        # holds turn summaries; clearing it makes _completion_state.json stale
+        # by construction. Auxiliary to the nuke — failure does not abort.
+        _reset_completion_state()
 
         return {
             "status": "success",
@@ -193,17 +225,21 @@ async def clear_history(request: Request):
         adapter = memory.collections["history"]
         count_before = await adapter.get_collection_count()
 
+        # v0.3.3 Section 9: Nuke and recreate (see clear_memory_bank for rationale).
         if count_before > 0:
-            all_docs = adapter.collection.get(include=[])
-            if all_docs.get("ids"):
-                # Delete in batches to avoid ChromaDB batch size limits (max 166)
-                batch_size = 100
-                all_ids = all_docs["ids"]
-                for i in range(0, len(all_ids), batch_size):
-                    batch = all_ids[i : i + batch_size]
-                    adapter.collection.delete(ids=batch)
+            collection_name = adapter.collection_name
+            client = adapter.client
 
-        logger.info(f"Cleared history collection ({count_before} entries deleted)")
+            client.delete_collection(name=collection_name)
+            adapter.collection = client.get_or_create_collection(
+                name=collection_name,
+                embedding_function=None,
+                metadata={"hnsw:space": "l2"},
+            )
+            logger.info(f"Nuked {collection_name} collection ({count_before} entries deleted)")
+
+        # v0.3.3 Section 9.1: see clear_working_memory for rationale.
+        _reset_completion_state()
 
         return {
             "status": "success",
@@ -232,17 +268,21 @@ async def clear_patterns(request: Request):
         adapter = memory.collections["patterns"]
         count_before = await adapter.get_collection_count()
 
+        # v0.3.3 Section 9: Nuke and recreate (see clear_memory_bank for rationale).
         if count_before > 0:
-            all_docs = adapter.collection.get(include=[])
-            if all_docs.get("ids"):
-                # Delete in batches to avoid ChromaDB batch size limits (max 166)
-                batch_size = 100
-                all_ids = all_docs["ids"]
-                for i in range(0, len(all_ids), batch_size):
-                    batch = all_ids[i : i + batch_size]
-                    adapter.collection.delete(ids=batch)
+            collection_name = adapter.collection_name
+            client = adapter.client
 
-        logger.info(f"Cleared patterns collection ({count_before} entries deleted)")
+            client.delete_collection(name=collection_name)
+            adapter.collection = client.get_or_create_collection(
+                name=collection_name,
+                embedding_function=None,
+                metadata={"hnsw:space": "l2"},
+            )
+            logger.info(f"Nuked {collection_name} collection ({count_before} entries deleted)")
+
+        # v0.3.3 Section 9.1: see clear_working_memory for rationale.
+        _reset_completion_state()
 
         return {
             "status": "success",

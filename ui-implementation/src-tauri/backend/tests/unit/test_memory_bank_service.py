@@ -98,8 +98,14 @@ class TestStore:
 
     @pytest.mark.asyncio
     async def test_store_capacity_check(self, service, mock_collection):
-        """Should reject when at capacity."""
-        mock_collection.collection.count = MagicMock(return_value=500)
+        """Should reject when at capacity (active entries only, excludes archived)."""
+        # Simulate 500 active entries via list_all_ids + get_fragment
+        fake_ids = [f"memory_bank_{i:04d}" for i in range(500)]
+        mock_collection.list_all_ids.return_value = fake_ids
+        mock_collection.get_fragment.return_value = {
+            "content": "existing",
+            "metadata": {"status": "active"}
+        }
 
         with pytest.raises(ValueError, match="capacity"):
             await service.store("Test", ["test"])
@@ -324,7 +330,7 @@ class TestRestore:
 
 
 class TestDelete:
-    """Test memory deletion."""
+    """v0.3.3 Section 8F: delete_permanent() requires force=True."""
 
     @pytest.fixture
     def mock_collection(self):
@@ -340,20 +346,186 @@ class TestDelete:
         )
 
     @pytest.mark.asyncio
-    async def test_delete_success(self, service, mock_collection):
-        """Should delete memory successfully."""
-        result = await service.delete("memory_bank_test123")
+    async def test_delete_permanent_with_force(self, service, mock_collection):
+        """Should delete memory when force=True."""
+        result = await service.delete_permanent("memory_bank_test123", force=True)
 
         assert result is True
         mock_collection.delete_vectors.assert_called_with(["memory_bank_test123"])
 
     @pytest.mark.asyncio
-    async def test_delete_failure(self, service, mock_collection):
-        """Should return False on error."""
+    async def test_delete_permanent_failure(self, service, mock_collection):
+        """Should return False on error (with force=True)."""
         mock_collection.delete_vectors = MagicMock(side_effect=Exception("Test error"))
 
-        result = await service.delete("memory_bank_test123")
+        result = await service.delete_permanent("memory_bank_test123", force=True)
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_delete_permanent_without_force_raises(self, service, mock_collection):
+        """Calling without force=True must raise — guards future code from accidentally
+        wiring user-facing paths to hard delete."""
+        with pytest.raises(RuntimeError, match="force=True"):
+            await service.delete_permanent("memory_bank_test123")
+        mock_collection.delete_vectors.assert_not_called()
+
+
+class TestSweepPhantoms:
+    """v0.3.3 Section 8A: _sweep_phantoms removes HNSW-orphaned IDs."""
+
+    def _service(self, ids, fragments):
+        coll = MagicMock()
+        coll.list_all_ids = MagicMock(return_value=ids)
+        coll.get_fragment = MagicMock(side_effect=lambda doc_id: fragments.get(doc_id))
+        coll.delete_vectors = MagicMock()
+        return MemoryBankService(collection=coll, embed_fn=AsyncMock()), coll
+
+    def test_sweeps_phantom_ids(self):
+        """IDs in list_all_ids() but with no fragment are phantoms."""
+        service, coll = self._service(
+            ids=["live1", "phantom", "live2"],
+            fragments={"live1": {"content": "x"}, "live2": {"content": "y"}},
+        )
+        count = service._sweep_phantoms()
+        assert count == 1
+        coll.delete_vectors.assert_called_once_with(["phantom"])
+
+    def test_no_phantoms_no_delete(self):
+        """Clean collection: zero phantoms, no delete call."""
+        service, coll = self._service(
+            ids=["live1", "live2"],
+            fragments={"live1": {"content": "x"}, "live2": {"content": "y"}},
+        )
+        count = service._sweep_phantoms()
+        assert count == 0
+        coll.delete_vectors.assert_not_called()
+
+    def test_swallows_errors(self):
+        """list_all_ids() raising must not propagate."""
+        coll = MagicMock()
+        coll.list_all_ids = MagicMock(side_effect=Exception("boom"))
+        service = MemoryBankService(collection=coll, embed_fn=AsyncMock())
+        assert service._sweep_phantoms() == 0
+
+
+class TestCleanupArchived:
+    """v0.3.3 Section 8A: cleanup_archived hard-deletes archived entries,
+    then sweeps the phantoms it just created."""
+
+    def _service(self, ids, fragments):
+        coll = MagicMock()
+        coll.list_all_ids = MagicMock(return_value=ids)
+        coll.get_fragment = MagicMock(side_effect=lambda doc_id: fragments.get(doc_id))
+        coll.delete_vectors = MagicMock()
+        return MemoryBankService(collection=coll, embed_fn=AsyncMock()), coll
+
+    def test_deletes_archived_then_sweeps(self):
+        """Archived entries get hard-deleted, then _sweep_phantoms runs."""
+        # After delete_vectors, simulate the IDs becoming phantoms by returning
+        # None on the next get_fragment call for them.
+        fragments = {
+            "a1": {"metadata": {"status": "active"}},
+            "a2": {"metadata": {"status": "archived"}},
+            "a3": {"metadata": {"status": "archived"}},
+        }
+        service, coll = self._service(
+            ids=["a1", "a2", "a3"], fragments=fragments
+        )
+
+        # First delete_vectors call deletes the archived entries.
+        # Subsequent _sweep_phantoms() call invokes list_all_ids again — keep
+        # returning the same ids; get_fragment will report the deleted ones
+        # as phantoms.
+        deleted_ids = []
+
+        def delete_side_effect(ids_arg):
+            deleted_ids.extend(ids_arg)
+            for d in ids_arg:
+                fragments[d] = None
+        coll.delete_vectors.side_effect = delete_side_effect
+
+        count = service.cleanup_archived()
+        assert count == 2  # a2, a3 archived
+        # delete_vectors called once for archives, then again from sweep
+        assert coll.delete_vectors.call_count == 2
+        first_call_args = coll.delete_vectors.call_args_list[0].args[0]
+        assert sorted(first_call_args) == ["a2", "a3"]
+        second_call_args = coll.delete_vectors.call_args_list[1].args[0]
+        assert sorted(second_call_args) == ["a2", "a3"]  # the resulting phantoms
+
+    def test_nothing_archived_skips_sweep(self):
+        """If nothing is archived, no delete_vectors or sweep happens."""
+        fragments = {
+            "a1": {"metadata": {"status": "active"}},
+            "a2": {"metadata": {"status": "active"}},
+        }
+        service, coll = self._service(ids=["a1", "a2"], fragments=fragments)
+
+        count = service.cleanup_archived()
+        assert count == 0
+        coll.delete_vectors.assert_not_called()
+
+    def test_list_all_ids_error_returns_zero(self):
+        """list_all_ids() raising returns 0, no delete attempts."""
+        coll = MagicMock()
+        coll.list_all_ids = MagicMock(side_effect=Exception("boom"))
+        coll.delete_vectors = MagicMock()
+        service = MemoryBankService(collection=coll, embed_fn=AsyncMock())
+        assert service.cleanup_archived() == 0
+        coll.delete_vectors.assert_not_called()
+
+
+class TestMaybeCleanupArchived:
+    """v0.3.3 Section 8D: capacity-pressure auto-cleanup gates."""
+
+    def _service_with_state(self, active_count, total_count):
+        """Build a service where _get_count returns `active_count` and
+        list_all_ids returns IDs totaling `total_count`."""
+        coll = MagicMock()
+        # Synthesize total ids list; first `active_count` get "active" status,
+        # the rest get "archived". _get_count walks list_all_ids() + get_fragment
+        # and counts non-archived.
+        ids = [f"id_{i}" for i in range(total_count)]
+        fragments = {}
+        for i, doc_id in enumerate(ids):
+            status = "active" if i < active_count else "archived"
+            fragments[doc_id] = {"metadata": {"status": status}}
+        coll.list_all_ids = MagicMock(return_value=ids)
+        coll.get_fragment = MagicMock(side_effect=lambda doc_id: fragments.get(doc_id))
+        coll.delete_vectors = MagicMock()
+        service = MemoryBankService(collection=coll, embed_fn=AsyncMock())
+        return service, coll
+
+    def test_below_active_threshold_no_cleanup(self):
+        """Active count under ACTIVE_THRESHOLD: never trigger cleanup."""
+        service, coll = self._service_with_state(active_count=399, total_count=399)
+        service._maybe_cleanup_archived()
+        coll.delete_vectors.assert_not_called()
+
+    def test_above_active_threshold_low_archived_ratio_no_cleanup(self):
+        """Active >= 400 but archived ratio < 50%: still no cleanup."""
+        # active=450, total=500 → archived=50, ratio=0.1 → skip
+        service, coll = self._service_with_state(active_count=450, total_count=500)
+        service._maybe_cleanup_archived()
+        coll.delete_vectors.assert_not_called()
+
+    def test_above_active_threshold_high_archived_ratio_triggers_cleanup(self):
+        """Active >= 400 AND archived ratio >= 50%: cleanup fires."""
+        # active=400, total=900 → archived=500, ratio≈0.56 → trigger
+        service, coll = self._service_with_state(active_count=400, total_count=900)
+        service._maybe_cleanup_archived()
+        # cleanup_archived → delete_vectors for archived ids + sweep call
+        assert coll.delete_vectors.called
+
+    def test_errors_swallowed(self):
+        """list_all_ids() raising must not propagate from auto-cleanup."""
+        coll = MagicMock()
+        coll.list_all_ids = MagicMock(side_effect=Exception("boom"))
+        # Force the active count check to pass so we hit list_all_ids
+        coll.get_fragment = MagicMock(return_value=None)
+        service = MemoryBankService(collection=coll, embed_fn=AsyncMock())
+        # Should not raise
+        service._maybe_cleanup_archived()
 
 
 class TestListAll:

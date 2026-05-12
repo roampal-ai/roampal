@@ -73,6 +73,10 @@ export const ConnectedChat: React.FC = () => {
   const [availableModels, setAvailableModels] = useState<Array<{ name: string, provider: string, lmstudio_id?: string }>>([]);
   const [installedModelsMetadata, setInstalledModelsMetadata] = useState<Array<any>>([]);
   const [isSwitchingModel, setIsSwitchingModel] = useState(false);
+  // v0.3.3 Defect 20: track in-flight switch fetch so component unmount can
+  // abort it. Prevents a hung switch request from outliving the page lifecycle
+  // and from inheriting a stuck "Switching..." spinner if the component remounts.
+  const switchAbortRef = useRef<AbortController | null>(null);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [customPullName, setCustomPullName] = useState('');
   const [showModelInstallModal, setShowModelInstallModal] = useState(false);
@@ -441,8 +445,15 @@ export const ConnectedChat: React.FC = () => {
   };
 
   // Actually perform the model switch
+  // v0.3.3 Defect 20: AbortController + 60s timeout so a hung backend doesn't
+  // leave the UI stuck on a "Switching..." spinner forever. If the backend
+  // takes longer than 60s (well past LM Studio's ~30s cold-load worst case),
+  // we abort the fetch, clear the spinner, and surface a clear error.
   const performModelSwitch = async (modelName: string): Promise<boolean> => {
     setIsSwitchingModel(true);
+    const controller = new AbortController();
+    switchAbortRef.current = controller;
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
     try {
       // Find the model in availableModels to get lmstudio_id if it exists
       const modelInfo = availableModels.find((m: any) => m.name === modelName);
@@ -451,7 +462,8 @@ export const ConnectedChat: React.FC = () => {
       const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/model/switch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model_name: actualModelId })
+        body: JSON.stringify({ model_name: actualModelId }),
+        signal: controller.signal,
       });
 
       if (response.ok) {
@@ -483,19 +495,40 @@ export const ConnectedChat: React.FC = () => {
       } else {
         throw new Error('Failed to switch model');
       }
-    } catch (error) {
+    } catch (error: any) {
+      const wasAborted = error?.name === 'AbortError';
       console.error('[Models] Error switching model:', error);
-      // Show error message
+      // v0.3.3 Defect 20: distinct user-facing message for the timeout case
+      // so the user knows the backend is likely wedged, not just a normal
+      // switch failure. Suggests the actionable next step (restart Roampal).
       const errorMsg = document.createElement('div');
-      errorMsg.className = 'fixed top-4 right-4 bg-red-600 text-white px-4 py-2 rounded-lg shadow-lg z-50';
-      errorMsg.textContent = 'Failed to switch model';
+      errorMsg.className = 'fixed top-4 right-4 bg-red-600 text-white px-4 py-2 rounded-lg shadow-lg z-50 max-w-md';
+      errorMsg.textContent = wasAborted
+        ? 'Model switch timed out after 60s — backend may be unresponsive. Try restarting Roampal.'
+        : 'Failed to switch model';
       document.body.appendChild(errorMsg);
-      setTimeout(() => errorMsg.remove(), 3000);
+      setTimeout(() => errorMsg.remove(), wasAborted ? 6000 : 3000);
       return false; // Failed
     } finally {
+      clearTimeout(timeoutId);
+      if (switchAbortRef.current === controller) {
+        switchAbortRef.current = null;
+      }
       setIsSwitchingModel(false);
     }
   };
+
+  // v0.3.3 Defect 20: cancel any in-flight model switch when this component
+  // unmounts. Without this, a hung switch fetch could outlive the page and
+  // leave a phantom request the new mount knows nothing about.
+  useEffect(() => {
+    return () => {
+      if (switchAbortRef.current) {
+        switchAbortRef.current.abort();
+        switchAbortRef.current = null;
+      }
+    };
+  }, []);
 
   // Save selected model to localStorage when it changes
   useEffect(() => {
@@ -1317,6 +1350,22 @@ export const ConnectedChat: React.FC = () => {
     );
     return chatModels.length > 0;
   }, [availableModels]);
+
+  // Check if active model supports vision (from registry metadata)
+  const activeModelHasVision = React.useMemo(() => {
+    if (!selectedModel || installedModelsMetadata.length === 0) return false;
+    const lower = selectedModel.toLowerCase();
+
+    // Try exact match first, then fuzzy substring (LMStudio names contain the base model name)
+    let meta = installedModelsMetadata.find(m => m.name === selectedModel);
+    if (!meta) {
+      meta = installedModelsMetadata.find(m =>
+        lower.includes(m.name.split(':').shift()!.toLowerCase()) ||
+        m.name.toLowerCase().includes(lower.split(':')[0])
+      );
+    }
+    return !!meta?.capabilities?.vision;
+  }, [selectedModel, installedModelsMetadata]);
 
   // Get processing state
   const userId = 'default';  // Roampal is single-user
@@ -2377,7 +2426,7 @@ export const ConnectedChat: React.FC = () => {
 
           {/* Input composer with voice and attachments */}
           <div className="px-6 pb-4 flex-shrink-0">
-            <ConnectedCommandInput hasChatModel={hasChatModel} />
+            <ConnectedCommandInput hasChatModel={hasChatModel} modelHasVision={activeModelHasVision} />
           </div>
         </main>
 

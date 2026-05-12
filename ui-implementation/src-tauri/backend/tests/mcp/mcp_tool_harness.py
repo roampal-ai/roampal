@@ -502,24 +502,9 @@ async def call_record_response(
         await memory.record_outcome(cdoc_id, outcome)
         scored_count += 1
 
-    # Score cached actions
-    actions = _test_action_cache.get(session_id, [])
-    for action_dict in actions:
-        action_dict["outcome"] = outcome
-        # Convert dict to ActionOutcome if real memory system expects it
-        try:
-            action_obj = ActionOutcome(
-                action_type=action_dict["action_type"],
-                context_type=action_dict["context_type"],
-                outcome=action_dict["outcome"],
-                action_params=action_dict.get("action_params"),
-                collection=action_dict.get("collection"),
-                doc_id=action_dict.get("doc_id")
-            )
-            await memory.record_action_outcome(action_obj)
-        except (TypeError, AttributeError):
-            # Mock mode - just pass the dict
-            await memory.record_action_outcome(action_dict)
+    # v0.3.3 §12: action-cache scoring removed — record_action_outcome stub
+    # was deleted alongside the dead Action-KG path. _test_action_cache stays
+    # as a harness-internal simulation for cache-mechanics tests only.
 
     # Update KG routing
     query = cached.get("query", "")

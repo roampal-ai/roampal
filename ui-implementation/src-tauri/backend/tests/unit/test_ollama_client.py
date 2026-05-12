@@ -604,3 +604,507 @@ class TestStaleModel404:
         assert cfg_path.exists()
         saved = _json.loads(cfg_path.read_text(encoding="utf-8"))
         assert saved == {"model": "", "provider": "ollama"}
+
+
+class TestCleanModelArtifacts:
+    """v0.3.3 (Section 3): Harmony channel-token leakage fix."""
+
+    def _client(self):
+        from modules.llm.ollama_client import OllamaClient
+        return OllamaClient()
+
+    @pytest.mark.asyncio
+    async def test_strips_channel_token(self):
+        """<channel|> token must be removed from output."""
+        client = self._client()
+        result = client._clean_model_artifacts(
+            "Let me check!<channel|>\nBased on records...",
+            model="gemma4:31b",
+        )
+        assert "<channel|>" not in result
+        assert "Let me check!" in result
+
+    @pytest.mark.asyncio
+    async def test_strips_pipe_delimited_tokens(self):
+        """<|start|>, <|end|>, <|message|> tokens must be removed."""
+        client = self._client()
+        result = client._clean_model_artifacts(
+            "<|start|>Hello<|end|>",
+            model="gemma4:31b",
+        )
+        assert "<|start|>" not in result
+        assert "<|end|>" not in result
+        assert result == "Hello"
+
+    @pytest.mark.asyncio
+    async def test_strips_message_token(self):
+        """<|message|> token must be removed."""
+        client = self._client()
+        result = client._clean_model_artifacts(
+            "Sure!<|message|>Here is the answer.",
+            model="qwen:7b",
+        )
+        assert "<|message|>" not in result
+
+    @pytest.mark.asyncio
+    async def test_preserves_normal_text(self):
+        """Normal text without tokens passes through unchanged."""
+        client = self._client()
+        original = "This is a normal response with no artifacts."
+        result = client._clean_model_artifacts(original, model="qwen:7b")
+        assert result == original
+
+    @pytest.mark.asyncio
+    async def test_strips_multiple_tokens(self):
+        """Multiple Harmony tokens in one string are all removed."""
+        client = self._client()
+        result = client._clean_model_artifacts(
+            "<|start|><channel|>Hello<|end|>",
+            model="gemma4:31b",
+        )
+        assert "<|" not in result
+        assert "Hello" in result
+
+    @pytest.mark.asyncio
+    async def test_handles_empty_input(self):
+        """Empty/None input returns as-is."""
+        client = self._client()
+        assert client._clean_model_artifacts("", model="x") == ""
+        assert client._clean_model_artifacts(None, model="x") is None
+
+
+class TestCleanModelArtifactsStreaming:
+    """v0.3.3 hotfix: per-chunk streaming variant must NOT strip whitespace.
+
+    The full _clean_model_artifacts call had `.strip()` which, when applied per
+    streaming chunk, ate the leading space SentencePiece-tokenized models emit
+    on every token. Result: words mashed together (`"Yo!What'sup?How's..."`).
+    The streaming variant only strips Harmony control tokens — whitespace and
+    prefix-removal are deferred to a final pass.
+    """
+
+    def _client(self):
+        from modules.llm.ollama_client import OllamaClient
+        return OllamaClient()
+
+    def test_preserves_leading_space(self):
+        """A chunk like ' the' (SentencePiece word boundary) must keep its leading space."""
+        client = self._client()
+        assert client._clean_model_artifacts_streaming(" the") == " the"
+
+    def test_preserves_trailing_space(self):
+        """Trailing whitespace within a chunk must survive too."""
+        client = self._client()
+        assert client._clean_model_artifacts_streaming("hello ") == "hello "
+
+    def test_single_space_chunk_passes_through(self):
+        """A chunk that IS just whitespace must not collapse to empty."""
+        client = self._client()
+        assert client._clean_model_artifacts_streaming(" ") == " "
+        assert client._clean_model_artifacts_streaming("\n") == "\n"
+
+    def test_concatenated_chunks_form_proper_sentence(self):
+        """Regression: SentencePiece-style chunks must reassemble with spaces intact."""
+        client = self._client()
+        chunks = ["Yo", "!", " What", "'", "s", " up", "?"]
+        result = "".join(client._clean_model_artifacts_streaming(c) for c in chunks)
+        assert result == "Yo! What's up?"
+
+    def test_strips_harmony_tokens_per_chunk(self):
+        """Harmony tags within a chunk are still stripped — that part of Section 3 is kept."""
+        client = self._client()
+        assert client._clean_model_artifacts_streaming("Sure!<|message|>") == "Sure!"
+        assert client._clean_model_artifacts_streaming("<channel|>foo") == "foo"
+
+    def test_does_not_strip_answer_prefix(self):
+        """Prefix removal ('Answer: ', etc.) is non-streaming-safe and must NOT fire here.
+
+        A chunk like 'Answer: ' arriving mid-stream is just text, not a model prefix.
+        """
+        client = self._client()
+        assert client._clean_model_artifacts_streaming("Answer: ") == "Answer: "
+
+    def test_does_not_collapse_newlines(self):
+        """The \\n{4,} -> \\n\\n\\n collapse is non-streaming-safe."""
+        client = self._client()
+        text = "\n\n\n\n\n"  # 5 newlines — full cleaner would collapse to 3
+        assert client._clean_model_artifacts_streaming(text) == text
+
+    def test_handles_empty_input(self):
+        """Empty/None input returns as-is."""
+        client = self._client()
+        assert client._clean_model_artifacts_streaming("") == ""
+        assert client._clean_model_artifacts_streaming(None) is None
+
+
+class TestStripDataUrlPrefix:
+    """v0.3.3 Defect 3: Ollama's multimodal `images` field wants raw base64."""
+
+    def _strip(self):
+        from modules.llm.ollama_client import _strip_data_url_prefix
+        return _strip_data_url_prefix
+
+    def test_strips_png_data_url(self):
+        strip = self._strip()
+        assert strip("data:image/png;base64,iVBORw0KGgo=") == "iVBORw0KGgo="
+
+    def test_strips_jpeg_data_url(self):
+        strip = self._strip()
+        assert strip("data:image/jpeg;base64,/9j/4AAQSkZJRg==") == "/9j/4AAQSkZJRg=="
+
+    def test_raw_base64_passes_through(self):
+        """Already-stripped strings round-trip unchanged (idempotency)."""
+        strip = self._strip()
+        assert strip("iVBORw0KGgoAAAANSUhEUg==") == "iVBORw0KGgoAAAANSUhEUg=="
+
+    def test_non_data_url_passes_through(self):
+        """A regular https URL is not modified."""
+        strip = self._strip()
+        assert strip("https://example.com/image.png") == "https://example.com/image.png"
+
+    def test_non_string_passes_through(self):
+        from modules.llm.ollama_client import _strip_data_url_prefix
+        assert _strip_data_url_prefix(None) is None
+        assert _strip_data_url_prefix(123) == 123
+
+
+class TestMultimodalPayloadShape:
+    """v0.3.3 Defect 3: stream_response_with_tools must shape the multimodal
+    message payload according to the active provider's API contract.
+
+    - Ollama /api/chat: {"role": ..., "content": "<text>", "images": ["<raw base64>"]}
+    - LM Studio /v1/chat/completions: {"role": ..., "content": [content_blocks]}
+
+    Sending content_blocks to Ollama produces:
+      "json: cannot unmarshal array into Go struct field ChatRequest.messages.content of type string"
+    """
+
+    def _capture_payload(self, api_style: str):
+        """Build a client with the given api_style and instrument it so the
+        first /api/chat (Ollama) or /v1/chat/completions (LM Studio) POST is
+        captured without actually streaming. Returns the captured request JSON.
+        """
+        from modules.llm.ollama_client import OllamaClient
+
+        client = OllamaClient()
+        client.api_style = api_style
+        # Force-initialize the httpx client attribute so the not-initialized
+        # guard at the top of stream_response_with_tools doesn't short-circuit.
+        client.client = AsyncMock()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_ollama_payload_uses_native_images_field(self):
+        """Ollama path: content is a string, images is a sibling list of raw base64."""
+        from modules.llm.ollama_client import _strip_data_url_prefix
+        client = self._capture_payload("ollama")
+
+        captured = {}
+
+        async def fake_stream(method, url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            raise StopAsyncIteration()  # bail before real streaming begins
+
+        # The function builds `messages` BEFORE the httpx call; we can inspect
+        # by patching post and catching the raise.
+        class _Ctx:
+            async def __aenter__(self_):
+                response = AsyncMock()
+                response.raise_for_status = MagicMock()
+                response.status_code = 200
+                response.aiter_lines = MagicMock(return_value=_empty_aiter())
+                return response
+
+            async def __aexit__(self_, *a):
+                return False
+
+        async def _empty_aiter():
+            if False:
+                yield ""
+
+        def fake_stream_ctor(method, url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _Ctx()
+
+        client.client.stream = fake_stream_ctor
+
+        try:
+            agen = client.stream_response_with_tools(
+                prompt="describe this",
+                images=["data:image/png;base64,iVBORw0KGgo="],
+                model="gemma4:31b",
+            )
+            async for _ in agen:
+                break  # we only care about the request shape, not the stream output
+        except Exception:
+            pass
+
+        assert captured.get("url", "").endswith("/api/chat"), captured
+        msg = captured["json"]["messages"][-1]
+        assert msg["role"] == "user"
+        assert msg["content"] == "describe this"
+        assert msg["images"] == ["iVBORw0KGgo="]  # data: prefix stripped
+
+    @pytest.mark.asyncio
+    async def test_lmstudio_payload_uses_openai_content_blocks(self):
+        """LM Studio path: content is a list of OpenAI-style content blocks."""
+        client = self._capture_payload("openai")
+
+        captured = {}
+
+        class _Ctx:
+            async def __aenter__(self_):
+                response = AsyncMock()
+                response.raise_for_status = MagicMock()
+                response.status_code = 200
+                response.aiter_lines = MagicMock(return_value=_empty_aiter())
+                return response
+
+            async def __aexit__(self_, *a):
+                return False
+
+        async def _empty_aiter():
+            if False:
+                yield ""
+
+        def fake_stream_ctor(method, url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _Ctx()
+
+        client.client.stream = fake_stream_ctor
+
+        try:
+            agen = client.stream_response_with_tools(
+                prompt="describe this",
+                images=["data:image/png;base64,iVBORw0KGgo="],
+                model="some-lmstudio-model",
+            )
+            async for _ in agen:
+                break
+        except Exception:
+            pass
+
+        # OpenAI path posts to /v1/chat/completions
+        assert "/v1/chat/completions" in captured.get("url", ""), captured
+        msg = captured["json"]["messages"][-1]
+        assert msg["role"] == "user"
+        assert isinstance(msg["content"], list)
+        assert msg["content"][0] == {"type": "text", "text": "describe this"}
+        assert msg["content"][1]["type"] == "image_url"
+        # Data URL kept intact for LM Studio (OpenAI spec accepts data URLs)
+        assert msg["content"][1]["image_url"]["url"] == "data:image/png;base64,iVBORw0KGgo="
+
+    @pytest.mark.asyncio
+    async def test_history_with_images_field_normalizes_for_ollama(self):
+        """v0.3.3 §4 Defect 5: history entries stored as {content: str, images: [data_url]}
+        must be replayed in the right shape per provider. Previously, replayed history
+        entries with content_blocks shape crashed Ollama mid-conversation."""
+        client = self._capture_payload("ollama")
+
+        captured = {}
+
+        class _Ctx:
+            async def __aenter__(self_):
+                response = AsyncMock()
+                response.raise_for_status = MagicMock()
+                response.status_code = 200
+                response.aiter_lines = MagicMock(return_value=_empty_aiter())
+                return response
+
+            async def __aexit__(self_, *a):
+                return False
+
+        async def _empty_aiter():
+            if False:
+                yield ""
+
+        def fake_stream_ctor(method, url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _Ctx()
+
+        client.client.stream = fake_stream_ctor
+
+        history = [
+            {
+                "role": "user",
+                "content": "describe this",
+                "images": ["data:image/png;base64,iVBORw0KGgo="],
+            },
+            {"role": "assistant", "content": "looks like a placeholder image"},
+        ]
+
+        try:
+            agen = client.stream_response_with_tools(
+                prompt="follow up question",
+                history=history,
+                model="gemma4:31b",
+            )
+            async for _ in agen:
+                break
+        except Exception:
+            pass
+
+        msgs = captured["json"]["messages"]
+        # First user message in history should be Ollama-native shape (string content + raw base64 images)
+        user_hist = next(m for m in msgs if m["role"] == "user" and m.get("images"))
+        assert user_hist["content"] == "describe this"
+        assert user_hist["images"] == ["iVBORw0KGgo="]  # prefix stripped
+        # No content_blocks anywhere
+        for m in msgs:
+            assert not isinstance(m.get("content"), list), f"Ollama path must not emit list content: {m}"
+
+    @pytest.mark.asyncio
+    async def test_history_with_legacy_content_blocks_normalized_for_ollama(self):
+        """Legacy sessions may have content_blocks in history. Replayed via the Ollama
+        path, these must be converted to native shape (string content + images sibling)."""
+        client = self._capture_payload("ollama")
+
+        captured = {}
+
+        class _Ctx:
+            async def __aenter__(self_):
+                response = AsyncMock()
+                response.raise_for_status = MagicMock()
+                response.status_code = 200
+                response.aiter_lines = MagicMock(return_value=_empty_aiter())
+                return response
+
+            async def __aexit__(self_, *a):
+                return False
+
+        async def _empty_aiter():
+            if False:
+                yield ""
+
+        def fake_stream_ctor(method, url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _Ctx()
+
+        client.client.stream = fake_stream_ctor
+
+        history = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is this"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+                ],
+            },
+        ]
+
+        try:
+            agen = client.stream_response_with_tools(
+                prompt="anything",
+                history=history,
+                model="gemma4:31b",
+            )
+            async for _ in agen:
+                break
+        except Exception:
+            pass
+
+        msgs = captured["json"]["messages"]
+        user_hist = next(m for m in msgs if m["role"] == "user" and m.get("content") == "what is this")
+        assert user_hist["images"] == ["iVBORw0KGgo="]
+        for m in msgs:
+            assert not isinstance(m.get("content"), list), f"Ollama path must not emit list content: {m}"
+
+    @pytest.mark.asyncio
+    async def test_image_only_send_with_empty_prompt_still_emits_user_message(self):
+        """v0.3.3 §4 Defect 6 fix: previously `if prompt:` dropped the entire user
+        turn when text was empty, even when images were present. The model would
+        receive only system context and respond generically without ever seeing
+        the image. The branch must fire whenever prompt OR images is non-empty."""
+        client = self._capture_payload("ollama")
+
+        captured = {}
+
+        class _Ctx:
+            async def __aenter__(self_):
+                response = AsyncMock()
+                response.raise_for_status = MagicMock()
+                response.status_code = 200
+                response.aiter_lines = MagicMock(return_value=_empty_aiter())
+                return response
+
+            async def __aexit__(self_, *a):
+                return False
+
+        async def _empty_aiter():
+            if False:
+                yield ""
+
+        def fake_stream_ctor(method, url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _Ctx()
+
+        client.client.stream = fake_stream_ctor
+
+        try:
+            agen = client.stream_response_with_tools(
+                prompt="",  # image-only send, no text caption
+                images=["data:image/png;base64,iVBORw0KGgo="],
+                model="gemma4:31b",
+            )
+            async for _ in agen:
+                break
+        except Exception:
+            pass
+
+        msgs = captured["json"]["messages"]
+        # User message must be present (this was the regression — it was being dropped)
+        user_msgs = [m for m in msgs if m.get("role") == "user"]
+        assert len(user_msgs) == 1, f"Expected exactly 1 user message, got {len(user_msgs)}: {msgs}"
+        assert user_msgs[0]["content"] == ""
+        assert user_msgs[0]["images"] == ["iVBORw0KGgo="]
+
+    @pytest.mark.asyncio
+    async def test_ollama_no_images_uses_plain_string_content(self):
+        """Text-only Ollama request keeps the original plain-string content shape."""
+        client = self._capture_payload("ollama")
+
+        captured = {}
+
+        class _Ctx:
+            async def __aenter__(self_):
+                response = AsyncMock()
+                response.raise_for_status = MagicMock()
+                response.status_code = 200
+                response.aiter_lines = MagicMock(return_value=_empty_aiter())
+                return response
+
+            async def __aexit__(self_, *a):
+                return False
+
+        async def _empty_aiter():
+            if False:
+                yield ""
+
+        def fake_stream_ctor(method, url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _Ctx()
+
+        client.client.stream = fake_stream_ctor
+
+        try:
+            agen = client.stream_response_with_tools(
+                prompt="hello",
+                images=None,
+                model="gemma4:31b",
+            )
+            async for _ in agen:
+                break
+        except Exception:
+            pass
+
+        msg = captured["json"]["messages"][-1]
+        assert msg["content"] == "hello"
+        assert "images" not in msg  # no images key when no images supplied
+

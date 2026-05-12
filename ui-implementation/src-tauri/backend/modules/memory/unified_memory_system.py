@@ -356,7 +356,13 @@ class UnifiedMemorySystem:
         v0.3.0: Check health of all collections and repair if needed.
 
         Detects corruption from failed migrations or version upgrades.
-        Can repair working collection by recreating it (temporary data, 24h TTL).
+        v0.3.3 Defect 19: ALL collections (not just working) auto-recover from
+        HNSW segment corruption. Earlier behavior left non-working collections
+        in a broken state, which caused subsequent queries to deadlock when the
+        backend tried to use them (see Defect 18 — a hung collection query
+        could block the event loop). Trade-off: dropping a corrupt collection
+        loses the data in that tier. That's better than perpetual unresponsiveness;
+        a loud warning is logged so the user knows.
 
         v0.3.0 FIX: Don't use query_texts for health check - it requires embedding
         function and will fail if dimensions mismatch, causing false positives.
@@ -364,6 +370,24 @@ class UnifiedMemorySystem:
         """
         logger.info("[HEALTH] Running collection health check...")
         issues_found = []
+
+        # v0.3.3 Defect 19: corruption signatures we'll act on.
+        # "Nothing found on disk" is the ChromaDB HNSW-segment-missing error.
+        # "hnsw" / "segment reader" cover related index-file corruption.
+        # "no such file" / "errno 2" cover OS-level file-not-found races.
+        corruption_signatures = (
+            "nothing found on disk",
+            "hnsw",
+            "segment reader",
+            "no such file",
+            "errno 2",
+        )
+
+        def _is_corruption(err_str: str) -> bool:
+            s = err_str.lower()
+            if "dimension" in s or "embedding" in s:
+                return False  # not corruption — embedding dim mismatch
+            return any(sig in s for sig in corruption_signatures)
 
         for name, adapter in self.collections.items():
             try:
@@ -384,38 +408,34 @@ class UnifiedMemorySystem:
                 try:
                     adapter.collection.peek(limit=1)
                 except Exception as peek_error:
-                    # Only flag as issue if it's actual corruption, not dimension mismatch
-                    error_str = str(peek_error).lower()
-                    if "dimension" not in error_str and "embedding" not in error_str:
+                    error_str = str(peek_error)
+                    if _is_corruption(error_str):
                         issues_found.append(
                             {
                                 "collection": name,
                                 "error": f"Peek failed: {peek_error}",
-                                "recoverable": name
-                                == "working",  # Only working is easily recoverable
+                                "recoverable": True,  # v0.3.3 Defect 19: all corrupt collections recoverable
                             }
                         )
                         logger.warning(
-                            f"[HEALTH] {name} collection peek failed: {peek_error}"
+                            f"[HEALTH] {name} collection peek failed (corruption): {peek_error}"
                         )
                     else:
-                        # Embedding dimension mismatch is not corruption - skip repair
                         logger.debug(
                             f"[HEALTH] {name} has embedding dimension mismatch (not corruption)"
                         )
 
             except Exception as e:
-                # Only flag as issue if it's actual corruption
-                error_str = str(e).lower()
-                if "dimension" not in error_str and "embedding" not in error_str:
+                error_str = str(e)
+                if _is_corruption(error_str):
                     issues_found.append(
                         {
                             "collection": name,
                             "error": str(e),
-                            "recoverable": name == "working",
+                            "recoverable": True,  # v0.3.3 Defect 19
                         }
                     )
-                    logger.warning(f"[HEALTH] {name} collection check failed: {e}")
+                    logger.warning(f"[HEALTH] {name} collection check failed (corruption): {e}")
                 else:
                     logger.debug(
                         f"[HEALTH] {name} has embedding dimension mismatch (not corruption)"
@@ -424,57 +444,119 @@ class UnifiedMemorySystem:
         if issues_found:
             logger.warning(f"[HEALTH] Found {len(issues_found)} collection issues")
 
-            # Auto-repair working collection (it's temporary data anyway)
+            # v0.3.3 Defect 19: auto-recover all corrupt collections by
+            # dropping and recreating them. Loud warning per recovery so the
+            # user knows which tier lost data.
             for issue in issues_found:
-                if issue["collection"] == "working" and issue["recoverable"]:
-                    logger.info("[HEALTH] Attempting to repair working collection...")
+                if issue["recoverable"]:
+                    coll = issue["collection"]
+                    logger.warning(
+                        f"[HEALTH] Auto-recovering corrupt collection '{coll}': "
+                        f"data in this tier will be lost. Cause: {issue['error']}"
+                    )
                     try:
-                        await self._repair_working_collection()
-                        logger.info("[HEALTH] Working collection repaired successfully")
+                        await self._repair_corrupt_collection(coll)
+                        logger.info(f"[HEALTH] Collection '{coll}' recovered")
                     except Exception as repair_error:
                         logger.error(
-                            f"[HEALTH] Failed to repair working collection: {repair_error}"
+                            f"[HEALTH] Failed to recover collection '{coll}': {repair_error}"
                         )
         else:
             logger.info("[HEALTH] All collections healthy")
 
         return issues_found
 
-    async def _repair_working_collection(self):
+    async def _repair_corrupt_collection(self, name: str):
         """
-        Repair corrupted working collection by recreating it.
+        v0.3.3 Defect 19: drop and recreate a corrupted collection.
 
-        Working memory is temporary (24h TTL), so data loss is acceptable.
-        This is better than leaving users with a broken app.
+        Generalized from the v0.3.0 `_repair_working_collection`. Now applies
+        to any tier — working, history, patterns, memory_bank, books — because
+        leaving a corrupt collection in place causes subsequent queries to
+        deadlock the event loop (see Defect 18).
+
+        Data loss in the dropped tier is the cost. The alternative — perpetual
+        unresponsiveness — is worse. A warning is logged per recovery so the
+        user can see what was lost.
+
+        Quarantine: before delete, the corrupt collection's on-disk files are
+        COPIED (not moved — ChromaDB still has handles) to
+        `<DATA_PATH>/chromadb_quarantine/<timestamp>/<collection_name>/`.
+        That preserves the corrupt state for forensics / manual recovery in
+        case someone writes a ChromaDB segment-rebuilder later. For working
+        tier (ephemeral), quarantine is skipped to avoid pointless disk churn.
         """
         import shutil
+        from datetime import datetime as _dt
 
-        working_adapter = self.collections.get("working")
-        if not working_adapter:
+        adapter = self.collections.get(name)
+        if not adapter:
+            logger.warning(f"[REPAIR] No adapter registered for '{name}', skipping")
             return
 
         chromadb_path = self.data_dir / "chromadb"
+        chroma_collection_name = f"roampal_{name}"
+
+        # v0.3.3 Defect 19: quarantine corrupt files before delete.
+        # Skip for `working` (ephemeral 24h TTL, not worth preserving).
+        if name != "working":
+            try:
+                client = adapter.collection._client
+                # ChromaDB v1.x stores collection segments under a per-collection
+                # UUID directory. The collection's metadata file holds the UUID.
+                # Easiest preservation: copy the whole chromadb tree (small —
+                # tens of MB typically) into the quarantine subdir.
+                ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+                quarantine_root = self.data_dir / "chromadb_quarantine" / f"{ts}_{name}"
+                quarantine_root.mkdir(parents=True, exist_ok=True)
+                # Copy the corrupted collection's segment dirs. We can't
+                # cleanly isolate one collection's files without parsing
+                # ChromaDB internals, so we snapshot the whole chromadb dir.
+                # On a typical install this is <100 MB. The quarantine is
+                # per-incident so it won't accumulate.
+                if chromadb_path.exists():
+                    snapshot = quarantine_root / "chromadb_snapshot"
+                    shutil.copytree(chromadb_path, snapshot, dirs_exist_ok=True)
+                    logger.warning(
+                        f"[REPAIR] Quarantined chromadb snapshot for '{name}' to {snapshot}. "
+                        f"Files preserved for manual recovery if a segment-rebuilder is "
+                        f"written later. Safe to delete this directory once you've "
+                        f"confirmed normal operation resumed."
+                    )
+            except Exception as q_err:
+                # Don't block recovery on quarantine failure — at worst we
+                # lose forensic data, but the user still gets a working app.
+                logger.warning(
+                    f"[REPAIR] Quarantine snapshot failed for '{name}': {q_err} "
+                    f"(continuing with drop-and-recreate)"
+                )
 
         try:
-            # Get ChromaDB client to delete collection properly
-            client = working_adapter.collection._client
-            client.delete_collection("roampal_working")
-            logger.info("[REPAIR] Deleted corrupted working collection")
+            client = adapter.collection._client
+            try:
+                client.delete_collection(chroma_collection_name)
+                logger.info(f"[REPAIR] Deleted corrupted collection '{chroma_collection_name}'")
+            except Exception as del_err:
+                # Already gone is fine; log others
+                logger.info(f"[REPAIR] delete_collection('{chroma_collection_name}'): {del_err}")
 
-            # Recreate collection
             from modules.memory.chromadb_adapter import ChromaDBAdapter
 
-            self.collections["working"] = ChromaDBAdapter(
+            self.collections[name] = ChromaDBAdapter(
                 persistence_directory=str(chromadb_path), use_server=self.use_server
             )
-            await self.collections["working"].initialize(
-                collection_name="roampal_working"
+            await self.collections[name].initialize(
+                collection_name=chroma_collection_name
             )
-            logger.info("[REPAIR] Recreated working collection")
+            logger.info(f"[REPAIR] Recreated empty collection '{chroma_collection_name}'")
 
         except Exception as e:
-            logger.error(f"[REPAIR] Failed to repair working collection: {e}")
+            logger.error(f"[REPAIR] Failed to repair collection '{name}': {e}")
             raise
+
+    # v0.3.3 Defect 19: legacy alias kept for any external callers.
+    async def _repair_working_collection(self):
+        await self._repair_corrupt_collection("working")
 
     def _init_services(self):
         """Initialize all extracted services."""
@@ -635,13 +717,17 @@ Prefix (one sentence, max 20 words):"""
         "working": {"memory_type": "fact"},
         "history": {"memory_type": "fact"},
         "patterns": {"memory_type": "fact"},
-        "memory_bank": None,
+        # v0.3.3: CRITICAL FIX — filter out archived entries during dedup.
+        # Without this, _find_duplicate_fact() matches against soft-deleted memories
+        # and silently blocks new fact storage. Root cause of issue #8.
+        "memory_bank": {"status": {"$ne": "archived"}},
     }
 
     async def _find_duplicate_fact(
         self,
         embedding: List[float],
         tiers: Optional[tuple] = None,
+        text: Optional[str] = None,
     ) -> Optional[str]:
         """Return an existing doc_id if a near-duplicate fact is already stored.
 
@@ -675,6 +761,16 @@ Prefix (one sentence, max 20 words):"""
                 logger.debug(f"[DEDUP] query_vectors failed on tier={tier}: {e}")
                 continue
             if hits and hits[0].get("distance", 2.0) < self.FACT_DEDUP_DISTANCE_THRESHOLD:
+                # v0.3.3 Section 8E: rich dedup-skip log for triage.
+                # If dedup ever becomes over-aggressive again (issue #8 was
+                # silent on the caller side), tier + distance + matched_id +
+                # content preview is enough to diagnose without a debugger.
+                logger.info(
+                    f"[DEDUP] Skipped fact: tier={tier} "
+                    f"distance={hits[0].get('distance', 0.0):.3f} "
+                    f"matched_id={hits[0].get('id')} "
+                    f"new_fact={(text[:80] if text else '')!r}"
+                )
                 return hits[0].get("id")
         return None
 
@@ -709,7 +805,7 @@ Prefix (one sentence, max 20 words):"""
             "content": text,
             "score": 0.5,  # Initial score
             "uses": 0,
-            "timestamp": datetime.now().isoformat(),
+            "created_at": datetime.now().isoformat(),
             "conversation_id": self.conversation_id,
             **(metadata or {}),
         }
@@ -725,12 +821,8 @@ Prefix (one sentence, max 20 words):"""
         # TagCascade/CE-lifecycle pattern (distance <0.1 = >95% similarity).
         # Facts-only; summaries and other memory types still store normally.
         if final_metadata.get("memory_type") == "fact":
-            existing_id = await self._find_duplicate_fact(embedding)
+            existing_id = await self._find_duplicate_fact(embedding, text=text)
             if existing_id:
-                logger.info(
-                    f"[DEDUP] Skipped storing fact — duplicate of {existing_id} "
-                    f"(cosine <{self.FACT_DEDUP_DISTANCE_THRESHOLD})"
-                )
                 return existing_id
 
         # Store in collection
@@ -896,13 +988,9 @@ Prefix (one sentence, max 20 words):"""
         # score-1.0 entry dominates retrieval ranking in the interim.
         embedding = await self._embed_text(text)
         existing_id = await self._find_duplicate_fact(
-            embedding, tiers=("memory_bank",)
+            embedding, tiers=("memory_bank",), text=text
         )
         if existing_id:
-            logger.info(
-                f"[DEDUP] Skipped storing memory_bank fact — duplicate of {existing_id} "
-                f"(cosine <{self.FACT_DEDUP_DISTANCE_THRESHOLD})"
-            )
             return existing_id
 
         doc_id = await self._memory_bank_service.store(
@@ -977,11 +1065,42 @@ Prefix (one sentence, max 20 words):"""
         return await self._memory_bank_service.restore(doc_id)
 
     async def user_delete_memory(self, doc_id: str) -> bool:
-        """User permanently deletes memory."""
+        """User deletes memory — soft delete via archive (v0.3.3).
+
+        ChromaDB HNSW index doesn't support true deletion — collection.delete()
+        leaves phantom entries that match during dedup queries, blocking new
+        fact storage. Soft delete avoids this entirely and is reversible.
+        """
         if not self.initialized:
             await self.initialize()
 
-        return await self._memory_bank_service.delete(doc_id)
+        return await self._memory_bank_service.archive(
+            doc_id=doc_id, reason="user_delete"
+        )
+
+    async def user_permanent_delete_memory(self, doc_id: str) -> bool:
+        """v0.3.3 Defect 13: user permanently hard-deletes an already-archived
+        memory_bank entry. Two-step: hard delete via `delete_permanent` then
+        immediate phantom sweep to clean the HNSW debris this operation
+        leaves behind (per `delete_permanent`'s docstring contract).
+
+        UI surface: the "Delete" button in the archived view. Active entries
+        should still use `user_delete_memory` for the soft-archive path.
+        """
+        if not self.initialized:
+            await self.initialize()
+
+        success = await self._memory_bank_service.delete_permanent(
+            doc_id=doc_id, force=True
+        )
+        if success:
+            try:
+                self._memory_bank_service._sweep_phantoms()
+            except Exception as sweep_err:
+                logger.warning(
+                    f"Phantom sweep after permanent delete failed (non-fatal): {sweep_err}"
+                )
+        return success
 
     # ==================== Context API ====================
 
@@ -1023,6 +1142,44 @@ Prefix (one sentence, max 20 words):"""
             await self.initialize()
 
         return await self._promotion_service.cleanup_old_history()
+
+    async def _startup_cleanup_memory_bank_phantoms(self):
+        """v0.3.3: Memory_bank startup migrations.
+
+        - Section 8A: phantom sweep (delegates to MemoryBankService._sweep_phantoms)
+        - Section 8C: backfill status=active on legacy entries that lack the
+          field. Pre-Section-7 entries written before `add()` started setting
+          `status="active"` have no status field. `$ne: archived` filter
+          behavior on missing fields is version-dependent in ChromaDB —
+          backfill removes the ambiguity. Idempotent: post-fix entries are
+          untouched.
+        """
+        if not self._memory_bank_service:
+            return
+
+        # Section 8A: phantom sweep
+        self._memory_bank_service._sweep_phantoms()
+
+        # Section 8C: status backfill on legacy entries
+        try:
+            all_ids = self._memory_bank_service.collection.list_all_ids()
+            backfilled = 0
+            for doc_id in all_ids:
+                frag = self._memory_bank_service.collection.get_fragment(doc_id)
+                if not frag:
+                    continue
+                meta = frag.get("metadata", {}) or {}
+                if "status" not in meta:
+                    self._memory_bank_service.collection.update_fragment_metadata(
+                        doc_id, {"status": "active"}
+                    )
+                    backfilled += 1
+            if backfilled:
+                logger.info(
+                    f"v0.3.3 migration: backfilled status=active on {backfilled} legacy memory_bank entries"
+                )
+        except Exception as e:
+            logger.warning(f"Status backfill error: {e}")
 
     # ==================== Session Management ====================
 
@@ -1585,10 +1742,6 @@ Session type (1-2 words only):"""
         """
         return await self._build_cold_start_profile(mode=mode)
 
-    async def record_action_outcome(self, action) -> None:
-        """No-op stub — KG action tracking removed in v0.3.1."""
-        pass
-
     async def _update_kg_routing(self, query: str, collection: str, outcome: str) -> None:
         """No-op stub — KG routing removed in v0.3.1."""
         pass
@@ -1698,7 +1851,13 @@ Session type (1-2 words only):"""
                 to_delete = []
 
                 for doc_id in all_ids:
-                    doc = adapter.get_fragment(doc_id)
+                    try:
+                        doc = adapter.get_fragment(doc_id)
+                    except Exception as e:
+                        # v0.3.3: Skip phantom IDs that throw "Error finding id"
+                        logger.warning(f"Phantom ID {doc_id} in {coll_name}: {e}")
+                        continue
+
                     if (
                         doc
                         and doc.get("metadata", {}).get("conversation_id")
@@ -1707,9 +1866,13 @@ Session type (1-2 words only):"""
                         to_delete.append(doc_id)
 
                 if to_delete:
-                    adapter.delete_vectors(to_delete)
-                    deleted_count += len(to_delete)
-                    logger.info(f"Deleted {len(to_delete)} items from {coll_name}")
+                    try:
+                        adapter.delete_vectors(to_delete)
+                        deleted_count += len(to_delete)
+                        logger.info(f"Deleted {len(to_delete)} items from {coll_name}")
+                    except Exception as delete_err:
+                        # v0.3.3: Don't fail entire operation if one batch delete fails
+                        logger.error(f"Error deleting {len(to_delete)} items from {coll_name}: {delete_err}")
 
             except Exception as e:
                 logger.error(f"Error deleting from {coll_name}: {e}")

@@ -88,9 +88,6 @@ def mock_memory_system():
     # Mock record_outcome
     memory.record_outcome = AsyncMock()
 
-    # Mock record_action_outcome
-    memory.record_action_outcome = AsyncMock()
-
     # Mock _update_kg_routing
     memory._update_kg_routing = AsyncMock()
 

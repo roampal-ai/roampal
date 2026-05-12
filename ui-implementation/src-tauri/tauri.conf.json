@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Roampal",
-    "version": "0.3.2-hotfix.1"
+    "version": "0.3.3"
   },
   "tauri": {
     "allowlist": {
@@ -70,7 +70,7 @@
       "copyright": "© 2024 Roampal"
     },
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:8765 http://127.0.0.1:8765 ws://localhost:8765 ws://127.0.0.1:8765; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; img-src 'self' data: blob: http://localhost:8765 http://127.0.0.1:8765; connect-src 'self' http://localhost:8765 http://127.0.0.1:8765 ws://localhost:8765 ws://127.0.0.1:8765; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
     },
     "windows": [
       {

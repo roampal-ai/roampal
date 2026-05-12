@@ -40,20 +40,18 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 
 from fastapi.responses import StreamingResponse
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from filelock import FileLock
 
 
 from modules.memory.unified_memory_system import UnifiedMemorySystem
-from modules.memory.types import ActionOutcome
 
 from modules.llm.ollama_client import OllamaClient
 
 from services.transparency_context import TransparencyContext
 
 from config.feature_flags import get_flag_manager
-from config.model_contexts import get_context_size
 
 from config.model_limits import (
     get_model_limits,
@@ -71,11 +69,6 @@ router = APIRouter()
 # Cold-start tracking for internal LLM (v0.2.0)
 # Auto-injects user profile from Content KG on message 1 of every new conversation
 internal_session_message_counter: Dict[str, int] = defaultdict(int)
-
-# Action KG tracking for internal LLM (v0.2.6)
-# Caches tool actions until outcome is determined, then scores them
-_agent_action_cache: Dict[str, List[ActionOutcome]] = {}
-
 
 # Injection Protection: Response Validation (Layer 3)
 class ResponseValidator:
@@ -406,34 +399,51 @@ class AgentChatRequest(BaseModel):
     """Request model for agent chat with input validation"""
 
     message: str
+    images: Optional[List[str]] = None  # v0.3.3 Section 4: base64-encoded image URLs
 
     conversation_id: Optional[str] = None
 
     # Mode removed - RoamPal always uses memory
-    # File attachments removed - use Document Processor for file uploads
 
     @field_validator("message")
     @classmethod
     def validate_message(cls, v):
-        """Validate message input for security"""
+        """Per-field validation for the message string itself.
 
-        if not v or not v.strip():
-            raise ValueError("Message cannot be empty")
+        Length cap and control-character stripping always run. Emptiness is
+        NOT checked here — image-only sends (Section 4 multimodal) are valid
+        even with empty `message`. The require-content rule moved to a
+        model-level validator below that can see the `images` field.
+        """
 
         # Limit message length to prevent DoS
 
         max_length = int(os.getenv("ROAMPAL_MAX_MESSAGE_LENGTH", "10000"))
 
-        if len(v) > max_length:
+        if v and len(v) > max_length:
             raise ValueError(
                 f"Message exceeds maximum length of {max_length} characters"
             )
 
         # Remove control characters
 
-        v = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", v)
+        v = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", v or "")
 
         return v.strip()
+
+    @model_validator(mode="after")
+    def _require_message_or_images(self) -> "AgentChatRequest":
+        """v0.3.3 Section 4 / Defect 1 fix: a request must carry text OR
+        image content. Pre-fix, an unconditional empty-message check rejected
+        valid image-only payloads with HTTP 422 even though Section 4's
+        acceptance criterion explicitly permits image-only sends.
+        """
+
+        has_text = bool(self.message and self.message.strip())
+        has_images = bool(self.images)
+        if not has_text and not has_images:
+            raise ValueError("Either message or images must be provided")
+        return self
 
     @field_validator("conversation_id")
     @classmethod
@@ -603,6 +613,8 @@ class AgentChatService:
         mode: str = "memory",
         transparency_level: str = "summary",
         app_state: Optional[Any] = None,
+        images: Optional[List[str]] = None,  # v0.3.3 Section 4: multimodal image support
+        image_filenames: Optional[List[str]] = None,  # v0.3.3 §4 Defect 4: persisted attachment filenames for session save
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Stream tokens from LLM with memory context.
@@ -735,9 +747,19 @@ class AgentChatService:
             # This is needed because context injection adds system messages AFTER the user message
             # Using [:-1] would remove the system context, not the user message, causing duplicates
             history_len_before_user = len(self.conversation_histories[conversation_id])
-            self.conversation_histories[conversation_id].append(
-                {"role": "user", "content": message}
-            )
+
+            # v0.3.3 Section 4 + Defect 3/5 fix: store the user message in
+            # provider-neutral form. Prior versions stored OpenAI content_blocks
+            # which then got replayed verbatim to Ollama on subsequent turns,
+            # producing `json: cannot unmarshal array into Go struct field
+            # ChatRequest.messages.content of type string`. Now we store plain
+            # text content with a sibling `images` list (Ollama-native shape);
+            # stream_response_with_tools converts to OpenAI content_blocks at
+            # request-build time when the active provider is LM Studio.
+            history_entry = {"role": "user", "content": message}
+            if images and len(images) > 0:
+                history_entry["images"] = list(images)
+            self.conversation_histories[conversation_id].append(history_entry)
 
             # CONTEXTUAL GUIDANCE: Organic recall + Action-effectiveness (v0.2.1)
             # Merges Content KG insights with Action-Effectiveness KG warnings
@@ -827,7 +849,7 @@ class AgentChatService:
             logger.info(
                 f"[DEBUG] conversation_history length: {len(conversation_history)}, roles: {[m.get('role') for m in conversation_history]}"
             )
-            system_instructions = self._build_complete_prompt(
+            system_instructions = await self._build_complete_prompt(
                 message, conversation_history
             )
 
@@ -894,9 +916,15 @@ class AgentChatService:
 
             # v0.3.0: Pre-flight context check - warn if prompt exceeds model's context window
             # This prevents silent truncation by Ollama/LM Studio which can cause barfing
-            from config.model_contexts import get_context_size
+            from config.model_contexts import get_context_size_async
 
-            model_context_window = get_context_size(self.model_name)
+            llm_provider = getattr(self.llm, "api_style", "ollama")
+            provider = "lmstudio" if llm_provider == "openai" else "ollama"
+            model_context_window = await get_context_size_async(
+                self.model_name,
+                provider=provider,
+                base_url=getattr(self.llm, "base_url", None),
+            )
 
             # Estimate total tokens: system prompt + history + current message + tools schema
             total_chars = len(system_instructions) + len(message)
@@ -1044,6 +1072,7 @@ class AgentChatService:
                 history=history_to_pass,  # Last 3 exchanges (may be truncated if context overflow)
                 system_prompt=system_instructions,  # System instructions only
                 tools=memory_tools,
+                images=images,  # v0.3.3 Section 4: multimodal
             ):
                 # Handle different event types from stream_response_with_tools
                 if event["type"] == "text":
@@ -1310,6 +1339,7 @@ class AgentChatService:
                 tool_events=tool_events if tool_events else None,
                 doc_id=None,  # No ChromaDB doc — sidecar stores summary later
                 citations=citations,
+                images=image_filenames,  # v0.3.3 §4 Defect 4: persist attachment filenames
             )
 
             # Update conversation history
@@ -1352,9 +1382,6 @@ class AgentChatService:
                         logger.info(
                             f"[SIDECAR] Capped scored memories from {len(all_memories)} to {MAX_SCORED_MEMORIES} (kept most recent)"
                         )
-                    # Grab cached actions for Action KG scoring
-                    cached_actions = _agent_action_cache.pop(conversation_id, [])
-
                     asyncio.create_task(
                         self._run_sidecar(
                             None,  # No doc_id — sidecar creates new summary doc
@@ -1365,7 +1392,6 @@ class AgentChatService:
                             sidecar_model,
                             memories,
                             conversation_id,
-                            cached_actions=cached_actions,
                         )
                     )
                     logger.info(
@@ -1390,7 +1416,6 @@ class AgentChatService:
                     )
                     # Clear stale caches
                     _search_cache.pop(conversation_id, None)
-                    _agent_action_cache.pop(conversation_id, None)
             except Exception as e:
                 logger.error(
                     f"[SIDECAR] Failed to dispatch sidecar: {e}", exc_info=True
@@ -1398,8 +1423,21 @@ class AgentChatService:
 
             # v0.3.1.3: Cache current exchange for sidecar scoring on NEXT turn
             # No doc_id — sidecar creates new working memory with summary
+            #
+            # v0.3.3 Section 4 Defect 8: sidecar is text-only and never receives
+            # the image bytes (they branch off to the main LLM only). Without a
+            # marker, image-only sends produce uninformative memories like
+            # "user said '', assistant said 'I see a cat'". Prepend a fixed
+            # literal placeholder so the sidecar knows an image was attached
+            # when summarizing/scoring. Constant string (not f-string with
+            # count/filename) so the sidecar can pattern-match it reliably.
+            sidecar_user_msg = (
+                f"[image attached] {message}".strip()
+                if (images or image_filenames)
+                else message
+            )
             _sidecar_pending[conversation_id] = {
-                "user_msg": message,
+                "user_msg": sidecar_user_msg,
                 "assistant_msg": clean_response,
             }
 
@@ -1564,7 +1602,7 @@ class AgentChatService:
 
         return results
 
-    def _build_openai_prompt(
+    async def _build_openai_prompt(
         self, message: str, conversation_history: List[Dict[str, str]] = None
     ) -> str:
         """
@@ -1572,9 +1610,9 @@ class AgentChatService:
         Now unified with Ollama prompt - this wrapper maintained for compatibility.
         """
         # Use the same unified prompt for consistency
-        return self._build_complete_prompt(message, conversation_history)
+        return await self._build_complete_prompt(message, conversation_history)
 
-    def _build_complete_prompt(
+    async def _build_complete_prompt(
         self, message: str, conversation_history: List[Dict[str, str]] = None
     ) -> str:
         """
@@ -1582,7 +1620,7 @@ class AgentChatService:
         Single source of truth for prompt structure.
         """
         from datetime import datetime
-        from config.model_contexts import get_context_size
+        from config.model_contexts import get_context_size_async
 
         parts = []
 
@@ -1591,7 +1629,13 @@ class AgentChatService:
         current_model = (
             self.llm.model_name if hasattr(self.llm, "model_name") else self.model_name
         )
-        context_size = get_context_size(current_model)
+        llm_provider = getattr(self.llm, "api_style", "ollama")
+        provider = "lmstudio" if llm_provider == "openai" else "ollama"
+        context_size = await get_context_size_async(
+            current_model,
+            provider=provider,
+            base_url=getattr(self.llm, "base_url", None),
+        )
 
         # Thinking tags disabled (2025-10-17) - LLM provides reasoning in natural language when needed
         # No special response format instruction required
@@ -1937,7 +1981,6 @@ Always wait for tool results before responding with detailed information.""")
         sidecar_model: str,
         memories: List[Dict[str, str]],
         conversation_id: str,
-        cached_actions: Optional[List] = None,
     ):
         """
         v0.3.1.3: Background sidecar processing — 2 LLM calls matching core v0.4.8.
@@ -1965,12 +2008,22 @@ Always wait for tool results before responding with detailed information.""")
             )
 
             if not result:
-                logger.warning("[SIDECAR] Scoring call returned None")
-                if hasattr(self, '_app_state') and self._app_state:
-                    self._app_state.sidecar_last_error = f"Scoring failed for {sidecar_model}"
+                # v0.3.3 Defect 14: do NOT alarm the UI on a single transient
+                # failure. score_exchange_with_retry already enqueued this task
+                # for the retry queue, which has 3 attempts + exponential
+                # backoff. The user-visible sidecar_last_error is now set
+                # ONLY by the retry queue's terminal-failure callback when the
+                # whole budget is exhausted (modules/memory/sidecar_queue.py
+                # registers _terminal_failure_callback at startup, fires only
+                # after max_retries). Setting the error here would noise-flag
+                # the UI for transient hiccups the queue is designed to
+                # absorb silently — see Defect 14 release-notes entry.
+                logger.warning(
+                    "[SIDECAR] Scoring call returned None — retry queue will handle it"
+                )
                 return
 
-            # Clear error on success
+            # Clear error on success — first-attempt path
             if hasattr(self, '_app_state') and self._app_state:
                 self._app_state.sidecar_last_error = ""
 
@@ -2005,7 +2058,7 @@ Always wait for tool results before responding with detailed information.""")
                         "summarized_at": datetime.now().isoformat(),
                         "original_length": len(user_message) + len(assistant_response),
                         "conversation_id": conversation_id,
-                        "timestamp": datetime.now().isoformat(),
+                        "created_at": datetime.now().isoformat(),
                     }
                     if noun_tags:
                         summary_meta["noun_tags"] = json.dumps(noun_tags)
@@ -2074,20 +2127,6 @@ Always wait for tool results before responding with detailed information.""")
                     logger.debug(f"[SIDECAR] Scored exchange {summary_doc_id} as {outcome}")
                 except Exception as e:
                     logger.warning(f"[SIDECAR] Failed to score exchange {summary_doc_id}: {e}")
-
-            # Score cached actions for Action KG
-            if cached_actions and outcome in ("worked", "failed", "partial"):
-                logger.info(
-                    f"[ACTION_KG] Scoring {len(cached_actions)} cached actions with outcome={outcome}"
-                )
-                for action in cached_actions:
-                    action.outcome = outcome
-                    try:
-                        await self.memory.record_action_outcome(action)
-                    except Exception as e:
-                        logger.warning(
-                            f"[ACTION_KG] Failed to record action {action.action_type}: {e}"
-                        )
 
         except Exception as e:
             logger.error(f"[SIDECAR] Background processing failed: {e}")
@@ -2189,6 +2228,7 @@ Respond with ONLY the title, nothing else."""
         tool_events: List[Dict] = None,
         doc_id: str = None,
         citations: List[Dict] = None,
+        images: List[str] = None,  # v0.3.3 §4 Defect 4: persisted image filenames
     ):
         """Save conversation turn to JSONL file with atomic writes and file locking"""
 
@@ -2206,6 +2246,12 @@ Respond with ONLY the title, nothing else."""
                 "timestamp": timestamp,
                 "metadata": {},
             }
+
+            # v0.3.3 §4 Defect 4: persist image attachments by filename. The actual
+            # bytes live in <DATA_PATH>/attachments/<hash>.<ext>; on session reload
+            # the frontend constructs `/api/attachments/<filename>` URLs to render.
+            if images:
+                user_entry["images"] = list(images)
 
             # Save assistant response in the expected format with thinking in metadata
 
@@ -2300,6 +2346,18 @@ Respond with ONLY the title, nothing else."""
     def _load_conversation_histories(self):
         """Load recent conversations from session files into memory on startup"""
 
+        # v0.3.3 Defect 12: rehydrate image filenames to data URLs as messages
+        # are loaded. Session JSONL stores `<hash>.<ext>` filenames (Defect 4
+        # / Defect 10 persistence), but ollama_client.py's history-replay
+        # branch at lines 702-743 emits whatever's in `_h["images"]` directly
+        # into the OpenAI `image_url.url` field. Without this conversion, LM
+        # Studio rejects the request with HTTP 400 "Invalid url." on any
+        # multi-turn conversation that includes a prior image attachment.
+        from pathlib import Path as _P
+        from config.settings import DATA_PATH as _DP
+        from utils.attachments import load_image_attachment_as_data_url as _to_data_url
+        _attachments_dir = _P(_DP) / "attachments"
+
         try:
             for session_file in self.sessions_dir.glob("*.jsonl"):
                 conversation_id = session_file.stem
@@ -2315,6 +2373,25 @@ Respond with ONLY the title, nothing else."""
                         for line in lines[-20:]:
                             if line.strip():
                                 msg = json.loads(line)
+
+                                # v0.3.3 Defect 12: filename -> data URL.
+                                # Drop entries whose backing file is missing
+                                # or malformed (logged in the helper) rather
+                                # than aborting the entire reload.
+                                raw_images = msg.get("images")
+                                if raw_images:
+                                    rehydrated = []
+                                    for entry in raw_images:
+                                        if isinstance(entry, str) and entry.startswith("data:"):
+                                            rehydrated.append(entry)
+                                        else:
+                                            url = _to_data_url(entry, _attachments_dir)
+                                            if url:
+                                                rehydrated.append(url)
+                                    if rehydrated:
+                                        msg["images"] = rehydrated
+                                    else:
+                                        msg.pop("images", None)
 
                                 messages.append(msg)
 
@@ -2836,33 +2913,6 @@ Respond with ONLY the title, nothing else."""
         if tool_event_for_ui:
             yield tool_event_for_ui
 
-        # v0.2.6: Track tool execution for Action KG (unified with MCP server)
-        # Cache action until outcome is determined, then score it
-        if tool_execution_record and tool_execution_record.get("status") != "unknown":
-            action = ActionOutcome(
-                action_type=tool_name,
-                context_type="general",  # Default - could be enhanced to pass from caller
-                outcome="unknown",  # Will be updated when user reaction is detected
-                action_params=tool_args,
-                collection=(tool_args.get("collections") or [None])[0]
-                if tool_name == "search_memory"
-                else None,
-                doc_id=list(
-                    _search_cache.get(conversation_id, {})
-                    .get("position_map", {})
-                    .values()
-                )[0]
-                if (
-                    tool_name == "search_memory"
-                    and _search_cache.get(conversation_id, {}).get("position_map")
-                )
-                else None,
-            )
-            _agent_action_cache.setdefault(conversation_id, []).append(action)
-            logger.debug(
-                f"[ACTION_KG] Cached action: {tool_name} for conversation {conversation_id}"
-            )
-
         # Handle continuation for search_memory and external MCP tools (regardless of result count, under depth limit)
         # v0.2.5: Also handle external tool results
         from modules.mcp_client.manager import get_mcp_manager
@@ -3213,6 +3263,24 @@ async def _run_generation_task(
                 )
                 websocket = None  # Connection failed, disable WebSocket
 
+        # v0.3.3 §4 Defect 4: persist image attachments to disk before generation
+        # so they survive UI refresh and Tauri restart. The data URLs continue to
+        # flow to the LLM (Ollama / LM Studio path inside stream_response_with_tools);
+        # the returned filenames are passed alongside for session JSONL storage.
+        image_filenames: List[str] = []
+        if request.images:
+            from pathlib import Path as _P
+            from config.settings import DATA_PATH as _DP
+            from utils.attachments import save_image_attachment as _save_attach, AttachmentError as _AttErr
+            attachments_dir = _P(_DP) / "attachments"
+            for data_url in request.images:
+                try:
+                    image_filenames.append(_save_attach(data_url, attachments_dir))
+                except _AttErr as _att_exc:
+                    logger.warning(
+                        f"[ATTACHMENTS] Failed to persist image (continuing without): {_att_exc}"
+                    )
+
         # Set 2-minute timeout to prevent DeepSeek-R1/Qwen hangs
         # Use stream_message and accumulate events (batch fallback mode)
         final_response = []
@@ -3225,6 +3293,8 @@ async def _run_generation_task(
                 message=request.message,
                 conversation_id=conversation_id,
                 app_state=app_state,
+                images=request.images,  # v0.3.3 Section 4: multimodal
+                image_filenames=image_filenames if image_filenames else None,  # v0.3.3 §4 Defect 4
             ):
                 # v0.2.5: Buffered response model
                 if event["type"] == "response":
@@ -3347,6 +3417,28 @@ async def _run_generation_task_streaming(
         tool_executions = []
         citations = []
 
+        # v0.3.3 §4 Defect 10: persist image attachments to disk on the streaming
+        # path too. The non-streaming _run_generation_task already does this at
+        # line 3212-3228, but the streaming path (which is the primary route for
+        # WebSocket-connected sessions) skipped it — so images flowed to the LLM
+        # but were never written to <DATA_PATH>/attachments, never recorded in
+        # the JSONL session file's `images` field, and therefore never restored
+        # on UI refresh. Mirror the non-streaming logic here so both task entry
+        # points have identical persistence semantics.
+        image_filenames: List[str] = []
+        if request.images:
+            from pathlib import Path as _P
+            from config.settings import DATA_PATH as _DP
+            from utils.attachments import save_image_attachment as _save_attach, AttachmentError as _AttErr
+            attachments_dir = _P(_DP) / "attachments"
+            for data_url in request.images:
+                try:
+                    image_filenames.append(_save_attach(data_url, attachments_dir))
+                except _AttErr as _att_exc:
+                    logger.warning(
+                        f"[ATTACHMENTS] Failed to persist image (continuing without): {_att_exc}"
+                    )
+
         # Stream from agent service
         # IMPORTANT: Must fully consume generator to ensure session file is saved
         # Even if WebSocket disconnects, we continue to drain the generator
@@ -3355,6 +3447,8 @@ async def _run_generation_task_streaming(
             message=request.message,
             conversation_id=conversation_id,
             app_state=app_state,
+            images=request.images,  # v0.3.3 Section 4: multimodal
+            image_filenames=image_filenames if image_filenames else None,  # v0.3.3 §4 Defect 10
         ):
             # Check if WebSocket is still connected
             if not websocket_disconnected and (

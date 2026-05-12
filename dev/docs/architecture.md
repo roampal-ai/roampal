@@ -4,54 +4,31 @@
 
 Roampal is an intelligent chatbot with persistent memory and learning capabilities. The system features a **memory-first** architecture that learns from conversations and improves over time.
 
-## Architecture Refactor (v0.2.7)
+## Memory module structure (v0.3.3)
 
-**IMPORTANT**: In v0.2.7, the monolithic `UnifiedMemorySystem` (4,746 lines) was refactored into a **facade pattern** with **8 extracted services**. v0.2.8 completed API compatibility and stabilized the architecture. v0.2.9 added Ghost Registry for book deletion, `sort_by`/`related` MCP parameters, and critical bug fixes. v0.2.10 added ChromaDB error handling (ghost entries), schema migration for older data, and fixed memory promotion to run on startup. v0.2.11 fixed critical KG performance (O(n×m) → O(n+m), 25x faster), added message virtualization, and optimized store subscriptions. **v0.3.0** added per-memory scoring (`memory_scores` dict), 4-emoji attribution (👍🤷👎➖), `success_count` tracking for accurate Wilson scoring (no 10-entry cap), time-weighted score updates, patterns demotion (score < 0.4), optional `key_takeaway`, and surfaced memories UI display. Line number references throughout this document may point to the pre-refactor monolith.
+The memory subsystem follows a **facade pattern**: a thin `UnifiedMemorySystem` (`modules/memory/unified_memory_system.py`) coordinates a set of single-responsibility services. The original 4,746-line monolith was extracted into 8 services in v0.2.7; v0.3.1 added three more for the sidecar + tag stack (KG was removed in the same release).
 
-### New Architecture
+| Service | Purpose |
+|---|---|
+| `unified_memory_system.py` | Facade — public API, service coordination, tag extraction on store |
+| `search_service.py` | TagCascade retrieval (tag-routed overlap cascade + CE rerank) |
+| `chromadb_adapter.py` | Vector DB operations, BM25 hybrid search |
+| `smart_book_processor.py` | Book ingestion, chunking, contextual embedding |
+| `promotion_service.py` | Working → History → Patterns promotion pipeline |
+| `context_service.py` | Conversation context analysis |
+| `routing_service.py` | Query routing, acronym expansion |
+| `memory_bank_service.py` | Memory bank CRUD (cap: 500 items) |
+| `outcome_service.py` | Outcome recording, score updates |
+| `scoring_service.py` | Wilson scoring, score calculations |
+| `sidecar_service.py` (v0.3.1) | Background LLM scoring + atomic-fact extraction |
+| `sidecar_queue.py` (v0.3.1) | Retry queue for failed sidecar tasks |
+| `tag_service.py` (v0.3.1) | LLM-based noun-tag extraction + word-boundary matching |
+| `types.py` | Shared types, `ActionOutcome` enum |
+| `config.py` | Configuration constants |
 
-| Component | Lines | Purpose | v0.3.1 Status |
-|-----------|-------|---------|---------------|
-| `unified_memory_system.py` | ~1,600 | **Facade** - coordinates services, maintains API | KG removed, tag extraction on store |
-| `search_service.py` | ~650 | TagCascade retrieval, CE reranking | Tag-routed overlap cascade |
-| `chromadb_adapter.py` | 672 | Vector DB operations, BM25 hybrid search | Unchanged |
-| `smart_book_processor.py` | 657 | Book ingestion, chunking, contextual embedding | Unchanged |
-| `promotion_service.py` | 490 | Working→History→Patterns promotion | Unchanged |
-| `context_service.py` | ~400 | Conversation context analysis | KG methods return empty |
-| `routing_service.py` | ~400 | Query routing, acronym expansion | KG routing removed |
-| `memory_bank_service.py` | ~450 | Memory bank CRUD operations | KG entity tracking removed |
-| `outcome_service.py` | 401 | Outcome recording, score updates | Unchanged |
-| `scoring_service.py` | 339 | Wilson scoring, score calculations | memory_bank special case removed |
-| `sidecar_service.py` | NEW | Background LLM scoring + fact extraction | **New in v0.3.1** |
-| `sidecar_queue.py` | NEW | Retry queue for failed sidecar tasks | **New in v0.3.1** |
-| `tag_service.py` | NEW | Noun tag extraction + word-boundary matching | **New in v0.3.1** |
-| `types.py` | 296 | Shared types, ActionOutcome enum | Unchanged |
-| `config.py` | 102 | Configuration constants | graph config removed |
+The facade keeps a stable public surface (`search()`, `store()`, `record_outcome()`, `get_stats()`, `get_cold_start_context()`, `export_backup()`, `import_backup()`, etc.) so router code does not need to know which service answers each call. ChromaDB collection names use the `roampal_` prefix for compatibility with embedded-mode persistence.
 
-### Key Methods by Service
-
-| Feature | Pre-Refactor Location | Post-Refactor Location |
-|---------|----------------------|------------------------|
-| Cross-encoder reranking | `unified_memory_system.py:591-659` | `search_service.py:447+` |
-| Acronym expansion | `unified_memory_system.py:972-1144` | `routing_service.py:39+` |
-| Outcome recording | `unified_memory_system.py:2296-2424` | `outcome_service.py:50+` |
-| KG routing updates | `unified_memory_system.py` | *Removed in v0.3.1 (tag routing replaces KG)* |
-| Promotion logic | `unified_memory_system.py` | `promotion_service.py` |
-| Context analysis | `unified_memory_system.py:1736` | `context_service.py` |
-
-### API Compatibility
-
-The facade (`unified_memory_system.py`) maintains backwards compatibility with existing routers:
-- **Core**: `search()`, `store()`, `record_outcome()` - same signatures
-- **Stats**: `get_stats()`, `get_kg_entities()`, `get_kg_relationships()` - same signatures
-- **Cold Start**: `get_cold_start_context()` - auto-injects user profile, patterns, history
-- **Context**: `detect_context_type()` - returns debug/error/general/etc
-- **Learning**: `get_action_effectiveness()`, `record_action_outcome()` - causal learning
-- **Routing**: `get_tier_recommendations()`, `_update_kg_routing()` - KG-based routing
-- **KG Ops**: `get_facts_for_entities()`, `_cleanup_kg_dead_references()` - entity lookup
-- **Backup**: `export_backup()`, `import_backup()` - state persistence
-- **Embedding**: `_generate_contextual_prefix()` - contextual retrieval (Anthropic technique)
-- Collection names use `roampal_` prefix for ChromaDB compatibility
+Line numbers throughout the rest of this document may point at the pre-refactor monolith and should be treated as approximate.
 
 ## Performance Benchmarks
 
@@ -79,21 +56,17 @@ From roampal-labs LoCoMo evaluation (1,537 non-adversarial questions):
 - Two-lane retrieval adds +6.1 Hit@1 (p<0.0001)
 - Nursery slot: zero benefit (p=1.0)
 
-### Performance Metrics Summary
+### Performance Metrics Summary (v0.3.1 LoCoMo)
 
-| Metric | Measured Performance | Status |
+| Metric | Measured Performance | Source |
 |--------|---------------------|--------|
-| **TagCascade Hit@1** | 27.3% on 1,537 questions | ✅ Verified |
-| **Wilson harm** | -4.3 points (p<0.0001) | ✅ Verified |
-| **Two-lane boost** | +6.1 Hit@1 (p<0.0001) | ✅ Verified |
-| **Learning Curve** | 10% → 100% (+90pp) | ✅ Verified |
-| **Token Efficiency** | Outcome-only 6× more efficient than RAG | ✅ Verified |
-| **Infrastructure** | 14 test suites, 100% pass rate | ✅ Verified |
+| TagCascade Hit@1 (clean) | 27.3% on 1,537 questions | roampal-labs LoCoMo |
+| TagCascade Hit@1 (poison) | 29.0% on 1,537 questions | roampal-labs LoCoMo |
+| Wilson harm vs cosine | −4.3 points (p<0.0001) | roampal-labs LoCoMo |
+| Two-lane retrieval boost | +6.1 Hit@1 (p<0.0001) | roampal-labs LoCoMo |
+| Nursery slot effect | 0 (p=1.0) | roampal-labs LoCoMo |
 
-**Why This Matters:**
-The system learns that "what worked before" matters more than "what sounds related." Outcome learning (+40 pts) dominates cross-encoder reranking (+10 pts) by 4×.
-
-> **All benchmarks reproducible** - See `benchmarks/comprehensive_test/` folder for complete test suite and methodology.
+Older "learning curve" / "token efficiency" / "test suite count" claims that previously sat in this table referenced the v0.2.5 `benchmarks/comprehensive_test/` suite, not the v0.3.1 LoCoMo run. Those numbers are still cited in `releases/v0.2.5/RELEASE_NOTES.md` against their own methodology — they are not directly comparable to the LoCoMo numbers above and have been removed from this table to keep the citation clean.
 
 ### Design Principles
 
@@ -114,7 +87,7 @@ The system learns that "what worked before" matters more than "what sounds relat
 ┌──────────────────▼───────────────────────────────┐
 │                API Layer                         │
 │         (FastAPI + WebSocket)                    │
-│    /api/agent/chat  /api/memory/*                │
+│    /api/agent/stream  /api/memory/*              │
 └──────────────────┬───────────────────────────────┘
                    │
 ┌──────────────────▼───────────────────────────────┐
@@ -226,10 +199,9 @@ The system learns that "what worked before" matters more than "what sounds relat
   - `DELETE /api/memory-bank/delete/{id}` - User permanently deletes memory
   - `GET /api/memory-bank/search?q=...` - Semantic search
   - `GET /api/memory-bank/stats` - Statistics and tag cloud
-  - `GET /api/memory/knowledge-graph` - Get graph data (nodes/edges for visualization)
+  <!-- Removed v0.3.1: knowledge-graph endpoints. The KG itself was deleted; route handlers no longer exist. -->
     - Returns `last_used` and `created_at` timestamps when available (v0.2.0)
     - Newly created concepts have `null` timestamps until first scored outcome
-  - `GET /api/memory/knowledge-graph/concept/{id}/definition` - Get concept details with routing stats
 
 **Memory Bank Quality Ranking (v0.2.1):**
 
@@ -287,18 +259,7 @@ Noise: "Sarah Chen, 34, engineer at TechCorp Inc (consulting firm)"
 - CE Quality multiplier: `unified_memory_system.py:653-671`
 - Dedup similarity: `unified_memory_system.py:786-791`
 
-**KG Visualization Features (v0.2.0):**
-- **Time-based filtering**: All Time | Today | This Week | This Session
-  - **All Time**: Shows all concepts (including unused with `last_used = null`)
-  - **Today/Week/Session**: Only shows concepts with `last_used` timestamp in range
-- **Sort options**: Importance (hybrid score) | Recent (last used) | Oldest (creation time)
-- **Dynamic header**: Updates to show active filters ("Top 20 most recent concepts from today")
-- **Timestamps**: `created_at` and `last_used` are `null` for concepts created but never used in scored outcomes
-- **Success rate display**: Shows actual success percentage in nodes (50% default for unused concepts)
-- **Smooth resizing**: Debounced panel resize (300ms) prevents jank when dragging panel dividers
-- **Empty state UX**: Filter controls always visible, contextual messages based on active filter
-- **Concept modal**: Shows routing breakdown with collections searched and per-tier success rates
-- Always shows top 20 concepts based on selected filters
+<!-- KG Visualization Features (v0.2.0) block removed — the green/purple node graph view, concept modal, routing-breakdown UI, and /api/memory/knowledge-graph endpoint were all retired in v0.3.1. The Memory Panel's tag-cloud view replaced them. -->
 
 ### Metadata Schema (v0.2.0 - Searchable Fields)
 
@@ -605,22 +566,6 @@ After: "User memory, High importance: Gemma is 31"
 - Slot 4: nursery (low-use memory, < 3 uses) for exploration
 - No reserved working/history slots
 
-#### Combined Performance (Estimated)
-
-**Baseline (v0.2.0 - Dynamic Ranking + Dedup):**
-- 7B model: 50% accuracy
-- 32B model: 70% accuracy
-
-**Enhanced (v0.2.1 - + Contextual + Hybrid + Reranking):**
-- **7B model: 68% accuracy** (+36% relative improvement)
-- **32B model: 87% accuracy** (+24% relative improvement)
-
-**Why this matters for weak LLMs:**
-- 7B makes terrible queries: "her approximate age" instead of "Gemma age"
-- Contextual retrieval: Adds missing context to chunks
-- Hybrid search: BM25 catches exact phrases even when embedding fails
-- Cross-encoder: Filters false positives from bad embedding matches
-
 #### Technical Details
 
 **Dependencies:**
@@ -655,10 +600,7 @@ Preprocessed: "User uses API? application programming interface"
 - Applied before embedding generation in search()
 - Also passed to BM25 search for lexical matching
 
-**Benchmark Results (Search Quality Test):**
-- Before: 75% acronym expansion accuracy
-- After: 100% acronym expansion accuracy
-- Overall search quality: 100% (6/6 metrics at 100%)
+<!-- Removed unsourced "75% → 100% acronym expansion" claim — no corresponding benchmark in release notes. Feature itself (ACRONYM_DICT in routing_service.py) is live. -->
 
 **Search Flow:**
 ```
@@ -754,89 +696,11 @@ After 4th use (unknown): score=0.6 (no change), uses=4, success_count=2.25
 
 ### Learning Mechanisms
 
-#### Organic Memory Recall (NEW - 2025-09-30)
-**The system now proactively surfaces relevant context before searching memory.**
+#### Organic recall (v0.2.x feature — neutralized in v0.3.1)
 
-Instead of just searching for what you asked, Roampal analyzes:
-1. **Pattern Recognition**: "You tried this 3 times before, here's what worked"
-2. **Failure Awareness**: "Similar approach failed last time due to: [reason]"
-3. **Topic Continuity**: "Continuing discussion about: docker, deployment"
-4. **Proactive Insights**: "For authentication, patterns collection is 85% effective"
-5. **Repetition Detection**: "You mentioned something similar 5 minutes ago"
+The `analyze_conversation_context()` method (`context_service.py`) and the corresponding `get_context_insights` MCP tool surfaced "past experience / past failures / proactive insights" by reading from KG structures (`knowledge_graph["problem_categories"]`, `knowledge_graph["failure_patterns"]`, `knowledge_graph["context_action_effectiveness"]`). With the KG removed in v0.3.1, those data sources no longer exist. The method signatures remain in place for API compatibility but return empty results — see `context_service.py` for the `# KG removed in v0.3.1 — pattern matching no longer available` comment. The MCP `get_context_insights` tool was retired with the v0.3.1 tool-set refresh.
 
-**Technical Implementation:**
-- `unified_memory_system.py:1736` - `analyze_conversation_context()` method
-- `agent_chat.py:611-663` - Organic recall before LLM response (PRODUCTION - 2025-01-14)
-- `main.py:791-1105` - MCP tool `get_context_insights()` (PRODUCTION - 2025-01-14)
-
-**How It Works:**
-```python
-# Before (Query-Based Only)
-User: "Fix Docker issue"
-→ Search memory for "Fix Docker issue"
-→ Return generic Docker memories
-
-# Now (Context-Aware)
-User: "Fix Docker issue"
-→ Analyze conversation context FIRST:
-  • Checks knowledge_graph["problem_categories"] for concept matches
-  • Finds past solutions with outcomes (worked/failed)
-  • Detects topic continuity from recent messages
-  • Identifies similar questions asked recently
-→ Injects organic insights into prompt:
-  "📋 Past Experience: You tried this approach 2 times (100% success rate)"
-  "⚠️ Past Failures: Similar approach failed due to missing .env file"
-→ Then searches memory normally
-→ LLM sees full context and provides informed response
-```
-
-**Memory Context Injection Format:**
-```
-═══ CONTEXTUAL MEMORY ═══
-
-📋 Past Experience:
-  • Based on 3 past use(s), this approach had a 85% success rate
-    → User: Fix Docker permissions...
-
-⚠️ Past Failures to Avoid:
-  • Note: Similar approach failed before due to: missing sudo
-
-💡 Recommendations:
-  • For 'docker', check patterns collection (historically 85% effective)
-
-🔗 Continuing discussion about: docker, deployment
-
-Use this context to provide more informed, personalized responses.
-```
-
-**Impact:** The system now UNDERSTANDS what the data means, not just that it exists. It's the difference between:
-- ❌ A database that has your info but never uses it
-- ✅ An assistant that says "Oh yeah, you tried that before and here's what happened"
-
-**MCP Integration (2025-01-14):**
-External LLMs (via MCP) can explicitly request context insights using `get_context_insights(query)` tool:
-
-```python
-# Claude Desktop usage:
-get_context_insights("docker permissions issue")
-
-# Returns:
-═══ CONTEXTUAL INSIGHTS ═══
-
-📋 Past Experience:
-  • Based on 3 past uses, adding user to docker group had 100% success rate
-    Collection: patterns, Score: 0.95, Uses: 3
-    → User: How to fix Docker permissions...
-
-💡 Search Recommendations:
-  • For 'docker', check patterns collection (historically 85% effective)
-
-🔗 Continuing discussion about: docker, deployment
-```
-
-**Key Difference:**
-- **Production (agent_chat.py)**: Automatic organic recall before every LLM response
-- **MCP (main.py)**: Explicit tool call - external LLM decides when to check for insights
+In current operation, "organic" surface area is covered by TagCascade itself — tag-routed retrieval surfaces the same kind of cross-conversation continuity the organic-recall feature was designed to provide, without the KG indirection.
 
 **Cross-Conversation Memory Search (2025-09-30):**
 Working memory now searches **globally across all conversations** rather than being filtered to the current conversation only.
@@ -1019,57 +883,35 @@ Optimized for small sidecar models (3b+). Worst case: ~5,700 tokens total.
 | Summary output trim | 2,000 chars | Safety net (prompt instructs ~300 chars) |
 | **Scored memories per turn** | **8 (most recent)** | Last 8 from search cache — later searches more likely found the answer. Matches two-lane injection (4+4). Prevents JSON output complexity failures on small models. Unscored memories keep their current Wilson score. |
 
-### MCP (External LLM) Memory Scoring Flow
+### MCP (External LLM) memory scoring flow (v0.3.1+)
 
-**MCP Integration** uses **semantic learning storage** and **external LLM outcome assessment**:
+In v0.3.1 the scoring path was split across two tools. `record_response` stores a takeaway summary only; `score_memories` records per-memory outcomes against a `doc_id → outcome` map. The system fires a scoring hook in a system reminder when retrieved memory IDs are in flight; the external LLM is expected to call `score_memories` in response.
 
-**Turn 1:**
-1. External LLM calls `search_memory("IRA accounts")` → returns doc_id_A (working), doc_id_B (history)
-   - System caches: [doc_id_A, doc_id_B] for this session
-2. External LLM responds using those memories: "An IRA is a retirement account..."
-3. External LLM calls `record_response(key_takeaway="User asked about IRA accounts. I explained they are retirement accounts.", outcome="unknown")`
-   - **Store CURRENT learning** (semantic summary) → doc_id_1, score: 0.5
-   - **Score PREVIOUS learning** → none exists (first turn)
-   - **Score cached memories** → skipped (outcome="unknown")
-   - **Write CURRENT to session file** with doc_id_1
-   - **Clear cache**
+**Per-turn flow:**
 
-**Turn 2:**
-1. External LLM calls `search_memory("more details")` → returns doc_id_C (patterns)
-   - System caches: [doc_id_C]
-2. External LLM analyzes user message "that didn't help" → determines outcome="failed"
-3. External LLM responds: "Here are more details..."
-4. External LLM calls `record_response(key_takeaway="User said explanation didn't help. I provided more detailed information.", outcome="failed")`
-   - **Store CURRENT learning** (semantic summary) → doc_id_2, initial_score: 0.2 (failed)
-   - **Score previously SEARCHED memories** → [doc_id_C] using same outcome ("failed")
-     - doc_id_C score updated (was used in failed response, gets downvoted)
-   - **Write CURRENT to session file** with doc_id_2
-   - **Clear cache**
-   - Note: doc_id_1 from Turn 1 is NOT re-scored (MCP scores CURRENT learning at creation time, not retroactively)
+1. External LLM calls `search_memory("...")` → returns memory IDs (`history_abc`, `patterns_xyz`, etc.). The IDs flow through the next system-reminder hook.
+2. External LLM produces its response and judges, per memory, whether it `worked` / `failed` / was `partial` / `unknown`.
+3. External LLM calls `score_memories(memory_scores={"history_abc": "worked", ...}, exchange_summary="...", exchange_outcome="worked", noun_tags=[...], facts=[...])`.
+   - Each memory's raw score moves per outcome (worked +0.2, partial +0.05, unknown −0.05, failed −0.3 — see `outcome_service._calculate_score_update`).
+   - `exchange_summary` lands in the working tier as a new entry. Optional `facts` land as separate atomic entries.
+4. If the LLM wants to capture an ad-hoc takeaway *without* a scoring hook, it calls `record_response(key_takeaway=..., noun_tags=[...])` — the takeaway is stored to working with initial score 0.7 and follows the normal lifecycle from there.
 
-**Key Differences from Internal System:**
+**Difference from the v0.3.0 record_response semantics:** the old fat `record_response` took `outcome` / `memory_scores` / `related` / `key_takeaway` all in one call. That schema was retired because per-memory scoring conflates two separate decisions (what to store vs how to weight existing memories) into one optional-parameter mess.
 
-| Aspect | Internal System | MCP System |
-|--------|----------------|------------|
-| **Outcome Detection** | Automatic - internal LLM analyzes conversation | Manual - external LLM provides outcome via parameter |
-| **Who Judges** | Roampal's internal LLM | External LLM (Claude, Cursor, etc.) |
-| **Storage Format** | Verbatim transcripts | Semantic summaries (key_takeaway) |
-| **LLM Calls** | Extra call for outcome detection | No extra call - external LLM provides outcome |
-| **Trust Model** | System decides outcome | System trusts external LLM completely |
-| **Memory Tracking** | Session-scoped cache | Session-scoped cache (same) |
-| **What Gets Scored** | Previous exchange + retrieved memories | **CURRENT learning + retrieved memories** (both scored immediately) |
+**vs internal (in-product) flow:**
 
-**Why Different:**
-- **Semantic storage:** LLMs excel at summarization, avoids verbatim copy errors, better for search
-- **Score CURRENT not PREVIOUS:** MCP scores the learning being recorded immediately, allowing optional tool calling (LLM only calls when clear outcomes)
-- **Explicit outcome scoring:** External LLM provides outcome explicitly based on user feedback (more reliable than auto-detection for external contexts)
-- **No automatic detection:** MCP system uses explicit `outcome` parameter - defaults to "unknown" if not provided, no internal LLM verification
+| Aspect | Internal | MCP |
+|---|---|---|
+| Outcome detection | Sidecar LLM analyzes the exchange | External LLM explicitly classifies each retrieved memory |
+| Storage format | Sidecar produces summary + atomic facts | External LLM produces `exchange_summary` + optional `facts` |
+| Trust model | System decides outcome | System trusts the external LLM |
+| Cache | Session-scoped | Session-scoped |
 
 **Implementation Details:**
 - `search_memory` tool:
   - Returns **full content** for all results (no truncation)
-  - Caches ALL doc_ids for Action KG tracking (v0.2.6 - unified with internal system, includes books/memory_bank)
-  - **Caches search query** for KG routing updates (stores in `last_search_query_cache[session_id]`)
+  - Caches retrieved `doc_ids` for the subsequent scoring hook (so `score_memories` can attribute outcomes by ID)
+  - Caches the search query for the same hook (`last_search_query_cache[session_id]`)
 - `record_response` tool:
   - **Parameters:** `key_takeaway` (semantic summary, optional in v0.3.0) + `outcome` (optional, defaults to "unknown") + `memory_scores` (v0.3.0 NEW: per-memory scoring dict)
   - **Storage:** If key_takeaway provided, stores semantic summary to ChromaDB with **initial score calculated from outcome** (worked=0.7, failed=0.2, partial=0.55, unknown=0.5)
@@ -1097,15 +939,9 @@ Optimized for small sidecar models (3b+). Worst case: ~5,700 tokens total.
 - ❌ `books` - Reference material (distance-ranked, never scored)
 - ❌ `memory_bank` - User facts/Useful information (uses importance×confidence for ranking, NOT outcome-scored)
 
-**Action-Effectiveness KG Tracking (v0.2.1, updated v0.2.6):**
-- ✅ **MCP System**: All 4 tools tracked (`search_memory`, `create_memory`, `update_memory`, `archive_memory`)
-- ✅ **Internal System**: All tools tracked (v0.2.6 - added action caching and scoring in agent_chat.py)
-- Both systems build identical `knowledge_graph["context_action_effectiveness"]` structure
-- Key format: `"{context}|{action}|{collection}"` (e.g., `"coding_help|search_memory|patterns"`)
-- Tracks: successes, failures, partials, success_rate, total_uses, examples
-- Updates on every `record_response` with explicit outcome (MCP) or automatic detection (internal)
+<!-- Removed "Action-Effectiveness KG Tracking" block: built knowledge_graph["context_action_effectiveness"] which no longer exists (KG removed v0.3.1). Outcome tracking is now per-memory via score_memories / sidecar — see outcome_service.py. -->
 
-**Implementation:** Single outcome detection in streaming endpoint ([agent_chat.py:1113-1154](../app/routers/agent_chat.py#L1113-L1154))
+**Implementation:** Outcome detection runs in the streaming endpoint via `chat_service.memory.outcome_detector` — see `agent_chat.py` (search `outcome_detector` for current location; line numbers shift across refactors).
 
 **Benefits:**
 - ✅ Simple: ONE code path, no duplication
@@ -1237,19 +1073,12 @@ Return JSON: {"outcome": "worked|failed|partial|unknown"}
 - **2025-10-05**: Analyzed outcomes before user feedback → false positives
 - **2025-10-06**: Was too lenient - any positive word → "worked"
 - **2026-01-20**: Prompt confused small LLMs ("ty" → "failed" because "generic response")
-**Additional Safety Improvements (2025-10-04):**
-1. **Book & Memory Bank Safeguards** ([outcome_service.py:90-104](modules/memory/outcome_service.py#L90-L104))
-   - **KG routing updates FIRST** - Books/memory_bank searches update Routing KG patterns (learning which queries → those collections)
-   - **Then safeguard blocks outcome-based scoring** - Books and memory_bank are never outcome-scored
-   - **Why:** Routing KG learns from all collections, but books/memory_bank shouldn't be promoted/demoted based on conversation outcomes
-   ```python
-   # UPDATE KG ROUTING FIRST - even for books/memory_bank
-   if problem_text:
-       await self.kg_service.update_kg_routing(problem_text, collection_name, outcome)
+**Book & Memory Bank Safeguards** ([outcome_service.py](modules/memory/outcome_service.py))
 
+   Books and `memory_bank` entries are reference material, not scorable memories — they bypass the outcome-driven score-update path entirely. (Pre-v0.3.1 versions of this safeguard also updated a Routing KG before bailing; the Routing KG was removed in v0.3.1, so the safeguard is now just the bail.)
+   ```python
    # SAFEGUARD: Books are reference material, not scorable memories
    if doc_id.startswith("books_"):
-       logger.info("[KG] Learned routing pattern for books, but skipping score update")
        return None
 
    # SAFEGUARD: Memory bank is user identity/facts, not scorable patterns
@@ -1291,453 +1120,42 @@ Matches core v0.4.5 `outcome_service.py` pattern.
 1. Clean stale working memory from previous session
 2. Clean history older than 30 days
 
-**Automatic Cleanup on Deletion** (v0.2.0 - Prevents Stale Data):
-- **Content KG cleanup** - Automatically called on ALL memory_bank deletions:
-  - `archive_memory_bank()` → `content_graph.remove_entity_mention(doc_id)` [unified_memory_system.py:2703](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L2703)
-  - `user_delete_memory()` → `content_graph.remove_entity_mention(doc_id)` [unified_memory_system.py:2833](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L2833)
-  - `delete_by_conversation()` → batch cleanup for all deleted memory_bank items [unified_memory_system.py:877-889](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L877-L889)
-  - **Note**: Books are NOT indexed in Content KG (only memory_bank), so book deletion doesn't need Content KG cleanup
-- **Action KG cleanup** (v0.2.6) - Called on book deletions:
-  - `delete_book()` → `cleanup_action_kg_for_doc_ids(chunk_ids)` [book_upload_api.py:705-714](../ui-implementation/src-tauri/backend/backend/api/book_upload_api.py#L705)
-  - Removes stale `doc_id` references from `context_action_effectiveness` examples
-- **Routing KG cleanup** - Called on bulk deletions:
-  - `delete_by_conversation()` → `_cleanup_kg_dead_references()` [unified_memory_system.py:892](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L892)
-- **Fallback protection** - Cold-start has fallback to vector search when Content KG has stale data [unified_memory_system.py:964-976](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L964-L976)
+<!-- Removed v0.2.0 "Automatic Cleanup on Deletion" block: described Content KG / Action KG / Routing KG cleanup hooks (content_graph.remove_entity_mention, cleanup_action_kg_for_doc_ids, _cleanup_kg_dead_references). All KG services were deleted in v0.3.1 (release notes Section 9); none of these methods exist in current code. -->
 
 **Auto-Promotion** (fires every 20 messages, non-blocking):
 - Triggered after 20 messages in working memory
 - Fire-and-forget (doesn't block chat responses)
 - Moved to background task in 2025-10-01 update
 
-#### Dual Knowledge Graph System (v0.2.0)
+#### Knowledge Graph (removed v0.3.1)
 
-> **v0.3.1 deprecation:** The entire KG system (Routing KG, Content KG, Action KG) is being replaced by tag-routed overlap cascade. Benchmark data proved KG actively hurts retrieval — edge scores frozen at 0.5, graph expansion adding noise. Wilson+CE without KG scored 78.7% vs KG+CE at 74.6%. See `dev/docs/releases/v0.3.1/RELEASE_NOTES.md` for the replacement design. Code archived to `dev/archive/kg/`.
+The original heavyweight KG components (Routing KG, Content KG, Action KG — separate `KnowledgeGraphService`, `ContentGraph`, `IntelligentRouter` modules with learned edge scores) were removed in v0.3.1. Per the paper (`roampal-labs/paper.md`), the surviving v0.3.3 retrieval architecture is itself a *lightweight knowledge graph* — paper.md:224: *"tags are nodes, memories are edges, and overlap count provides multi-hop convergence without graph database overhead."* So "KG removed" is shorthand for "heavyweight edge-learning KG removed; tags-as-lightweight-KG kept and became the final architecture."
 
-**Learning-Based Routing KG** (Implemented 2025-11-05)
+**What was tested and eliminated** (paper.md §5.2, summarized at lines 139-141):
 
-The system uses a learning-based Knowledge Graph router that intelligently selects memory tiers based on past search success patterns. **Zero hardcoded keywords** - learns entirely from usage.
+> "Four components were tested and eliminated through retrieval analysis on existing databases: Wilson retrieval blend, Wilson cascade sort, Wilson-only retrieval, and single-pool tag routing. Wilson scoring was tested at every possible retrieval stage (blend, cascade pre-sort, standalone) and hurt or added nothing in all configurations."
 
-**Key Principles:**
-1. **Learn from outcomes** - Tracks which tiers (books, working, history, patterns, memory_bank) successfully answer which types of queries
-2. **Static stopword filtering** - Extracts n-grams (unigrams, bigrams, trigrams) with ~40 hardcoded stopwords for concept extraction
-3. **Confidence-based routing** - Evolves from exploration (all tiers) → focused (1-2 best tiers)
-4. **Safety fallback** - Expands to all tiers if <3 results found
-5. **LLM override** - LLM can still explicitly specify collections to bypass routing
+**What was kept** (paper.md L18, L781):
 
-**How It Works:**
+> "Tag-scoped retrieval (entity-name routing before cross-encoder reranking) improves retrieval ranking (p<0.0001) but produces no statistically significant exam accuracy difference (p=0.618) — both architectures converge with 8 retrieval slots."
+>
+> "Final architecture: tags-first cascade retrieval + CE reranking + outcome-based lifecycle management."
 
-*Phase 1: Cold Start (First 3-10 queries)*
-```python
-# No patterns learned yet → Search all tiers
-query = "show me books about investing"
-concepts = ["show", "me", "books", "about", "investing", "show_me", "me_books", ...]
-total_score = 0  # No patterns exist
-→ Routes to: ["working", "patterns", "history", "books", "memory_bank"]
-```
+**Preserved headline numbers** (paper.md table at L330-360, 20B model, MiniMax-regraded, 1,540 non-adversarial questions):
 
-*Phase 2: Learning (After 10+ queries)*
-```python
-# System has learned patterns
-query = "show me books about investing"
-concepts = ["books", "investing", "books_about", ...]
+| Architecture | Non-adversarial accuracy |
+|---|---|
+| **TagCascade (CE + Tags) — shipped** | **85.8%** |
+| CE-Only (no tag routing) | 84.5% |
+| Raw baseline (ingestion only) | 56.5% |
 
-# Calculate tier scores from learned patterns:
-routing_patterns["books"] = {
-  "collections_used": {
-    "books": {"successes": 8, "failures": 2, "total": 10},
-    "working": {"successes": 1, "failures": 3, "total": 4}
-  }
-}
+TagCascade vs CE-Only is statistically indistinguishable on exam accuracy (p=0.618), but tag routing measurably improves retrieval ranking (p<0.0001). The heavyweight edge-learning KG was abandoned mid-benchmark — `roampal-labs/benchmark/runner.py:1346` records the stopping condition (*"STOPPED: KG+CE edge scores frozen at 0.5 — graph not learning"*), and the KG+CE benchmark group is commented out. The lightweight tag-based replacement was then designed and validated against the preserved data above.
 
-# Scoring:
-books_tier: (8/10) * min(10/10, 1.0) = 0.8 * 1.0 = 0.8
-working_tier: (1/4) * min(4/10, 1.0) = 0.25 * 0.4 = 0.1
-total_score = 0.9
+Earlier-stage experiment numbers (full-KG Roampal ~42-50%, Reranker ~73-80%, single-hop 9% vs 41% vs 61%) exist in Roampal memory entries `patterns_fb29c1ed`, `patterns_ddd00e20`, `patterns_aae527ff` but are **not preserved in the paper or in `roampal-labs/` filesystem artifacts** — those were intermediate explorations during the abandonment decision, not the final published numbers. They should not be cited as authoritative; the paper-preserved 85.8% / 84.5% / 56.5% comparison is what survives end-to-end review.
 
-→ Routes to: ["books", "working"]  # Top 2 tiers
-```
+Legacy KG code archived to `dev/archive/kg/`.
 
-*Phase 3: Confident (After 20+ queries)*
-```python
-# High confidence in routing
-total_score = 2.4  # Multiple concepts with strong patterns
-→ Routes to: ["books"]  # Single best tier
-```
-
-**N-gram Concept Extraction** ([unified_memory_system.py:1140-1193](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L1140-L1193)):
-- Unigrams: `["books", "investing", "show", "me"]`
-- Bigrams: `["show_me", "me_books", "books_about", "about_investing"]`
-- Trigrams: `["show_me_books", "me_books_about", "books_about_investing"]`
-- Technical patterns: `CamelCase`, `snake_case`, `ErrorTypes`
-- **Static stopword filtering** - Uses ~40 hardcoded English stopwords ("the", "a", "is", "are", "was", "were", etc.)
-- Additional stopwords available in [config/settings.py:408-423](../ui-implementation/src-tauri/backend/config/settings.py#L408-L423) (~120 words for keyword search fallback)
-
-**Confidence Formula** ([unified_memory_system.py:896-908](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L896-L908)):
-```python
-# Success rate calculation (v0.2.0 fix)
-total_with_feedback = successes + failures
-if total_with_feedback > 0:
-    success_rate = successes / total_with_feedback  # Actual percentage
-else:
-    success_rate = 0.5  # 50% neutral baseline (no feedback yet)
-
-confidence = min(total_uses / 10.0, 1.0)  # Grows with usage
-tier_score = success_rate * confidence
-```
-
-**Note:** "partial" outcomes are tracked but excluded from success_rate calculation. Concepts without explicit "worked"/"failed" feedback default to 50% (neutral/unknown).
-
-**Routing Thresholds** ([unified_memory_system.py:909-928](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L909-L928)):
-- `total_score < 0.5`: **Exploration** - Search all 5 tiers
-- `0.5 ≤ total_score < 2.0`: **Medium confidence** - Select top 2-3 tiers
-- `total_score ≥ 2.0`: **High confidence** - Focus on top 1-2 tiers
-
-**Fallback Safety Net** ([unified_memory_system.py:664-690](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L664-L690)):
-```python
-if len(results) < 3 and not_searching_all_tiers:
-    # Expand to remaining tiers
-    # Prevents over-aggressive routing from missing results
-```
-
-**Outcome Learning** ([unified_memory_system.py:1207-1321](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L1207-L1321)):
-- Tracks `successes`, `failures`, and `total` per tier per concept
-- Updates on `record_outcome(worked/failed/partial)`
-- Partial outcomes tracked but don't affect success rate
-- Builds concept relationships for knowledge graph
-
----
-
-#### Knowledge Graphs are the Intelligence Layer
-
-> **v0.3.1 update:** This section describes the original KG design philosophy. Benchmark results disproved this — KG routing added noise, not intelligence. Tags + Wilson+CE proved simpler and more effective. The intelligence layer is now Wilson outcome scoring + tag routing, not graph traversal.
-
-**Original Realization (v0.2.0)**: The memory collections (books, working, history, patterns, memory_bank) are just **storage**. The real intelligence lives in the **Knowledge Graphs**.
-
-**Three Knowledge Graphs Working Together:**
-
-1. **Routing KG** (`routing_patterns`, `success_rates`) - *Which collection has the answer?*
-   - Maps concepts → best collection
-   - Learns from search outcomes
-   - Enables intelligent tier selection
-
-2. **Content KG** (`content_graph`) - *How are entities related?*
-   - Entity relationships from **memory_bank text only** (not working/history/patterns)
-   - Entity strength formula: `(co_occurrences ** 0.5) * 2.0` (sqrt diminishing returns)
-   - Green/purple nodes in visualization
-   - Semantic connections between concepts
-
-3. **Action-Effectiveness KG** (`context_action_effectiveness`) - *What tool should I use in this situation?*
-   - Maps (context, action, collection) → success rate
-   - Learns contextually appropriate behaviors
-   - Enables self-correction and alignment
-   - v0.2.6: Stores doc_ids in examples for document-level effectiveness tracking
-
-**The Memory Paradox:**
-
-```
-Without KG:
-  5 collections × 1000 documents = 5000 items
-  Search: "authentication error"
-  → Must search ALL 5000 items
-  → Slow, unfocused, no learning
-
-With Routing KG:
-  Search: "authentication error"
-  → Concepts: ["authentication", "error", "authentication_error"]
-  → KG says: "patterns" tier has 95% success rate for these concepts
-  → Search only 200 items in patterns tier
-  → Fast, focused, learns from outcomes
-
-With Action-Effectiveness KG:
-  Context: memory_test (LLM-classified from conversation)
-  → KG says: "search_memory has 85% success in memory_test context"
-  → KG says: "create_memory has 5% success in memory_test context"
-  → System learns to avoid hallucination patterns
-  → Enables contextual alignment
-```
-
-**The Intelligence Hierarchy:**
-
-```
-Level 0: Raw Storage (ChromaDB)
-  ↓ Just vectors and metadata
-
-Level 1: Memory Collections (5 tiers)
-  ↓ Organized by lifecycle (working → history → patterns)
-
-Level 2: Routing KG (which tier?)
-  ↓ Learns which collection answers which query
-
-Level 3: Content KG (what's related?)
-  ↓ Understands entity relationships
-
-Level 4: Action-Effectiveness KG (what should I do?)
-  ↓ Learns contextually appropriate behavior
-  ↓ Enables self-correction and alignment
-
-Level 5: Self-Improving Prompts (FUTURE)
-  ↓ Auto-generates corrective instructions from learned patterns
-```
-
-**Memory is storage. Knowledge Graphs are intelligence.**
-
-Without the KGs:
-- 5000 documents to search → Slow
-- No learning from outcomes → Repeats mistakes
-- No context awareness → Inappropriate tool use
-- LLM must re-learn patterns every conversation → Inefficient
-
-With the KGs:
-- ~200 documents to search → 25x faster
-- Learns from every outcome → Gets smarter
-- Detects context and chooses appropriate actions → Aligned behavior
-- Accumulated intelligence persists → Continuous improvement
-
-**The KGs are where the system becomes intelligent.**
-
----
-
-## 🔮 FUTURE FEATURE: Adaptive Stopword Learning
-
-**Status:** Planned enhancement - not currently implemented
-
-The system currently uses static stopword lists. A future enhancement would add dynamic learning to automatically classify words as noise vs. semantic concepts based on usage patterns.
-
-**Proposed Implementation:**
-
-**4-Phase Learning Process:**
-
-*Phase 1: Bootstrap (Queries 1-10)*
-- Start with minimal hardcoded stopwords (core 29: "a", "an", "the", "is", "are", etc.)
-- Track ALL words in `knowledge_graph["word_statistics"]`
-- Record: frequency, tier distribution, outcome correlation, timestamps
-
-*Phase 2: Statistical Collection (Queries 10-50)*
-```python
-# Track full statistics per word
-"investing": {
-    "total_queries": 45,
-    "tier_distribution": {"books": 40, "working": 5, ...},
-    "outcome_correlation": {"successes": 35, "failures": 10},
-    "discrimination_score": 0.85,  # Shannon entropy-based
-    "is_stopword": False
-}
-```
-
-*Phase 3: Automatic Classification (Every 50 queries)*
-- Calculate Shannon entropy discrimination scores across tiers
-- Auto-classify stopwords: high frequency (>10%) + low discrimination (<0.3) + neutral outcomes (45-55%)
-- Prune rare words: frequency <3 AND not seen in 100 queries
-
-*Phase 4: Dynamic Re-evaluation (Continuous)*
-- Words can transition between useful ↔ stopword based on evolving patterns
-- Domain-specific adaptation (e.g., "kubernetes" = meaningful in tech context, stopword elsewhere)
-
-**Benefits:**
-- Auto-adapts to user's vocabulary and domain
-- Learns project-specific jargon and acronyms
-- Reduces KG bloat without manual tuning
-- Bilingual/multilingual support potential
-
-**Storage Impact:**
-- ~50-80 bytes per word × 5,000 words = ~300-400KB
-- Saves in existing `knowledge_graph.json`
-
-**Implementation Note:** Would not affect `memory_bank` (user bookmarks are protected from auto-modification)
-
----
-
-**Content Knowledge Graph** (⚠️ NEUTRALIZED in v0.3.1)
-
-> **v0.3.1:** Content KG entity boost disabled in search hot path. KG visualization tab removed from UI. Files archived to `dev/archive/kg/`. Tag routing + Wilson+CE replaces KG entity boost.
-
-Previously complemented the routing KG with a content-based entity graph. Retained for potential future use but not active in search/retrieval.
-
-**Implementation Status:**
-- ✅ Core class: [content_graph.py](../ui-implementation/src-tauri/backend/modules/memory/content_graph.py)
-- ✅ Integration: [unified_memory_system.py:20,149-154,160-172](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py)
-- ✅ Entity extraction: Automatic on memory_bank store/update/archive [lines 2456-2466,2528-2537,2569-2575](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py)
-- ✅ Triple KG merge (v0.2.1): [get_kg_entities():4147-4310](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L4147-L4310)
-- ✅ Persistence: Saved atomically with routing KG [_save_kg_sync():212-238](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L212-L238)
-- ✅ Visualization: Blue (routing), Green (content), Purple (both), Orange (action) nodes in KG UI
-
-**Triple File Architecture:**
-- **Routing KG**: Learns which collections to search based on query patterns
-  - Data source: User search queries + outcome feedback
-  - Purpose: Optimize search routing (blue nodes)
-  - Storage: `knowledge_graph.json`
-  - Implementation: [unified_memory_system.py:146-147](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L146-L147)
-- **Content KG**: Builds user's personal knowledge graph from stored content
-  - Data source: memory_bank text + entity extraction
-  - Purpose: Map entity relationships - who you are, what you do (green nodes)
-  - Storage: `content_graph.json`
-  - Implementation: [content_graph.py](../ui-implementation/src-tauri/backend/modules/memory/content_graph.py), [unified_memory_system.py:149-154](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L149-L154)
-- **Memory Relationships**: Links between memories discovered during promotion/scoring
-  - Data source: Promotion service detecting related memories
-  - Purpose: Memory clustering (related, evolved-from, conflicts-with)
-  - Storage: `memory_relationships.json`
-
-**Key Difference:**
-- **Routing KG**: "benjamin_graham" query → route to books collection (routing decision)
-- **Content KG**: "User prefers Docker for development" → creates docker ↔ development relationship (knowledge representation)
-
-**Features:**
-- Entity extraction from memory_bank content
-- Co-occurrence based relationship strength
-- Document tracking per entity
-- BFS path finding between entities
-- Automatic relationship updates on new content
-- Metadata tracking (first_seen, last_seen, mentions)
-- **Automatic cleanup on memory deletion** (v0.2.0 - prevents stale data)
-- **Quality-based entity ranking** (v0.2.1 - prioritizes authoritative entities)
-
-**Quality-Based Entity Ranking (v0.2.1):**
-
-Entities now track quality scores derived from LLM-provided importance × confidence ratings:
-- **Scoring**: `avg_quality = sum(importance × confidence) / mentions`
-- **Sorting**: Entities ranked by `avg_quality` (descending) instead of `mentions`
-- **Impact**: Authoritative facts prioritized over frequently-mentioned trivia
-- **Example**: "User is senior backend engineer at TechCorp" (importance=0.9, confidence=0.95, quality=0.855) ranks higher than "maybe user likes TypeScript" mentioned 10 times (importance=0.3, confidence=0.5, quality=0.15)
-
-**Content KG Search Enhancement (v0.2.1):**
-
-memory_bank searches receive entity quality boosting based on Content KG:
-- **When**: ONLY applied when searching memory_bank collection specifically
-- **How**: Documents containing high-quality entities matching query concepts receive score boost
-- **Calculation**: For each matching entity, `boost += entity.avg_quality × 0.2` (capped at 50% total boost)
-- **Example**: Query "backend engineer techcorp" matches document with 3 high-quality entities (avg_quality=0.8 each) → boost = (0.8×3) × 0.2 = 48%
-- **Other collections**: working, history, patterns, books use existing ranking (unchanged)
-
-**Benefits:**
-- Enables real entity connections in MCP integration
-- Supports `get_kg_path("logan", "everbright")` to find relationships
-- Creates "turbo user profile graph" - visual representation of user's knowledge
-- Foundation for NER, fact extraction, semantic network features
-
-**Full Implementation Details:** See [docs/KG_UPGRADE.md](KG_UPGRADE.md) Appendix C
-
-**UI Visualization (v0.2.1: Quad-color system):**
-- 🔵 Blue nodes = routing patterns (query-based, what you search for)
-- 🟢 Green nodes = memory entities (content-based, who you are)
-- 🟣 Purple nodes = both (intersection of queries and content)
-- 🟠 Orange nodes = action effectiveness patterns (context|action|collection success rates)
-
-**MCP Integration** ([main.py:753-1048](../ui-implementation/src-tauri/backend/main.py#L753-L1048)):
-- Fixed: `collections=["all"]` bug - now passes `None` to trigger hybrid KG routing
-- **Hybrid Routing** (v0.2.0): LLM can override OR use KG's learned patterns
-- External LLMs (Claude Desktop) benefit from automatic intelligent routing
-- **External LLM Outcome Judgment** (v0.2.0→v0.3.0 - [main.py:960-1048](../ui-implementation/src-tauri/backend/main.py#L960-L1048)):
-  - `record_response` tool: `key_takeaway` (optional in v0.3.0), `outcome` (optional), `memory_scores` (v0.3.0 NEW)
-  - **Key Principle**: External LLM judges its own previous response based on user feedback
-  - When user provides feedback, external LLM passes `outcome: "worked"/"failed"/"partial"/"unknown"`
-  - v0.3.0: Can use `memory_scores` for per-memory attribution: `{doc_id: outcome}`
-  - Server scores memories and optionally stores new learning
-  - Example: `record_response({key_takeaway: "User thanked me...", memory_scores: {"history_abc": "worked", "patterns_xyz": "failed"}})`
-    - Scores the previous learning (from last turn)
-    - Stores current learning summary to working memory
-- **Why External LLM Judges**: Each AI (internal or external) evaluates its own conversation quality for consistency
-- **Outcome Flow** (v0.2.0 - [main.py:968-1009](../ui-implementation/src-tauri/backend/main.py#L968-L1009)):
-  1. Receive `key_takeaway` and `outcome` from external LLM
-  2. If `outcome` is "worked"/"failed"/"partial", find previous learning's doc_id
-  3. Score that previous learning via `record_outcome(prev_doc_id, outcome)`
-  4. Store current `key_takeaway` to working memory with cached search query in metadata
-  5. Update KG routing patterns with success/failure
-  6. Check promotion thresholds (working → history → patterns)
-- **Action-Effectiveness KG for MCP** (v0.2.1 - [main.py:100-1385](../ui-implementation/src-tauri/backend/main.py#L100-L1385)):
-  - **Context Detection**: On every tool call, system detects conversation context via LLM classification
-  - **Conversation Boundary Detection** (v0.2.1 - NEW):
-    - **Problem**: MCP protocol doesn't provide conversation IDs (all conversations in Claude Desktop share same session ID)
-    - **Solution**: Auto-detect conversation boundaries using 2 signals:
-      1. **Time Gap**: 10+ minutes since last tool call → clear cache (likely new conversation)
-      2. **Context Shift**: Topic changes (e.g., "coding_help" → "fitness_tracking") → clear cache
-    - **Implementation**: `_should_clear_action_cache()` and `_cache_action_with_boundary_check()` ([main.py:100-161](../ui-implementation/src-tauri/backend/main.py#L100-L161))
-    - **Benefit**: Prevents actions from Conversation A being scored with outcomes from Conversation B
-    - **Limitation**: Not perfect (fast topic switches may miss boundary), but catches 90%+ of cases
-  - **Action Tracking**: All 4 MCP tools cache `ActionOutcome` objects during execution:
-    - `search_memory` → tracks which collections were searched
-    - `add_to_memory_bank` (create_memory) → tracks memory creation
-    - `update_memory` → tracks memory updates
-    - `archive_memory` → tracks memory archival
-  - **Outcome Scoring**: When `record_response` provides outcome, system:
-    - Updates all cached actions with outcome ("worked"/"failed"/"partial")
-    - Calls `record_action_outcome(action)` for each
-    - Updates `knowledge_graph["context_action_effectiveness"]` with stats
-    - Example: `"coding_help|search_memory|patterns" → 92% success (45 uses)`
-  - **HUD Integration**: External LLMs see stats via `get_context_insights`:
-    ```
-    📊 Tool Usage Stats (FYI - you decide what to use):
-      • search_memory() on patterns: 92% success (45 uses)
-      • create_memory() on working: 12% success (8 uses)
-    ```
-  - **Benefits**: System learns which tools work in which contexts, enables self-correction and alignment
-
-#### Document-Level Insights (v0.2.6)
-
-memory_bank and books are static collections without outcome scores. v0.2.6 extracts doc effectiveness from Action KG examples:
-
-**Implementation:** `unified_memory_system.py:get_doc_effectiveness()`
-
-```python
-def get_doc_effectiveness(self, doc_id: str) -> Optional[Dict]:
-    """Aggregate success rate for a doc from Action KG examples."""
-    # Scans context_action_effectiveness["examples"] for this doc_id
-    # Returns: {"success_rate": 0.83, "total_uses": 5, "successes": 4, "failures": 1}
-```
-
-**Usage in Search:** Optional boost for memory_bank/books based on doc effectiveness:
-```python
-if collection in ["memory_bank", "books"]:
-    doc_stats = self.get_doc_effectiveness(doc_id)
-    if doc_stats and doc_stats["total_uses"] >= 3:
-        effectiveness_boost = doc_stats["success_rate"] * 0.15  # max 15% boost
-```
-
-**Key Insight:** No 4th KG needed - Action KG already stores doc_ids in examples.
-
-#### Directive Insights (v0.2.6)
-
-`get_context_insights` output is now **actionable**, not just retrospective:
-
-**Before (v0.2.5):**
-```
-📊 Action Outcome Stats:
-  • search_memory() on books: 90% success (79 uses)
-```
-
-**After (v0.2.6):**
-```
-═══ KNOWN CONTEXT ═══
-[User Profile]
-- Logan, crypto researcher, prefers Docker Compose
-
-[Recommended]
-- search_memory(collections=["patterns"]) - 3 patterns found
-
-═══ TO COMPLETE THIS INTERACTION ═══
-After responding → record_response(key_takeaway="...", outcome="worked|failed|partial")
-```
-
-**Implementation:** `main.py:1426` adds "TO COMPLETE" section to output.
-
-**New Helper Methods:**
-- `get_tier_recommendations(concepts)` - Query Routing KG for best collections
-- `get_facts_for_entities(entities)` - Content KG → pull relevant memory_bank facts
-
-#### Model-Agnostic Prompt Design (v0.2.6)
-
-MCP tool descriptions use **workflow-based** framing instead of motivation:
-
-| Old (v0.2.5) | New (v0.2.6) |
-|--------------|--------------|
-| "This is how you become a better assistant" | "WORKFLOW: 1. get_context_insights ← YOU ARE HERE" |
-| "You are stateless. This makes you stateful." | "Complete the interaction. Call after responding." |
-
-**Why Workflow > Motivation:**
-- LLMs don't have goals - instruction-following works across all models
-- "Open loop" framing (incomplete task) prompts models to close it
-- Numbered steps work reliably on 7B through 70B+ models
-
-**Implementation:** `main.py:905-956` - Updated tool descriptions.
+<!-- Removed ~430 lines of KG implementation detail, future-stopword-learning speculation, v0.2.6 directive-insights and model-agnostic prompt design. All replaced or obsolete as of v0.3.1. 2026-05-12 cleanup. -->
 
 #### Score-Based Promotion
 - Items with high success rates get promoted
@@ -1748,9 +1166,9 @@ MCP tool descriptions use **workflow-based** framing instead of motivation:
 
 ### 1. UnifiedMemorySystem (`modules/memory/unified_memory_system.py`)
 
-The **single source of truth** for all memory operations, implemented as a **facade pattern** that delegates to 8 specialized services.
+The **single source of truth** for all memory operations, implemented as a **facade pattern** that delegates to 12 specialized services.
 
-> **Refactored in v0.2.7** (December 2025): The original 4,746-line monolithic file was refactored into 9 smaller, focused modules:
+> **Refactored in v0.2.7** (December 2025): The original 4,746-line monolithic file was refactored into 12 smaller, focused modules:
 > - `unified_memory_system.py` - Facade (~500 lines) maintaining the public API
 > - `scoring_service.py` - Wilson score calculations and quality metrics
 > - ~~`knowledge_graph_service.py`~~ - *Removed in v0.3.1 (tag routing replaces KG)*
@@ -1811,10 +1229,11 @@ async def analyze_conversation_context(current_message, recent_conversation, con
 async def record_outcome(doc_id, outcome, context=None)
 async def promote_working_memory()
 
-# v0.2.6 - Document & Entity Insight Methods
-def get_doc_effectiveness(doc_id: str) -> Optional[Dict]  # Aggregate doc success from Action KG examples
-def get_tier_recommendations(concepts: List[str]) -> Dict  # Query Routing KG for best collections
-async def get_facts_for_entities(entities: List[str], limit: int = 2) -> List[Dict]  # Content KG -> memory_bank facts
+# v0.2.6 method signatures retained for API compatibility but now return empty
+# (the KG they queried was removed in v0.3.1):
+# - get_doc_effectiveness(doc_id) — removed entirely
+# - get_tier_recommendations(concepts) — returns all collections (route_query no longer KG-backed)
+# - get_facts_for_entities(entities) — falls back to memory_bank semantic search
 ```
 
 **New Method Details:**
@@ -2057,7 +1476,7 @@ User Message → Backend searches all collections → Top 5 results → Injected
 
 ### search_memory Tool Definition (Internal System - v0.2.0)
 
-**Note**: This is the internal system's tool definition. For MCP tool definition, see [Available MCP Tools](#available-mcp-tools-5) section.
+**Note**: This is the internal system's tool definition. For the external-LLM (MCP) tool surface, see the [MCP tool inventory](#mcp-tool-inventory-current--v031) section.
 
 ```python
 {
@@ -2180,7 +1599,7 @@ LLM receives enriched context for each memory result:
 
 **Problem Identified** ("Prompt-Reality Gap"):
 - Previous prompts described a manual decision-making system
-- Roampal actually implements highly automated intelligence (cold start auto-injection, organic recall, action-effectiveness tracking)
+- Roampal actually implements highly automated intelligence (cold-start auto-injection + sidecar scoring after every turn)
 - This created duplicate work (LLM searched when context was already injected) and ignored automation
 
 **Solution** (Transparency-Focused Rewrite):
@@ -2199,7 +1618,7 @@ LLM receives enriched context for each memory result:
 - ~1,150 total tokens saved (28% production, 53% MCP)
 - Eliminates duplicate cold start searches
 - Better use of pre-provided organic guidance
-- Clearer interpretation of action-effectiveness stats
+- Clearer interpretation of memory-outcome stats
 - Motivated tool usage (explains value proposition upfront)
 - No breaking changes - all functionality preserved
 
@@ -2337,7 +1756,7 @@ The prompting system builds structured, secure prompts with personality, memory 
 - **Result**: Prevents stored injection attacks from reaching users
 
 **Layer 4: Cold-Start Filtering** ([unified_memory_system.py:954-979](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L954-L979))
-- Filters memory_bank results before auto-injection (Content KG or vector search)
+- Filters memory_bank results before auto-injection (post-v0.3.1: tag-routed / cosine retrieval; pre-v0.3.1: Content KG or vector search)
 - Implemented in `_format_cold_start_results()` helper method
 - Blocks content containing:
   - "ignore all previous instructions"
@@ -2549,16 +1968,7 @@ Roampal's memory system requires models that support Ollama's native tool callin
 - ❌ CodeLlama - Good at code but no tool support
 - ❌ Dolphin3:8b - Causes 400 Bad Request errors with tool calling (removed 2025-10-09)
 
-**Technical Implementation** ([ollama_client.py:563-572](../modules/llm/ollama_client.py)):
-```python
-NATIVE_TOOL_MODELS = [
-    "gpt-oss",      # OpenAI's open source models
-    "llama3.1", "llama3.2", "llama-3.1", "llama-3.2",  # Meta Llama variants
-    "qwen", "qwen2", "qwen2.5",  # Alibaba Qwen family
-    "mistral", "mixtral",  # Mistral AI family
-    # "dolphin", "dolphin3",  # REMOVED 2025-10-09: Causes 400 errors
-]
-```
+**Technical Implementation (v0.3.3+):** Tool-capability is no longer a hardcoded family list. `fetch_ollama_capabilities(model, base_url)` calls `POST /api/show` against Ollama and reads the returned `capabilities` set (`vision`, `tools`, `thinking`, ...). LM Studio falls back to the existing `probe_vision` canary path (1×1 PNG → `/v1/chat/completions`). Results are cached per `(provider, model)` and consumed via `get_cached_tools(model, provider)` and `get_cached_vision(model, provider)`. See v0.3.3 Section 4H.
 
 **Model Installation** ([model_installer.py](../app/routers/model_installer.py)):
 - Three tiers: Essential, Professional, Enterprise
@@ -2597,29 +2007,18 @@ NATIVE_TOOL_MODELS = [
 ```
 User Message → Chat Service
     ↓
-Analyze Conversation Context
-  • Extract concepts from current message
-  • Check knowledge graph for past patterns
-  • Identify failures to avoid
-  • Detect topic continuity
-  • Find repetitions
-    ↓
-Inject Organic Insights into Prompt
-  • Past experience with success rates
-  • Failure warnings
-  • Proactive recommendations
-    ↓
-LLM Receives Tools (NEW)
-  • search_memory tool definition
-  • Other available tools
+TagCascade Retrieval (v0.3.1+)
+  • Extract entity nouns from message
+  • Tag-routed cosine over ChromaDB
+  • Cross-encoder rerank → top 4 summaries + 4 facts
     ↓
 Build Prompt
-  • Contextual memory (organic)
-  • Tool definitions (NEW)
-  • Conversation history
+  • Retrieved memories (8 total: 4 summaries + 4 facts)
+  • Tool definitions (search_memory, etc.)
+  • Sliding window: last 4 exchanges
   • User question
     ↓
-LLM Generation (Ollama)
+LLM Generation (Ollama / LM Studio)
   ↓
   ├─ Decides: Use search_memory tool? (NEW)
   │   ↓
@@ -2709,15 +2108,21 @@ MODEL_CONTEXTS = {
     # ... more models
 }
 
-def get_context_size(model_name: str, user_override: Optional[int] = None) -> int:
+async def get_context_size_async(
+    model_name: str, provider: Optional[str] = None, base_url: Optional[str] = None
+) -> int:
     """
-    Priority order:
-    1. Runtime override (user_override parameter)
+    Priority order (v0.3.3+):
+    1. Runtime override (request-scoped kwarg)
     2. User settings (data/user_model_contexts.json)
-    3. Model default (MODEL_CONTEXTS)
-    4. Safe fallback (8192)
+    3. Dynamic provider fetch — Ollama POST /api/show OR LM Studio GET /v1/models/{id}
+       (cached: in-memory 5min, disk 24h via write_json_atomic)
+    4. MODEL_CONTEXTS prefix table (fallback when provider offline/unmatched)
+    5. Safe fallback (8192)
     """
 ```
+
+`MODEL_CONTEXTS` is now a safety net rather than the primary source. New models pulled via Ollama / loaded in LM Studio get their real context length from the provider on first lookup — no code patches required.
 
 **Key Features**:
 - Model prefix matching (e.g., "llama3.2:1b" matches "llama3.2")
@@ -2729,12 +2134,12 @@ def get_context_size(model_name: str, user_override: Optional[int] = None) -> in
 
 **Ollama Client** (`modules/llm/ollama_client.py`):
 ```python
-from config.model_contexts import get_context_size
+from config.model_contexts import get_context_size_async
 
 # In generate_response() and stream_response_with_tools()
-num_ctx = get_context_size(actual_model)
+num_ctx = await get_context_size_async(actual_model, provider=provider, base_url=base_url)
 options["num_ctx"] = num_ctx  # Passed to Ollama API
-options["num_gpu"] = 99       # Force full GPU offload (v0.2.5)
+# Note: num_gpu=99 hardcoded override removed in v0.3.2.1 hotfix — Ollama handles GPU offload natively.
 ```
 
 **Thinking Mode Disabled (v0.2.5):**
@@ -2887,8 +2292,7 @@ if "context" in error_msg.lower() and ("overflow" in error_msg.lower() or "lengt
 
 ### Core Chat Operations
 ```
-POST /api/agent/chat              # Main chat endpoint
-POST /api/agent/stream            # Streaming chat (auto-generates title after first exchange)
+POST /api/agent/stream            # Main streaming chat endpoint (auto-generates title after first exchange)
 POST /api/chat/create-conversation # Create new conversation
 POST /api/chat/switch-conversation # Switch conversations
 POST /api/chat/generate-title     # Manual title generation (fallback only)
@@ -2902,26 +2306,8 @@ GET  /api/memory/stats            # Memory system statistics
 GET  /api/memory/search           # Search memories
 POST /api/memory/feedback         # Record user feedback on memory usefulness
 
-# Knowledge Graph Visualization (NEW - v0.2.0)
-GET  /api/memory/knowledge-graph  # Get graph data (nodes/edges)
-  Response: {
-    nodes: [{id, label, type, best_collection, success_rate, usage_count}],
-    edges: [{source, target, weight, success_rate}]
-  }
-
-GET  /api/memory/knowledge-graph/concept/{concept_id}/definition
-  Response: {
-    concept: string,
-    definition: string,
-    related_concepts: string[],
-    collections_breakdown: {
-      [collection]: {successes, failures, total}
-    },
-    outcome_breakdown: {worked, failed, partial},
-    total_searches: number,
-    best_collection: string,
-    related_concepts_with_stats: [{concept, co_occurrence, success_rate}]
-  }
+# Knowledge graph endpoints removed v0.3.1 (KG itself removed). Tag visualization endpoints under
+# /api/memory/tags replace the graph view in the Memory Panel.
 
 # Memory Bank Operations (NEW - For MCP Bridge Integration)
 GET  /api/memory-bank/list        # List memories (with pagination)
@@ -2991,49 +2377,37 @@ GET  /api/check-update            # Check for available updates
 
 Roampal functions as a native MCP server, enabling external LLMs (Claude Desktop, Cursor, etc.) to access Roampal's memory system with **full learning capabilities** - external LLM outcome judgment, score-based promotion, and cross-client knowledge sharing.
 
-#### Architecture (v0.2.0 - External LLM Outcome Judgment)
+#### MCP architecture (v0.3.1+)
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  MCP Client (Claude Desktop, Cursor, etc.)          │
-│  Calls record_response(key_takeaway, outcome)       │
-│  External LLM provides BOTH parameters              │
-└────────────────────┬─────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  MCP Client (Claude Desktop, Cursor, etc.)               │
+│  - search_memory(...) → memory IDs                       │
+│  - record_response(key_takeaway, noun_tags)              │
+│  - score_memories(memory_scores, exchange_summary, ...)  │
+└────────────────────┬─────────────────────────────────────┘
                      │ stdio (JSON-RPC)
-┌────────────────────▼─────────────────────────────────┐
-│  Roampal MCP Server (main.py --mcp)                  │
-│  ├─ Receives key_takeaway (semantic summary)        │
-│  ├─ Receives outcome from external LLM              │
-│  ├─ Stores current learning to working memory       │
-│  ├─ Scores PREVIOUS learning using external outcome │
-│  └─ NO internal LLM call for outcome detection      │
-└────────────────────┬─────────────────────────────────┘
+┌────────────────────▼─────────────────────────────────────┐
+│  Roampal MCP server (main.py --mcp)                      │
+│  - Stateless tool dispatch; no internal LLM at all       │
+│  - System reminder carries scoring-hook directive        │
+│    when retrieved IDs are in flight                      │
+└────────────────────┬─────────────────────────────────────┘
                      │
-┌────────────────────▼─────────────────────────────────┐
-│  UnifiedMemorySystem (SHARED)                        │
-│  ├─ Same memory used by internal + external LLMs    │
-│  ├─ Different outcome sources:                      │
-│  │   • Internal: detect_conversation_outcome()      │
-│  │   • MCP: External LLM provides outcome           │
-│  ├─ Same score updates (record_outcome)             │
-│  └─ Same automatic promotion (30-min background)     │
-└──────────────────────────────────────────────────────┘
+┌────────────────────▼─────────────────────────────────────┐
+│  UnifiedMemorySystem (shared with in-product chat)       │
+│  - Same ChromaDB collections                             │
+│  - Score deltas: worked +0.2 / partial +0.05 /           │
+│    unknown −0.05 / failed −0.3                           │
+│  - Promotion + decay run as background tasks             │
+└──────────────────────────────────────────────────────────┘
 ```
 
-#### Key Features
+#### Key behaviors
 
-1. **External LLM Outcome Judgment** (v0.2.0)
-   - External LLM analyzes user feedback and provides outcome directly
-   - NO automatic detection - system trusts external LLM's judgment completely
-   - User's current message serves as feedback for previous response
-   - **Different from internal system**: Internal uses automatic LLM-based detection ([agent_chat.py:743-822](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py#L743-L822)), MCP relies on external LLM's explicit `outcome` parameter
+1. **External LLM owns outcome judgment.** The MCP server has no internal LLM. Outcomes are whatever the external LLM passes in `score_memories`. The in-product chat uses a different path (sidecar LLM scores after the turn) — different code, same lifecycle once the score lands.
 
-2. **Flexible Parameter Design** (v0.2.0→v0.3.0)
-   - `record_response(key_takeaway?, outcome?, memory_scores?)` - all parameters optional in v0.3.0
-   - `key_takeaway`: Semantic summary of current exchange (1-2 sentences) - optional if only scoring
-   - `outcome`: Fallback outcome for all memories ("worked", "failed", "partial", "unknown")
-   - `memory_scores` (v0.3.0 NEW): Per-memory scoring dict `{doc_id: outcome}` for granular attribution
-   - Valid calls: key_takeaway only, memory_scores only, or both
+2. **Two-tool scoring API.** `record_response(key_takeaway, noun_tags)` stores a takeaway; `score_memories(memory_scores, exchange_summary, exchange_outcome?, noun_tags, facts?)` records per-memory outcomes and (optionally) a summary + atomic facts. The earlier v0.3.0 fat `record_response` is gone.
 
 3. **Unified Learning**
    - All exchanges stored in same ChromaDB collections
@@ -3069,43 +2443,11 @@ Roampal functions as a native MCP server, enabling external LLMs (Claude Desktop
      - Scanner skips `config.json` if `claude_desktop_config.json` exists (prevents wrong file detection)
      - Fix is Claude-specific (checks `parent.name == "Claude"`), doesn't affect other MCP tools
 
-7. **Cold-Start Auto-Trigger** (v0.2.0 - Content KG Enhanced)
+7. **Cold-Start Auto-Trigger**
 
-   **Problem**: LLMs don't consistently search memory_bank on first message, missing user context
+   **Problem:** LLMs don't consistently search memory_bank on first message, missing user context.
 
-   **Solution**: Automatic user profile injection from Content KG on message 1
-
-   **Implementation** (Both Internal + External LLMs):
-
-   - **Shared Helper** ([unified_memory_system.py:875-979](../ui-implementation/src-tauri/backend/modules/memory/unified_memory_system.py#L875-L979))
-     - `get_cold_start_context(limit=5)` - retrieves user profile from Content KG
-     - Gets top 10 entities by mention count (most important concepts)
-     - Retrieves memory_bank documents containing those entities
-     - Layer 4 injection protection (filters suspicious content)
-     - Fallback to vector search if Content KG empty
-     - Returns formatted string: "📋 **User Profile** (auto-loaded):\n• [top facts]"
-
-   - **Internal LLM** ([agent_chat.py:576-603](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py#L576-L603))
-     - Tracks user messages per conversation (not tool calls)
-     - **ALWAYS** injects on message 1 (no conditions, no tracking)
-     - Injects as system message BEFORE user message in conversation history
-     - LLM can still search memory_bank if it wants (won't conflict)
-     - Guarantees 100% cold-start compliance for internal chat
-
-   - **External LLM (MCP)** ([main.py:92-94,956-1008](../ui-implementation/src-tauri/backend/main.py#L92-L94))
-     - Tracks message count per MCP session
-     - **ALWAYS** injects on first tool call (no conditions, no tracking)
-     - Works with ANY first tool (search_memory, create_memory, etc.)
-     - Prepends user profile to tool response with visual separators
-     - Format: `═══ KNOWN CONTEXT (auto-loaded) ═══\n[context]\n\n═══ Tool Response ═══\n[results]`
-     - LLM can still search memory_bank if it wants (both context sources combine)
-     - Simplified MCP prompt - explains auto-inject instead of demanding search
-
-   **Why Content KG?**
-   - Vector search might miss important facts if query doesn't match keywords
-   - Content KG knows which entities are most frequently mentioned
-   - Provides truly important user context based on actual data patterns
-   - Example: If "roampal" mentioned 10x, "logan" 8x → those facts are prioritized
+   **Solution:** `get_cold_start_context(limit=5)` auto-injects a user profile on first message of each session. Internal chat injects as a system message before the user message; MCP prepends it to the first tool response with visual separators (`═══ KNOWN CONTEXT (auto-loaded) ═══ ... ═══ Tool Response ═══`). Pre-v0.3.1 versions of this helper read from a Content KG entity index (top-N entities by mention count); the v0.3.1 implementation is **pure semantic/tag-routed retrieval** against `memory_bank` — same goal, simpler implementation, no KG dependency.
 
 8. **MCP Security Hardening** (v0.2.8)
 
@@ -3129,18 +2471,9 @@ Roampal functions as a native MCP server, enabling external LLMs (Claude Desktop
 
    **Trust Model**: Real security boundary is trusting the MCP server you install (like npm packages, VS Code extensions). Parameter allowlisting closes one specific deception vector.
 
-#### Available MCP Tools (7) - Updated 2025-12-02
+#### Tool description philosophy
 
-**Tool Description Philosophy**: Scannable, not verbose. External LLMs (Claude Desktop, Cursor) need to quickly understand tools.
-
-**Optimization Applied**:
-- Condensed from explanatory paragraphs to bullet points
-- Moved detailed guidance to inputSchema descriptions (shown in IDE tooltips)
-- Added visual markers (⚡ for get_context_insights, 🔴 for record_response)
-- Emphasized workflow: get_context_insights() → search_memory() → record_response()
-- 53% token reduction (475 → 225 tokens) while maintaining clarity
-
-   **Result**: Both internal and external LLMs receive personalized user profile automatically on first message
+Tool descriptions are written for external LLMs (Claude Desktop, Cursor) and aim for scannable bullet points over explanatory paragraphs, with detailed guidance pushed to `inputSchema` descriptions (which surface as IDE tooltips). Workflow framing: `search_memory(...)` → respond → `score_memories(...)` (when a scoring hook fires) or `record_response(...)` (for ad-hoc takeaways).
 
 #### LLM Prompt Design (v0.2.5)
 
@@ -3169,166 +2502,22 @@ MCP and Internal prompts use different approaches based on system differences:
 - Internal prompt: [agent_chat.py:1370-1380](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py#L1370-L1380)
 - v0.2.12 memory attribution: [agent_chat.py](../ui-implementation/src-tauri/backend/app/routers/agent_chat.py) - `parse_memory_marks()` function
 
-#### Available MCP Tools (6)
+#### MCP tool inventory (current — v0.3.1+)
 
-**1. record_response** (v0.2.9→v0.3.0 - Per-Memory Scoring)
-```json
-{
-  "name": "record_response",
-  "description": "Store semantic learning summary and/or score memories with per-memory outcomes",
-  "parameters": {
-    "key_takeaway": "string (optional in v0.3.0) - 1-2 sentence summary of current exchange. Required if storing new learning.",
-    "outcome": "enum (optional, default: 'unknown') - worked|failed|partial|unknown - fallback outcome when memory_scores not provided",
-    "related": "array (deprecated) - v0.2.9 legacy: Which search results to score. Use memory_scores instead.",
-    "memory_scores": "object (optional, v0.3.0 NEW) - Per-memory scoring: {doc_id: outcome}. Direct control over each memory's outcome."
-  },
-  "behavior_v0.3.0": [
-    "1. If key_takeaway provided: Store to working memory with initial score based on outcome",
-    "2. If memory_scores provided: Score each memory individually with its specified outcome",
-    "3. If only related provided (legacy): Score specified positions with global outcome",
-    "4. If nothing provided for scoring: Score ALL previously searched memories with global outcome",
-    "5. Updates KG routing patterns with query → collection → outcome",
-    "6. Clears search cache"
-  ],
-  "scoring_precedence_v0.3.0": [
-    "memory_scores > related > score_all",
-    "If memory_scores: each doc_id gets its own outcome (most precise)",
-    "If related: specified positions get global outcome",
-    "If neither: all cached memories get global outcome (backward compatible)"
-  ],
-  "memory_scores_v0.3.0": {
-    "why": "Per-memory attribution matching internal 4-emoji system capability",
-    "format": "{\"history_abc123\": \"worked\", \"patterns_xyz789\": \"failed\", \"working_def456\": \"unknown\"}",
-    "outcomes": "worked|failed|partial|unknown - each memory scored independently",
-    "use_case": "LLM found memory 1 helpful, memory 2 misleading, didn't use memory 3"
-  },
-  "key_takeaway_optional_v0.3.0": {
-    "why": "Allows scoring-only calls without storing new learning",
-    "scenarios": [
-      "key_takeaway + memory_scores: Store learning AND score memories",
-      "key_takeaway only: Store learning, score cached with global outcome",
-      "memory_scores only: Just score memories, don't store new learning"
-    ]
-  }
-}
-```
+The MCP server exposes six tools to external LLMs (Claude Desktop, Cursor, etc.). Authoritative schemas live in `roampal-core/roampal/backend/mcp/` and are returned to the client at tool-discovery time; the summary below describes intent only.
 
-**2. search_memory** (v0.2.9 - sort_by parameter)
-```json
-{
-  "name": "search_memory",
-  "description": "Search 5-tier memory system with semantic search and optional metadata filtering",
-  "parameters": {
-    "query": "string (required) - Semantic search query for content matching",
-    "collections": ["books", "working", "history", "patterns", "memory_bank", "all"],
-    "limit": "integer (1-20, default: 5)",
-    "sort_by": "enum (optional) - v0.2.9: relevance|recency|score. Auto-detects 'recency' for temporal queries ('last', 'recent', 'yesterday')",
-    "metadata": "object (optional) - Exact metadata filters (ChromaDB where syntax)"
-  },
-  "sort_by_v0.2.9": {
-    "relevance": "Default - Vector similarity order (semantic match)",
-    "recency": "Newest first by timestamp (for 'what did we do yesterday?')",
-    "score": "Highest outcome score first (for 'best approach for X')",
-    "auto_detection": "Temporal keywords trigger recency sort automatically: last, recent, yesterday, today, earlier, previous, before, when did, how long ago, last time, previously, lately, just now"
-  },
-  "metadata_examples": {
-    "books": {
-      "title": "Search by exact book title",
-      "author": "Search by author name",
-      "has_code": "Boolean - chunks containing code blocks",
-      "source_context": "Search by section/chapter name",
-      "book_id": "Search specific book by ID"
-    },
-    "learnings": {
-      "source": "Filter by source (e.g., 'mcp_claude')",
-      "last_outcome": "Filter by outcome (worked|failed|partial|unknown)",
-      "type": "Filter by type (e.g., 'key_takeaway')",
-      "conversation_id": "Filter by conversation/session ID"
-    },
-    "combined": "Multiple filters use AND logic: {\"title\": \"architecture\", \"has_code\": true}"
-  },
-  "returns_v0.2.3": {
-    "format": "[collection] (score:X.XX, uses:N, last:outcome, age:Xd) [id:doc_id] content...",
-    "metadata_fields": [
-      "score: Current memory score (0.0-1.0)",
-      "uses: How many times retrieved successfully",
-      "last: Last recorded outcome (worked/failed/partial)",
-      "age: Human-readable age (today, 1d, 3d, 2w, 1mo)",
-      "id: Document ID for reference"
-    ]
-  }
-}
-```
+| Tool | Purpose |
+|---|---|
+| `search_memory` | Search across collections (books/working/history/patterns/memory_bank) with optional `collections`, `limit`, `sort_by`, `days_back`, `metadata`, `id`, `type` filters. Used to recall past context. |
+| `add_to_memory_bank` | Pin a permanent fact (identity / preference / goal / project). Dedup-protected (cosine < 0.32 against existing memory_bank entries). |
+| `update_memory` | Replace the content of an existing `memory_bank_<8hex>` entry by exact `id`. Preserves `created_at`; optional `tags`, `noun_tags`, `importance`, `confidence` overrides. |
+| `delete_memory` | Remove a memory_bank entry by content match. No restore path via MCP. |
+| `record_response` | Store a key-takeaway summary to the working tier. Two required params: `key_takeaway`, `noun_tags`. Outcome scoring is no longer a parameter here — it moved to `score_memories`. |
+| `score_memories` | Fired in response to a scoring hook in the system reminder. Scores each retrieved memory by `doc_id → worked/failed/partial/unknown`; stores `exchange_summary` + optional atomic `facts` to the working tier. Required: `memory_scores`. Optional: `exchange_summary`, `exchange_outcome`, `noun_tags`, `facts`. |
 
-**3. add_to_memory_bank**
-```json
-{
-  "name": "add_to_memory_bank",
-  "description": "Store PERMANENT facts (user identity, preferences, goals, learned strategies). SIZE GUIDANCE: ~300 chars or less per fact, one concept per fact, condense 1000+ char facts.",
-  "parameters": {
-    "content": "string (required) — hard cap: 2000 chars (silent truncation)",
-    "tags": "array of strings - Categories: identity, preference, goal, project, system_mastery, agent_growth",
-    "noun_tags": "array of strings - Content nouns for TagCascade (auto-extracted if omitted)",
-    "importance": "number (0.0-1.0, default: 0.7) - How critical is this memory",
-    "confidence": "number (0.0-1.0, default: 0.7) - How certain about this fact"
-  }
-}
-```
+**Removed in v0.3.1:** the old fat `record_response` schema (with `outcome`, `memory_scores`, `related` parameters merged in) was split into lean `record_response` + dedicated `score_memories`. `get_context_insights` was removed when the KG it queried was deleted.
 
-**4. update_memory**
-```json
-{
-  "name": "update_memory",
-  "description": "Update existing memory when information changes or needs correction.",
-  "parameters": {
-    "old_content": "string (required - text to find)",
-    "new_content": "string (required - replacement text) — hard cap: 2000 chars (silent truncation)"
-  }
-}
-```
-
-**5. archive_memory**
-```json
-{
-  "name": "archive_memory",
-  "description": "Soft delete memory_bank entries",
-  "parameters": {
-    "content": "string (required - finds by semantic match)"
-  }
-}
-```
-
-**6. get_context_insights** (NEW - 2025-01-14 - Organic Recall)
-```json
-{
-  "name": "get_context_insights",
-  "description": "Get proactive pattern insights BEFORE searching - Roampal's 'intuition'",
-  "parameters": {
-    "query": "string (required) - The query or topic to check for patterns"
-  },
-  "returns": {
-    "relevant_patterns": "Past successful solutions with same concept signature (from KG problem_categories)",
-    "past_outcomes": "Previous failures to avoid (from KG failure_patterns)",
-    "proactive_insights": "Collection recommendations based on success rates (from KG routing_patterns)",
-    "topic_continuity": "Whether this continues recent conversation topics"
-  },
-  "performance": "5-10ms - No embeddings, just KG hash lookups",
-  "use_cases": [
-    "Before searching: 'Should I search? Where should I search?'",
-    "For recurring topics: 'Have we discussed Docker permissions before?'",
-    "To avoid mistakes: 'Did similar approaches fail in the past?'"
-  ],
-  "example": {
-    "input": "get_context_insights('docker permissions issue')",
-    "output": "📋 Past: Adding user to docker group worked 3 times (score=0.95)\n💡 Recommendation: Search patterns collection (85% effective for 'docker')"
-  }
-}
-```
-
-
-**Removed Tools** (v0.2.0):
-- `list_memory_bank` - Redundant (use `search_memory` with `collections=["memory_bank"]` instead)
-- `query_kg_entities`, `query_kg_relationships`, `get_kg_path` - Users explore KG via Roampal UI
+**Removed earlier:** `list_memory_bank` (use `search_memory(collections=["memory_bank"])`), `query_kg_entities`, `query_kg_relationships`, `get_kg_path` (KG itself removed).
 
 #### User Interface Integration
 
@@ -3394,8 +2583,7 @@ async def run_mcp_server():
     memory = UnifiedMemorySystem(data_dir=str(DATA_PATH), use_server=False)
     await memory.initialize()
 
-    # Force HuggingFace embeddings (no Ollama dependency)
-    memory.embedding_service.use_ollama = False
+    # v0.3.1+: embedding service is ONNX-only — no provider toggle needed.
 
     # Create MCP server with 3 tools
     server = Server("roampal-memory")
@@ -3403,9 +2591,9 @@ async def run_mcp_server():
 ```
 
 **Architecture Independence**:
-- Chat (Ollama/LM Studio) and MCP (HuggingFace) are decoupled
+- Chat (Ollama/LM Studio) and MCP (embedding service) are decoupled
 - Users can run MCP without any LLM installed
-- Embedding service has `use_ollama` flag (forced False for MCP)
+- Embedding service is ONNX-only (`mxbai-embed-large-v1`, 768-d) — no LLM-provider dependency
 
 #### Use Cases
 
@@ -3706,7 +2894,7 @@ DELETE /api/model/context/{model_name} # Reset to default context size
 - `qwen2.5:7b` description updated to "Good tool calling (may struggle with 20+ tools)" - 7B models may output tool JSON as text when many MCP tools are loaded.
 - Removed "recommended" badge from 7B - use 14B+ for production with many tools.
 
-**Model Installation** ([model_switcher.py:262-657](../app/routers/model_switcher.py)) (Updated 2025-10-28)
+**Model Installation** (`model_switcher.py` — search for `install_model_stream` / `install_lmstudio_model`)
 - **Multi-provider support**: Ollama and LM Studio installation workflows
 - **Ollama**: SSE streaming with real-time progress updates, parses download percentage/speed/size
 - **LM Studio**: Two-step automation (CLI import + SDK load)
@@ -3905,25 +3093,9 @@ Chat models and embedding models serve different purposes. Roampal uses bundled 
 - 100-character max length
 - URL encoding/decoding for model names with special chars
 
-**Tauri Production Fetch Wrapper** (NEW - 2025-10-14)
+**Tauri production fetch wrapper**
 
-**Problem**: Tauri blocks native `fetch()` to localhost in production builds for security, but allows it in dev mode.
-
-**Solution**: [ui-implementation/src/utils/fetch.ts](../ui-implementation/src/utils/fetch.ts)
-```typescript
-export async function apiFetch(url: string, options?: RequestInit): Promise<Response> {
-  if (!isTauri()) {
-    return fetch(url, options);  // Dev mode: use native fetch
-  }
-  // Production: use Tauri's HTTP client
-  return tauriFetch(url, {...});
-}
-```
-
-**Implementation**:
-- Replaced all 35 `fetch('http://localhost:8000` calls with `apiFetch()` across 14 files
-- Files updated: ConnectedChat.tsx, useChatStore.ts, KnowledgeGraph.tsx, ModelContextSettings.tsx, DataManagementModal.tsx, Sidebar.tsx, SettingsModal.tsx, EnhancedChatMessage.tsx, MemoryBankModal.tsx, MemoryStatsPanel.tsx, ContextBar.tsx, ConversationBadges.tsx, FragmentBadges.tsx, useBackendAutoStart.ts
-- Works in both dev (native fetch) and production (Tauri HTTP client)
+Tauri prod builds block native `fetch()` to localhost. All frontend localhost calls go through `apiFetch()` (`ui-implementation/src/utils/fetch.ts`), which falls back to native `fetch` in dev and to Tauri's HTTP client in prod. The original migration (2025-10-14) touched ~14 files; new code should always use `apiFetch` rather than reintroducing raw `fetch` to localhost.
 - **Impact**: Model installation, switching, and all API calls now work in compiled MSI
 
 ```
@@ -4045,28 +3217,24 @@ DELETE /api/personality/custom/{id}   # Delete custom template (protects active 
 ### Environment Variables
 ```bash
 # Core Settings
-ROAMPAL_WORKSPACE=C:\ROAMPAL
-ROAMPAL_PORT=8000  # Note: Hardcoded in main.py, not configurable via env
-ROAMPAL_HOST=127.0.0.1
+ROAMPAL_API_PORT=8001          # Default for backend; PROD desktop builds use 8765, DEV desktop 8766
+ROAMPAL_DATA_DIR=Roampal       # Override the data subfolder ('Roampal_DEV' for dev builds)
+ROAMPAL_DEV=                   # Set automatically by Tauri debug builds — never set this manually
 
 # LLM Configuration
 OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=  # No default - users download their preferred model via UI
-OLLAMA_TIMEOUT=30
+OLLAMA_MODEL=                  # Leave unset to auto-select first installed model; ROAMPAL_LLM_OLLAMA_MODEL takes precedence
 
-# Memory Settings
+# Memory Settings (defaults shown)
 ROAMPAL_ENABLE_MEMORY=true
-ROAMPAL_ENABLE_SEARCH=true
 ROAMPAL_ENABLE_OUTCOME_TRACKING=true
-ROAMPAL_ENABLE_KG=true
+# ROAMPAL_ENABLE_KG removed v0.3.1 (KG fully removed)
 
-# ChromaDB Configuration
-CHROMADB_PERSIST_DIRECTORY=./data/chromadb
-
-# Security
-ROAMPAL_REQUIRE_AUTH=false
-# Note: Rate limiting is always enabled at 100 req/min, not configurable
+# Logging
+ROAMPAL_LOG_LEVEL=INFO
 ```
+
+The canonical list lives in `backend/.env.example`; this section documents the variables most likely to come up during ops. Rate limiting is hardcoded at 100 req/min and is not env-configurable.
 
 ### Memory Retention Policies
 - **Working Memory**: 24 hours
@@ -4113,7 +3281,7 @@ ROAMPAL_REQUIRE_AUTH=false
 **Directory Structure (Same for all modes):**
 ```
 data/
-├── chroma_db/                # Vector embeddings (ChromaDB collections)
+├── chromadb/                 # Vector embeddings (ChromaDB collections)
 │   ├── roampal_books/        # Reference documents
 │   ├── roampal_working/      # Current context
 │   ├── roampal_history/      # Past conversations
@@ -4141,7 +3309,7 @@ data/
   - Send button with scale/glow animation on hover
   - Keyboard shortcut tooltips on hover (Enter, ⌘+Enter, Esc)
   - Command palette with slash commands
-  - **Note**: File attachments removed - use Document Processor tab for uploading files
+  - **Image attachments (v0.3.3+)**: PhotoIcon button next to send; paste-to-attach also supported. Bytes persist to `<DATA_PATH>/attachments/<sha256>.<ext>` and survive refresh/restart via `/api/attachments/{filename}`. PhotoIcon greys out automatically for models without vision capability. Non-image file uploads (PDFs, docs) still go through the Document Processor tab.
 - **Enhanced Markdown rendering** (Updated 2025-10-07)
   - Full GitHub Flavored Markdown support via `react-markdown`
   - Styled headings (H1-H3) with proper hierarchy
@@ -4209,15 +3377,15 @@ data/
   - **Implementation**: [TerminalMessageThread.tsx:10-59](../ui-implementation/src/components/TerminalMessageThread.tsx#L10-L59) - CitationsBlock component
 
 ### First-Run Experience
-**Zero-Model Onboarding** (Updated 2025-10-06):
-- **Graceful startup**: Backend starts even with no models installed
-- **Empty State UI**: Prominent centered message when no models available
-- **Clear CTA**: Large blue "Install Your First Model" button in chat area
-- **Clear guidance**: Model dropdown shows "Download Your First Model" when empty
-- **User control**: Users select and download their preferred model via UI
-- **No hardcoded defaults**: System is truly modular - users choose their own models
-- **Embedding model filter**: Filters out non-chat models (nomic-embed, llava, bge-, all-minilm, mxbai-embed) from dropdown ([ConnectedChat.tsx:654](../ui-implementation/src/components/ConnectedChat.tsx#L654))
-- **Smart first model auto-switch**: After downloading first chat model, checks backend's `/api/model/current` to verify no chat model is active. If backend has no chat model (embedding-only or none), automatically switches to newly installed chat model. Subsequent model installs show success toast only - user manually switches via dropdown. ([ConnectedChat.tsx:410-420](../ui-implementation/src/components/ConnectedChat.tsx#L410))
+
+**Welcome modal (v0.3.1+):** `OllamaRequiredModal.tsx` explains the chat-model + sidecar-model architecture, surfaces a curated tool-capable model list (qwen3, gemma4, gpt-oss), and treats LM Studio as a first-class provider. After the first chat-model install a follow-up toast prompts the user to pick a sidecar.
+
+**Zero-Model onboarding behavior:**
+- **Graceful startup**: backend starts even with no models installed
+- **Empty State UI**: prominent centered message when no models are available
+- **Clear CTA**: large "Install Your First Model" button in the chat area
+- **Embedding model filter**: dropdown excludes embedding-only models (`nomic-embed`, `llava`, `bge-`, `all-minilm`, `mxbai-embed`) — `ConnectedChat.tsx`, `getModelOptions()`
+- **Smart first-model auto-switch**: after downloading the first chat model, polls `/api/model/current`; if backend has no chat model (embedding-only or none), auto-switches to the newly installed model. Subsequent installs show a success toast only; user switches manually.
  - **Lazy model loading**: Models load into GPU memory only on first user message, not during app startup or model switching. Health checks verify model availability without loading. Sidecar operations use client locking to prevent concurrent model loading and retry queue for reliability.
 - **Auto-selection behavior**: If no model is configured in `.env`, app selects first available model from detected provider. **Recommendation**: Configure `OLLAMA_MODEL` or `ROAMPAL_LLM_OLLAMA_MODEL` in `.env` to avoid auto-selection of large models.
 
@@ -4441,7 +3609,7 @@ main_window.on_window_event(move |event| {
 
 ### Bounded Collections
 - Working memory: Max 100 items
-- Memory bank: Max 1000 items (v0.2.5, increased from 500)
+- Memory bank: Max 500 items (`MemoryBankService.MAX_ITEMS = 500`)
 - History per conversation: 20 messages
 - LLM context: Last 4 exchanges (8 messages)
 
@@ -4477,521 +3645,6 @@ System: Records success → Links "authentication" to solution →
 Next query about authentication → Faster, more accurate response
 ```
 
-### Action-Level Causal Learning (v0.2.1 - Nov 2025)
-
-Roampal now tracks **individual tool calls with context awareness**, enabling the system to learn contextually appropriate behaviors.
-
-#### The Problem: Shallow Outcome Tracking
-
-Previous versions tracked outcomes at the **conversation level**:
-- ✓ "This memory helped answer the question" → Good
-- ✗ "This memory didn't help" → Bad
-
-But this couldn't answer:
-- **Why did it fail?** Was it a bad search query? Wrong tool choice? Missing context?
-- **Context matters**: `create_memory()` is great for "fitness" tracking but terrible for "memory_test" questions
-- **Causal attribution**: Which action in a chain actually caused the success/failure?
-
-#### Solution: Context-Action Effectiveness Tracking
-
-**Key Innovation**: Track `(context_type, action_type, collection) → outcome`
-
-**Example Learning**:
-```
-memory_test Context (LLM-classified):
-  search_memory|memory_bank → 85% success (Good! Use this)
-  create_memory|memory_bank → 5% success  (Bad! Hallucinating answers)
-
-learning Context (LLM-classified):
-  create_memory|memory_bank → 92% success (Good! Storing facts)
-  search_memory|memory_bank → 45% success (Okay, but not primary goal)
-```
-
-#### Context Detection (LLM-Based Session Type Classification)
-
-**CURRENT IMPLEMENTATION: LLM classifies conversation session types organically**
-
-The system uses the LLM to classify the operational mode of conversations - what kind of interaction is happening, not just what topic is being discussed.
-
-**How it works:**
-1. System passes recent conversation to LLM
-2. LLM classifies session type in 1-2 words: "learning", "recall", "coding_help", "fitness_tracking", etc.
-3. System learns session-type-specific patterns in the Action-Effectiveness KG
-
-**Example Session Types Discovered:**
-- **learning**: Being taught new information (create_memory effective)
-- **recall**: Remembering or retrieving past information (search_memory effective)
-- **coding_help**: Programming assistance, debugging, architecture
-- **fitness_tracking**: Logging workouts, nutrition, health goals
-- **creative_writing**: Story development, worldbuilding, character creation
-- **project_planning**: Task management, deadlines, coordination
-- **general_chat**: Casual conversation
-
-**Why session type instead of topic?**
-- **Operational mode matters more than topic** - A coding tutorial vs recall testing need different tool behaviors
-- No hardcoded patterns - works for ANY interaction mode
-- LLM understands context naturally (distinguishes "being taught Python" from "recalling Python concepts")
-- Enables mode-specific learning: "search_memory works 92% for RECALL" vs "create_memory works 88% for LEARNING"
-- Truly general-purpose - adapts to user's actual interaction patterns
-
-**Multilingual Support:**
-- Session types can be in ANY language (English, Chinese, Arabic, Russian, etc.)
-- Unicode-aware text processing preserves non-Latin characters
-- Examples: "学习" (Chinese learning), "تعلم" (Arabic learning), "обучение" (Russian learning)
-- All languages get equal, robust handling - no ASCII-only restrictions
-
-#### ActionOutcome Data Structure
-
-```python
-@dataclass
-class ActionOutcome:
-    action_type: str          # "search_memory", "create_memory", etc.
-    context_type: str         # LLM-classified session type: "learning", "recall", "coding_help", etc.
-    outcome: Literal["worked", "failed", "partial"]
-
-    # Action details
-    action_params: Dict       # Tool parameters
-    doc_id: Optional[str]     # Document involved
-    collection: Optional[str] # Collection accessed
-
-    # Causal attribution
-    chain_position: int       # Position in action chain (0-based)
-    chain_length: int         # Total actions in chain
-    caused_final_outcome: bool # Did this action cause the result?
-```
-
-**Note:** `context_type` is dynamically discovered by LLM from conversation content.
-
-#### Knowledge Graph Structure
-
-New KG index: `context_action_effectiveness`
-
-```json
-{
-  "recall|search_memory|working": {
-    "successes": 42,
-    "failures": 3,
-    "partials": 5,
-    "success_rate": 0.92,
-    "total_uses": 50,
-    "first_seen": "2025-11-20T10:00:00",
-    "last_used": "2025-11-21T15:30:00",
-    "examples": [...]  // Last 5 examples for debugging
-  },
-  "fitness|create_memory|working": {
-    "successes": 87,
-    "failures": 8,
-    "partials": 5,
-    "success_rate": 0.88,
-    "total_uses": 100,
-    // ... HIGH SUCCESS → System learns create_memory works well for fitness
-  },
-  "finance|archive_memory|history": {
-    "successes": 30,
-    "failures": 10,
-    "success_rate": 0.75,
-    "total_uses": 40,
-    // ... System learns archiving works for financial records
-  }
-}
-```
-
-**Keys use LLM-discovered topics** for contextual learning.
-System learns which tools work best for each domain.
-
-#### Informational Stats (NOT Prescriptive)
-
-**IMPORTANT DESIGN CHANGE (Nov 2025):**
-
-After 10+ uses, system shows **informational stats** to the LLM, but **does NOT prescribe** what actions to take.
-
-**Old approach (removed):**
-```
-⚠️ AVOID: search_memory() fails 70% of the time in recall context
-```
-
-**New approach (current):**
-```
-📊 Tool Usage Stats (FYI - you decide what to use)
-Based on past experience in recall contexts:
-   • search_memory() on working: 18% success (11 uses)
-   • create_memory() on memory_bank: 85% success (45 uses)
-
-This is informational only - use your judgment.
-```
-
-**Why the change:**
-- **LLM needs agency**: Prescriptive warnings ("AVOID THIS") caused the LLM to refuse valid tool use
-- **Context matters**: 30% success might be acceptable for difficult recall tasks
-- **Small sample sizes**: 3 uses isn't enough data to judge effectiveness
-- **False negatives**: System was blaming search_memory for recall test failures when the real issue was missing memories
-
-**Thresholds:**
-- **min_uses: 10** (was 3) - Need more data before showing stats
-- **max_success_rate: 10%** (was 30%) - Only flag truly broken patterns
-- **Presentation: Informational** (was prescriptive) - Show stats, let LLM decide
-
-#### API Methods
-
-**Recording Action Outcomes**:
-```python
-action = ActionOutcome(
-    action_type="create_memory",
-    context_type="coding",  # LLM-classified topic
-    outcome="worked",
-    action_params={"content": "Bug fix pattern for async race conditions"},
-    chain_position=0,
-    chain_length=1
-)
-await memory.record_action_outcome(action)
-```
-
-**Querying Effectiveness**:
-```python
-# Check if action is effective in this context
-stats = memory.get_action_effectiveness(
-    context_type="coding",  # LLM-classified topic
-    action_type="search_memory",
-    collection="working"
-)
-# Returns: {"success_rate": 0.92, "total_uses": 50, ...}
-
-# Determine if action should be avoided (rarely used - informational only)
-should_avoid = memory.should_avoid_action(
-    context_type="creative_writing",
-    action_type="search_memory",
-    min_uses=10,      # Default: 10 (was 3)
-    max_success_rate=0.1  # Default: 10% (was 30%)
-)
-# Returns: True only if action has 10+ uses AND <10% success (very rare)
-```
-
-#### Production Integration (IMPLEMENTED v0.2.1)
-
-**The system is FULLY INTEGRATED in production and works with ANY tool, not just memory tools.**
-
-**Implementation Locations:**
-- **agent_chat.py (Lines 615-716)**: Merged organic recall with action-effectiveness warnings
-- **main.py MCP (Lines 1031-1143)**: `get_context_insights` tool includes action guidance
-- **comprehensive test suite (Lines 753-793)**: Test harness injects action-effectiveness warnings into LLM prompts
-
-**Real Production Flow:**
-
-```python
-# STEP 1: User sends message
-User: "How do I fix this async race condition in my code?"
-
-# STEP 2: Context Detection (agent_chat.py:627)
-context_type = memory.detect_context_type(
-    system_prompts=system_prompts,
-    recent_messages=recent_conv
-)
-# → LLM classifies: "coding_help"
-
-# STEP 3: Content KG + Action-Effectiveness KG (Lines 639-670)
-org_context = await memory.analyze_conversation_context(...)
-action_warnings = []
-collections = [None, "books", "working", "history", "patterns", "memory_bank"]
-for action in ["search_memory", "create_memory", ...]:
-    for collection in collections:
-        if memory.should_avoid_action(context_type, action, collection):
-            # Low success rate - add warning
-        elif stats and stats['success_rate'] >= 0.7:
-            # High success rate - add positive guidance
-
-# STEP 4: Inject Combined Guidance (Lines 672-720)
-═══ CONTEXTUAL GUIDANCE (Context: coding_help) ═══
-
-📋 Past Experience:
-  • Similar async debugging last week in project
-
-🎯 Tool Usage Guidance (learned from experience):
-
-✓ These approaches have proven effective:
-  • search_memory() on working - 92% success rate for coding questions
-  • search_memory() on patterns - 88% success rate for coding questions
-
-# STEP 5: LLM sees guidance and adjusts behavior
-# → Calls search_memory() with high confidence
-# → Routing KG optimizes search to "working" and "patterns" tiers
-# → Returns relevant debugging patterns
-
-# STEP 6: After outcome detection
-# → Records: coding_help|search_memory|working → worked ✓
-# → Updates Action-Effectiveness KG statistics
-```
-
-**Example: Fitness Tracking**
-```
-User: "I did 50 pushups today, remember that for my workout log"
-→ Context classified by LLM: "fitness"
-→ Guidance injected: ✓ create_memory() → 88% success for fitness tracking
-→ LLM calls: create_memory(content="50 pushups on 2025-11-22")
-→ User responds: "Perfect!"
-→ Outcome detected: worked
-→ System learns: fitness|create_memory|working → success ✓
-```
-
-**Example: Finance Planning**
-```
-User: "What were my expenses from last month?"
-→ Context classified by LLM: "finance"
-→ Guidance injected: ✓ search_memory() on history → 85% success for finance
-→ LLM calls: search_memory(query="expenses last month", collection="history")
-→ Returns financial records from November
-→ User responds: "Great, thanks!"
-→ System learns: finance|search_memory|history → success ✓
-```
-
-**Example: Creative Writing**
-```
-User: "Tell me about the character we created yesterday"
-→ Context classified by LLM: "creative_writing"
-→ Guidance injected: ✓ search_memory() → 78% success for creative writing
-→ LLM searches character descriptions
-→ Returns character profile with details
-→ System learns: creative_writing|search_memory|working → success ✓
-```
-
-**Context Detection via LLM**:
-- LLM reads recent conversation and classifies topic
-- Returns 1-2 words: "coding", "fitness", "finance", "creative_writing", etc.
-- No hardcoded keywords - works for ANY domain
-- Adapts to user's actual usage patterns
-
-**Works with ANY Tool**:
-```python
-# Not just memory tools - tracks ANY action across ALL topics
-coding|search_memory|working → 92% success
-fitness|create_memory|working → 88% success
-finance|archive_memory|history → 75% success
-creative_writing|search_memory|working → 78% success
-project_planning|update_memory|working → 85% success
-```
-
-#### Test Harness Integration (IMPLEMENTED v0.2.1)
-
-**Test harness now has FULL injection - same as production systems.**
-
-#### Test Harness Integration (IMPLEMENTED v0.2.1)
-
-**Comprehensive Test Suite** (benchmarks/comprehensive_test/):
-**Comprehensive Test Suite** (benchmarks/comprehensive_test/):
-
-**Test Coverage - 40/40 Tests Passing (100%)**:
-- **30 Comprehensive Tests**: Infrastructure validation (5 tiers, 3 KGs, scoring, promotion, deduplication)
-- **10 Torture Tests**: Stress testing (1000+ memories, concurrent access, adversarial inputs)
-- **Statistical Testing**: p=0.005, d=13.4, +35% improvement (keyword matching with mock embeddings)
-
-**What's Validated**:
-- ✅ Storage/retrieval infrastructure works correctly
-- ✅ Outcome scoring math (+0.2/-0.3/+0.05) functions properly  
-- ✅ Promotion thresholds trigger as designed
-- ✅ System handles stress (1000+ memories, concurrent access)
-
-**What's NOT Validated** (requires real-world human trials):
-- ❌ Conversations actually get better over time
-- ❌ LLM uses retrieved context effectively
-- ❌ Long-term retention (weeks/months)
-- ❌ User experience/satisfaction improves
-
-**Implementation Example**:
-- Learn: "In learning contexts, create_memory() on new facts → 92% success"
-- **Inject warnings**: If create_memory fails repeatedly, warn LLM to stop duplicating
-
-**Memory Test Sessions** (LLM classifies as "memory_test"):
-- Track all tool calls during answer formulation
-- Score based on answer correctness
-- Learn: "In memory_test contexts, search_memory() first → 85% success"
-- Learn: "In memory_test contexts, create_memory() → 5% success (hallucination)"
-- **Inject warnings**: "✗ create_memory() → only 5% success - AVOID"
-
-#### Expected Impact
-
-**Before (Conversation-Level)**:
-- System knows "this worked" but not *why*
-- Can't distinguish context-appropriate actions
-- LLM must learn from scratch each run
-
-**After (Action-Level)**:
-- System learns "search_memory works for memory_test, create_memory fails"
-- Can warn about low-success patterns after 3 uses
-- Auto-generates corrective prompts from learned rules
-
-**Enables**:
-1. **Context-aware tool recommendations** → "For coding questions, use search_memory"
-2. **Failure diagnosis** → "You used create_memory in memory_test (5% success rate)"
-3. **Self-improving prompts** → Generate warnings from empirical data
-4. **Alignment through outcomes** → Learn *appropriate* behavior, not just *any* behavior
-5. **Anti-hallucination fallback** → Explicit instruction to say "I don't know" instead of guessing
-
-**Hallucination Prevention Design**:
-The guidance includes explicit fallback instructions to prevent hallucinations when tools fail:
-- **With alternatives**: "Use the recommended approaches below instead" → Redirects to working tools
-- **Without alternatives**: "Say 'I don't have that information' rather than guessing" → Prevents fabrication
-
-This ensures that warnings don't create pressure to hallucinate when no good option exists.
-
-#### Real-World Example: The 14B Create-Memory Bug
-
-**Problem Discovered** (Nov 2025):
-- LLM was scoring 0-10% on recall tests
-- Investigation: LLM was calling `create_memory()` during recall tests, hallucinating answers
-
-**Conversation-Level Tracking Said**:
-- "Quiz failed" → But why? Search failed? Answer wrong? Tool misuse?
-
-**Action-Level Tracking Shows**:
-```
-recall_test|create_memory|memory_bank:
-  - 18 failures: "Created 'Kaz is 25', answered '27', correct was 29"
-  - 1 success: "Lucky guess matched stored fact"
-  - Success rate: 5%
-
-recall_test|search_memory|memory_bank:
-  - 42 successes: "Retrieved correct fact, gave right answer"
-  - 3 failures: "Fact not found, answered wrong"
-  - Success rate: 85%
-```
-
-**System learns**: In memory_test context, `create_memory()` is catastrophically bad. After 3 uses, system injects warnings into prompts automatically.
-
-## Test Suite (v0.2.9)
-
-### Directory Structure
-
-```
-ui-implementation/src-tauri/backend/tests/
-├── unit/                              # Service unit tests
-│   ├── test_unified_memory_system.py  # Facade tests
-│   ├── test_search_service.py         # Vector search, hybrid retrieval
-│   ├── test_scoring_service.py        # Wilson score, outcome mapping
-│   ├── test_promotion_service.py      # Score thresholds, lifecycle
-│   ├── test_routing_service.py        # KG routing decisions
-│   ├── test_memory_bank_service.py    # Fact storage, tags
-│   ├── test_context_service.py        # Cold-start context
-│   ├── test_outcome_service.py        # Outcome recording
-│   ├── test_knowledge_graph_service.py# Triple KG system
-│   └── test_sensitive_data_filter.py  # v0.2.9: PII Guard tests
-├── mcp/                               # MCP tool layer tests
-│   ├── mcp_tool_harness.py            # Test harness simulating MCP calls
-│   ├── test_mcp_tools.py              # Tool behavior tests
-│   └── test_mcp_benchmarks.py         # Performance benchmarks
-└── characterization/                  # Behavior characterization tests
-    ├── test_search_behavior.py        # Search return types, ranking
-    └── test_outcome_behavior.py       # Wilson score calculations
-```
-
-### Running Tests
-
-```bash
-cd ui-implementation/src-tauri/backend
-
-# Run all tests
-python -m pytest tests/ -v
-
-# Run specific category
-python -m pytest tests/unit/ -v
-python -m pytest tests/mcp/ -v
-python -m pytest tests/characterization/ -v
-
-# Run with coverage
-python -m pytest tests/ --cov=modules --cov-report=html
-```
-
-### Unit Tests
-
-| Test File | Service | Key Tests |
-|-----------|---------|-----------|
-| `test_unified_memory_system.py` | Facade | Init, config, conversation ID |
-| `test_search_service.py` | SearchService | Vector search, hybrid retrieval |
-| `test_scoring_service.py` | ScoringService | Wilson score, outcome mapping |
-| `test_promotion_service.py` | PromotionService | Score thresholds, lifecycle |
-| `test_routing_service.py` | RoutingService | KG routing decisions |
-| `test_memory_bank_service.py` | MemoryBankService | Fact storage, tags |
-| `test_context_service.py` | ContextService | Cold-start context |
-| `test_outcome_service.py` | OutcomeService | Outcome recording |
-| `test_knowledge_graph_service.py` | KnowledgeGraphService | Triple KG |
-| `test_sensitive_data_filter.py` | PII Guard | API keys, tokens, passwords, SSN, credit cards |
-
-### MCP Tool Tests
-
-**Tool Harness** (`mcp_tool_harness.py`): Simulates MCP tool calls without starting the full server.
-
-| Test Class | Coverage |
-|------------|----------|
-| `TestSearchMemory` | Basic search, collections, limits |
-| `TestSearchMemorySortBy` | v0.2.9: `sort_by` parameter (recency, score, relevance) |
-| `TestTemporalAutoDetection` | v0.2.9: Auto-detection of temporal keywords |
-| `TestSelectiveScoring` | v0.2.9: `related` parameter (positional scoring) |
-| `TestRecordResponse` | Outcome recording, cache scoring |
-| `TestToolSchemaCompliance` | Schema validation |
-| `TestContextInsights` | Cold-start context |
-| `TestMemoryBank` | Fact storage |
-
-### PII Guard Tests (`test_sensitive_data_filter.py`)
-
-v0.2.9 added comprehensive tests for `SensitiveDataFilter`:
-
-| Test Class | Coverage |
-|------------|----------|
-| `TestSensitiveDataFilterText` | API keys, Bearer tokens, passwords, AWS keys, private keys, credit cards, SSN, JWT, DB URLs |
-| `TestSensitiveDataFilterDict` | Sensitive key detection, nested dicts, lists |
-| `TestSensitiveDataFilterIntegration` | Mixed data, case-insensitive keys |
-| `TestSensitiveDataFilterEdgeCases` | Short numbers, non-SSN patterns, code snippets |
-
-**Test Data Safety**: All PII in tests is fake/example data:
-- AWS key: `AKIAIOSFODNN7EXAMPLE` (official AWS example)
-- Credit cards: `4111111111111111` (standard test card)
-- SSN: `123-45-6789` (common fake example)
-
-### v0.2.9 Feature Tests
-
-**1. `sort_by` Parameter:**
-- `test_sort_by_recency` - Newest first by timestamp
-- `test_sort_by_score` - Highest outcome score first
-- `test_sort_by_relevance_default` - Original order preserved
-
-**2. Temporal Auto-Detection:**
-```python
-temporal_keywords = [
-    "last", "recent", "yesterday", "today", "earlier",
-    "previous", "before", "when did", "how long ago",
-    "last time", "previously", "lately", "just now"
-]
-```
-
-**3. `related` Parameter (Selective Scoring):**
-- `test_position_cache_built` - Position mapping in cache
-- `test_related_positional_scoring` - `related=[1, 3]` scores positions 1 and 3
-- `test_related_doc_id_scoring` - `related=["history_abc123"]` scores by doc_id
-- `test_invalid_positions_fallback_to_all` - Invalid positions fall back to score all
-- `test_no_related_scores_all` - Backwards compatibility (no related = score all)
-
-### Test Coverage Summary
-
-| Category | Files | Tests | Coverage |
-|----------|-------|-------|----------|
-| Unit | 10 | 259 | Service layer |
-| MCP | 3 | 39 | Tool handlers, v0.2.9 features |
-| Characterization | 2 | 23 | Regression safety |
-| **Total** | **15** | **321** | **Full backend** |
-
-## Future Enhancements
-
-### Planned Features
-- Multi-language support
-- Voice interaction
-- Export conversation history
-- Custom memory retention policies
-- Plugin system for extensions
-- Collaborative learning (opt-in)
-
-### Performance Goals
-- Sub-100ms memory retrieval
-- 95% outcome detection accuracy
-- <2s response generation time
-- 30-day knowledge retention
 
 ## Troubleshooting
 
@@ -5044,2025 +3697,6 @@ temporal_keywords = [
 **Rationale**: Single-user local app still needs protection from accidental corruption
 **Impact**: Prevents data integrity issues and self-inflicted prompt injection
 **Implementation**: File type whitelisting, size limits, encoding validation, UUID validation, metadata length limits
-
-## Production Readiness Enhancements (2025-09-30)
-
-### Race Condition Fixes and Sync Improvements (2025-10-03)
-**Implemented**: Critical race condition fixes and backend-to-frontend sync improvements
-
-**P0 Fixes (Critical)**:
-1. **Global Service Init Race Condition** - [agent_chat.py:883](app/routers/agent_chat.py#L883)
-   - Added `asyncio.Lock` (`_service_init_lock`) to prevent concurrent service initialization
-   - Ensures only one `AgentChatService` instance created under concurrent requests
-   - **Impact**: Eliminates service state corruption
-
-2. **Streaming File Write Race** - [agent_chat.py:1091](app/routers/agent_chat.py#L1091)
-   - Streaming endpoint now uses `_save_to_session_file()` with FileLock + atomic writes
-   - Removed direct `open('a')` append that bypassed file locking
-   - **Impact**: Prevents JSONL file corruption during concurrent writes
-
-3. **Stream Error Cleanup** - [agent_chat.py:1162](app/routers/agent_chat.py#L1162) + [useChatStore.ts:662](ui-implementation/src/stores/useChatStore.ts#L662)
-   - Backend sends `cleanup: True` flag in error events
-   - Frontend resets `isProcessing`, `processingStage`, `processingStatus` on error
-   - **Impact**: Prevents UI stuck in "Processing..." state after errors
-
-4. **Title Generation Race** - [agent_chat.py:1112-1124](app/routers/agent_chat.py#L1112)
-   - Added per-conversation locks (`title_locks`) for title generation
-   - Double-check message count inside lock to prevent duplicate generation
-   - **Impact**: Eliminates duplicate LLM calls and title corruption
-
-**P1 Fixes (High Priority)**:
-5. **WebSocket Heartbeat** - [useChatStore.ts:261-267](ui-implementation/src/stores/useChatStore.ts#L261)
-   - Implemented 30-second ping/pong heartbeat mechanism
-   - Cleanup on `onclose` event to prevent memory leaks
-   - **Impact**: Prevents silent connection drops on long-idle sessions
-
-6. **Load Conversation Histories** - [agent_chat.py:117](app/routers/agent_chat.py#L117) + [agent_chat.py:782-805](app/routers/agent_chat.py#L782)
-   - `_load_conversation_histories()` loads last 20 messages per conversation on startup
-   - Populates in-memory `conversation_histories` dict from session files
-   - **Impact**: Preserves conversation context across server restarts
-
-7. **Debounce KG Saves** - [unified_memory_system.py:221-241](modules/memory/unified_memory_system.py#L221)
-   - Implemented `_debounced_save_kg()` with 5-second batching window
-   - Cancels pending saves and creates new delayed task
-   - Replaces 7 calls to `_save_kg()` with debounced version (outcome tracking, concept relationships)
-   - **Impact**: Reduces file I/O by 80-90% under load, prevents thread pool exhaustion
-
-**Technical Details**:
-- All session file writes now use `FileLock` + atomic temp file + `fsync()` pattern
-- Per-conversation locks prevent duplicate title generation races
-- WebSocket connections properly cleaned up (heartbeat interval cleared)
-- Knowledge graph saves batched to prevent excessive file writes during learning
-- Conversation histories loaded lazily from session files on startup
-
-**Files Modified**:
-- `app/routers/agent_chat.py` - Global lock, file write fixes, title lock, history loading
-- `ui-implementation/src/stores/useChatStore.ts` - WebSocket heartbeat, error cleanup
-- `modules/memory/unified_memory_system.py` - KG save debouncing
-
-### Conversation Management Fixes (2025-10-03)
-**Implemented**: Critical conversation/session management improvements
-
-**P0 Fixes (Critical)**:
-1. **Message Loading on Conversation Switch** - [useChatStore.ts:231-276](ui-implementation/src/stores/useChatStore.ts#L231)
-   - `switchConversation()` now loads messages from backend via `/api/sessions/{id}`
-   - Maps backend JSONL format to UI message format with thinking extraction
-   - Handles load failures gracefully (continues with empty messages)
-   - **Impact**: Fixes 100% of conversation switches showing empty history
-
-2. **Memory Cleanup on Conversation Delete** - [sessions.py:140-178](app/routers/sessions.py#L140) + [unified_memory_system.py:627-653](modules/memory/unified_memory_system.py#L627)
-   - New `delete_by_conversation()` method deletes from all ChromaDB collections
-   - Delete endpoint calls memory cleanup before file deletion
-   - Prevents deletion of active conversation (400 error)
-   - **Impact**: Eliminates ~500KB memory leak per deleted conversation
-
-3. **Streaming Interruption Handling** - [useChatStore.ts:193-210](ui-implementation/src/stores/useChatStore.ts#L193)
-   - Aborts active streaming before conversation switch
-   - Marks incomplete messages with `[Conversation switched during streaming]` note
-   - Clears abort controller to prevent memory leaks
-   - **Impact**: No more lost messages or stuck streaming states
-
-**P1 Fixes (High Priority)**:
-4. **Conversation Lock Usage** - [agent_chat.py:1287](app/routers/agent_chat.py#L1287)
-   - Switch endpoint now uses `conversation_lock` to prevent race conditions
-   - Ensures atomic conversation ID updates
-   - **Impact**: Prevents interleaved switch requests
-
-5. **Title Update Race Condition Fixed** - [file_memory_adapter.py:145-195](modules/memory/file_memory_adapter.py#L145)
-   - Removed internal FileLock from `update_session_title()`
-   - Relies on per-conversation lock in service layer (title_locks)
-   - Prevents deadlock between asyncio.Lock and FileLock
-   - **Impact**: Eliminates file corruption risk during title generation
-
-6. **Session File Created on Conversation Init** - [agent_chat.py:1325-1328](app/routers/agent_chat.py#L1325)
-   - `/create-conversation` now creates empty JSONL file with `touch()`
-   - Prevents phantom conversations that disappear on refresh
-   - **Impact**: Consistent conversation persistence
-
-### Lazy Conversation Creation (2025-10-03)
-**Implemented**: Conversations are now created lazily on first message, not on "New Chat" button click
-
-**Pattern**: Deferred creation prevents empty conversation spam
-
-**Flow**:
-```
-USER CLICKS "NEW CHAT"
-    ↓
-Frontend: clearSession()
-    ├─ conversationId = null
-    ├─ messages = []
-    ├─ closeWebSocket()
-    └─ Notify backend for memory promotion (if previous conversation exists)
-    ↓
-UI: Empty chat ready (no backend call, no file created) ✅
-
-USER SENDS FIRST MESSAGE
-    ↓
-Frontend: sendMessage()
-    ├─ if (!conversationId): createConversation()
-    ├─ POST /api/chat/create-conversation
-    ├─ Backend creates session file with touch()
-    ├─ initWebSocket()
-    └─ Send message to backend ✅
-
-SPAM CLICKING "NEW CHAT" 100 TIMES
-    ↓
-UI: Clears repeatedly, conversationId stays null
-    ↓
-No backend calls, no files created ✅
-```
-
-**Benefits**:
-- ✅ Eliminates empty conversation spam from rapid button clicks
-- ✅ Reduces unnecessary backend load
-- ✅ Cleaner session file directory (only conversations with messages)
-- ✅ Consistent with user expectations (conversation exists when they send a message)
-
-**Technical Details**:
-- `clearSession()` sets `conversationId: null` instead of calling `createConversation()`
-- `sendMessage()` checks for null conversation and creates lazily (lines 547-556)
-- `initWebSocket()` skips initialization if `conversationId` is null (lines 320-325)
-- Backend `/create-conversation` endpoint unchanged (still creates file immediately when called)
-
-**Files Modified**:
-- `ui-implementation/src/stores/useChatStore.ts` - clearSession(), sendMessage(), initWebSocket()
-- `ui-implementation/src/components/ConnectedChat.tsx` - handleNewChat() simplified (removed legacy session saving code)
-
-**P2 Fixes (Medium Priority)**:
-7. **Async Memory Promotion on Switch** - [agent_chat.py:1298-1303](app/routers/agent_chat.py#L1298)
-   - Memory promotion runs as background task (non-blocking)
-   - Switch endpoint responds immediately without waiting 1-3 seconds
-   - **Impact**: Faster conversation switching (instant response)
-
-8. **Active Conversation Delete Prevention** - [sessions.py:149-155](app/routers/sessions.py#L149)
-   - Checks if conversation_id matches active conversation
-   - Returns 400 error if trying to delete current conversation
-   - **Impact**: Prevents undefined behavior and data loss
-
-**Technical Details**:
-- Messages loaded with thinking extraction (supports multiple formats)
-- ChromaDB metadata filter: `where={"conversation_id": conversation_id}`
-- Abort controller properly cleaned up before switch
-- Per-conversation locks prevent duplicate operations
-- Empty session files created immediately to maintain consistency
-
-**Files Modified**:
-- `ui-implementation/src/stores/useChatStore.ts` - Message loading, streaming abort, state cleanup
-- `app/routers/sessions.py` - Memory cleanup on delete, active conversation check
-- `app/routers/agent_chat.py` - Async promotion, conversation lock, file creation
-- `modules/memory/unified_memory_system.py` - delete_by_conversation method
-- `modules/memory/file_memory_adapter.py` - Removed internal locking from title update
-
-### Frontend Conversation State Refactor (2025-10-03)
-**Implemented**: Complete refactor of conversation list state management to eliminate technical debt
-
-**Problem**: Conversation list was being transformed twice (store → ConnectedChat → Sidebar), causing sync issues, stale data after deletion, and timestamp conversion bugs.
-
-**Solution**: Direct Zustand store subscription with single source of truth
-
-**Changes Made**:
-
-1. **Clean Store Type** - [useChatStore.ts:20-27](ui-implementation/src/stores/useChatStore.ts#L20)
-   - Changed `sessions: Record<string, any[]>` → `sessions: ChatSession[]`
-   - Removed `{all: [...]}` wrapper object
-   - Timestamps stored as unix floats (seconds), converted to ms only for compatibility fields
-   - **Impact**: Eliminates confusing nested structure
-
-2. **Sidebar Direct Subscription** - [Sidebar.tsx:90-100](ui-implementation/src/components/Sidebar.tsx#L90)
-   - Removed `chatHistory` prop dependency
-   - Added `useChatStore(state => state.sessions)` subscription
-   - Transforms data internally: unix timestamp → Date object
-   - **Impact**: Automatic re-render when sessions change (fixes deletion sync)
-
-3. **Removed Duplicate Transformation** - [ConnectedChat.tsx:1140](ui-implementation/src/components/ConnectedChat.tsx#L1140)
-   - Deleted 115 lines of chatHistory transformation logic (lines 1141-1256)
-   - Removed chatHistory prop from Sidebar component
-   - **Impact**: Eliminates double-transformation and stale data bugs
-
-4. **Timestamp Fixes**:
-   - Backend [sessions.py:78-89](app/routers/sessions.py#L78): ISO strings parsed as local time, converted to unix floats
-   - Backend [agent_chat.py:799,1304](app/routers/agent_chat.py#L799): Changed `datetime.utcnow()` → `datetime.now()`
-   - Frontend [Sidebar.tsx:247,256](ui-implementation/src/components/Sidebar.tsx#L247): Fixed to use Date object directly (no `* 1000`)
-   - **Impact**: Fixes "Jan 21" and "Oct 4 (tomorrow)" timestamp display bugs
-
-**Before Flow**:
-```
-Backend API → store.sessions.all → ConnectedChat transforms → Sidebar prop → UI
-(prop doesn't trigger re-render on store changes)
-```
-
-**After Flow**:
-```
-Backend API → store.sessions → Sidebar subscribes → UI
-(Zustand automatically triggers re-render)
-```
-
-**Technical Details**:
-- Timestamps: Backend sends unix floats (seconds) → Frontend stores as-is → Sidebar multiplies by 1000 for Date objects
-- Store interface exports `ChatSession` type for type safety
-- Sidebar maintains internal `ChatSession` interface for display format
-- No intermediate state - single transformation at render time
-
-**Impact**:
-- ✅ Deleted conversations disappear immediately from UI
-- ✅ New conversations appear without manual refresh
-- ✅ Title updates propagate automatically
-- ✅ Timestamps display correctly (no timezone bugs)
-- ✅ 115 lines of duplicate code removed
-- ✅ Simpler data flow, easier to debug
-
-### Conversation Persistence Across Page Refresh (2025-10-07)
-**Implemented**: localStorage persistence to restore active conversation on page refresh
-
-**Problem**: Conversation and memory fragments disappeared after page refresh
-- `conversationId` reset to `null` on page load
-- `initialize()` loaded sessions list but didn't restore last active conversation
-- User started in NEW conversation, previous conversation "disappeared" (still in DB, not loaded)
-- Memory fragments from previous conversation not visible (different conversation context)
-
-**Solution**: Persist `conversationId` to localStorage and restore on initialization
-
-**Implementation** - [useChatStore.ts](ui-implementation/src/stores/useChatStore.ts):
-
-1. **localStorage Key** (line 8):
-   ```typescript
-   const CONVERSATION_ID_KEY = 'roampal_active_conversation';
-   ```
-
-2. **Save on Conversation Change** (lines 306, 1221):
-   - `switchConversation()`: Saves after successful switch
-   - `loadSession()`: Saves after loading session
-   - `createConversation()`: Saves via `switchConversation()` call
-   ```typescript
-   localStorage.setItem(CONVERSATION_ID_KEY, conversationId);
-   ```
-
-3. **Restore on Initialization** (lines 1098-1110):
-   ```typescript
-   const lastConversationId = localStorage.getItem(CONVERSATION_ID_KEY);
-   if (lastConversationId) {
-     await get().loadSession(lastConversationId);  // Loads messages + sets conversationId
-   }
-   ```
-
-4. **Clear on Session Clear** (line 1084):
-   ```typescript
-   localStorage.removeItem(CONVERSATION_ID_KEY);
-   ```
-
-**Flow After Refresh**:
-1. Page loads → `initialize()` runs
-2. Loads sessions list from backend
-3. Checks localStorage for last active conversation ID
-4. If found, calls `loadSession()` to restore conversation + messages
-5. Memory panel displays fragments from restored conversation
-6. User continues where they left off
-
-**Edge Cases Handled**:
-- Invalid conversation ID in localStorage → catches error, clears localStorage, starts fresh
-- Session deleted from backend → 404 error caught, localStorage cleared
-- First-time user → no localStorage key, starts with new conversation
-- Clear session → explicitly removes from localStorage
-
-**Impact**:
-- ✅ Conversations persist across page refresh
-- ✅ Memory fragments visible (correct conversation loaded)
-- ✅ No backend changes required
-- ✅ Minimal code: ~15 lines across 4 functions
-- ✅ Works seamlessly with existing session system
-
-### Title Generation Deduplication (2025-10-03)
-**Note**: This section describes the SSE implementation. System migrated to WebSocket on 2025-10-10.
-
-**Implemented**: Eliminated duplicate title generation calls and added WebSocket event handling
-
-**Problem**: Title was being generated twice - once by backend during streaming, once by frontend via separate API call.
-
-**Root Cause**:
-- Backend generates title at message count == 2 during `/stream` endpoint (sends SSE `{type: 'title', ...}`)
-- Frontend was ignoring this event and making redundant call to `/generate-title` endpoint
-- Result: 2x LLM calls, wasted resources, potential race conditions
-
-**Solution**: Frontend now listens for backend's SSE title event
-
-**Changes Made**:
-
-1. **Added SSE Title Event Handler** - [useChatStore.ts:742-747](ui-implementation/src/stores/useChatStore.ts#L742)
-   - Added `case 'title'` handler in SSE message parser
-   - Calls `loadSessions()` to refresh conversation list with new title
-   - Logs title generation for debugging
-   - **Impact**: Frontend receives and displays backend-generated titles
-
-2. **Removed Duplicate Frontend Call** - [useChatStore.ts:844-845](ui-implementation/src/stores/useChatStore.ts#L844)
-   - Deleted `_generateTitle()` method call (70+ lines of code)
-   - Removed temporary title CustomEvent dispatch
-   - Kept comment explaining backend handles it
-   - **Impact**: Eliminates duplicate LLM calls
-
-3. **Removed Dead Code**:
-   - Deleted `_generateTitle()` method implementation (lines 1066-1136)
-   - Removed from ChatState interface
-   - Removed unused CustomEvent `titleGenerated` dispatch
-   - **Impact**: 80+ lines of dead code removed
-
-**Backend Title Generation** (already existed, now properly utilized):
-- [agent_chat.py:1230-1282](app/routers/agent_chat.py#L1230): Generates title during streaming
-- Uses per-conversation locks to prevent duplicates
-- Double-checks message count inside lock
-- Sends `{type: 'title', title: '...', conversation_id: '...'}` via SSE
-- Updates session file metadata atomically
-
-**Before Flow**:
-```
-Backend generates title → sends SSE event → Frontend ignores it
-Frontend checks message count == 2 → calls /generate-title → duplicate LLM call
-```
-
-**After Flow**:
-```
-Backend generates title → sends SSE event → Frontend handles it → loadSessions() → UI updates
-```
-
-**Impact**:
-- ✅ 50% reduction in title generation LLM calls
-- ✅ Faster title updates (no extra API call)
-- ✅ No race conditions between dual calls
-- ✅ Cleaner code (80+ lines removed)
-- ✅ Sidebar auto-updates due to store subscription (from previous refactor)
-
-**Note**: The `/generate-title` POST endpoint still exists for potential future manual regeneration feature, but is no longer called automatically.
-
----
-
-### Data Management Modal (2025-10-04)
-**Implemented**: Unified export and delete interface for all user data
-
-**Purpose**: Provide users with complete control over their local data storage through a single, organized interface accessed via Settings.
-
-**Features**:
-
-1. **Export Tab** - Backup creation
-   - 7 data types: memory_bank, working, history, patterns, books, sessions, knowledge_graph
-   - Individual checkboxes for selective export
-   - Real-time size estimates (MB) and item counts
-   - Creates timestamped ZIP backup file
-   - Reuses existing `/api/backup/*` endpoints
-
-2. **Delete Tab** - Permanent data removal (Danger Zone)
-   - Per-collection delete cards with item counts
-   - Red UI theme for danger operations
-   - Confirmation modal requiring "DELETE" typed input
-   - Prevents accidental deletion of active conversation
-   - Each collection deletes independently (no bulk nuke)
-
-3. **Summarize Tab** (v0.3.1) - Legacy memory migration
-   - Scans working + history + patterns for unsummarized memories (>400 chars, no `summarized_at`)
-   - Per-memory pipeline: `summarize_only()` → `extract_tags_regex()` → `extract_facts()` → update + store facts
-   - SSE streaming progress (same pattern as model download)
-   - Requires sidecar model configured
-   - One-time toast notification on app launch when candidates detected (localStorage dismiss flag)
-
-**Components Created**:
-- `ui-implementation/src/components/DataManagementModal.tsx` - Main modal with tab system
-- `ui-implementation/src/components/DeleteConfirmationModal.tsx` - Reusable confirmation dialog
-
-**Backend Router**: `app/routers/data_management.py`
-
-Endpoints:
-```
-GET  /api/data/stats                  # Counts for all 7 data types
-POST /api/data/clear/memory_bank      # Clear memory_bank collection
-POST /api/data/clear/working          # Clear working memory
-POST /api/data/clear/history          # Clear history
-POST /api/data/clear/patterns         # Clear patterns
-POST /api/data/clear/books            # Clear books
-POST /api/data/clear/sessions         # Delete all session files
-POST /api/data/clear/knowledge-graph  # Clear all KG files
-GET  /api/data/summarize/scan         # v0.3.1: Count unsummarized memory candidates
-POST /api/data/summarize/run          # v0.3.1: SSE stream — summarize legacy memories
-POST /api/data/summarize/cancel       # v0.3.1: Cancel in-progress summarization
-```
-
-**Safety Features**:
-- Active conversation cannot be deleted (400 error with message)
-- Confirmation requires exact text match ("DELETE")
-- Each collection validates existence before deletion
-- Operations are atomic per collection
-- Errors don't cascade (one failure doesn't block others)
-
-**UI Integration**:
-- Accessed via **Settings modal** → "Data Management" button
-- Settings also has separate "Memory Bank" button for individual memory management (archive/restore/delete single memories)
-- Uses existing zinc-900/800 theme (matches SettingsModal, MemoryBankModal)
-- Tab switching between Export (safe) and Delete (danger) operations
-- Auto-refreshes stats after successful deletion
-
-**UI Structure**:
-- **Left Sidebar** → Personality & Identity, Document Processor, Settings
-  - Settings → Memory Bank (manage individual memories: active/archived/stats tabs)
-  - Settings → Voice Settings (coming soon)
-  - Settings → Data Management (export/delete/summarize tabs)
-
-**Files Modified**:
-- [SettingsModal.tsx:79-97](ui-implementation/src/components/SettingsModal.tsx#L79) - Replaced export button with data management button
-- [Sidebar.tsx](ui-implementation/src/components/Sidebar.tsx) - Removed Memory Bank button (Settings-only access)
-- [ConnectedChat.tsx](ui-implementation/src/components/ConnectedChat.tsx) - Removed Memory Bank modal import/state
-- [main.py](main.py) - Registered data_management router
-
-**Technical Details**:
-- ChromaDB collections cleared via batched `collection.delete(ids=batch)` (batch size: 100 items per iteration)
-  - ChromaDB has max batch size limit of 166 items
-  - Batched deletion prevents errors on large collections (e.g., 221 books)
-  - Preserves collection schema (collections remain, just emptied)
-- Session files deleted from `data/sessions/*.json`
-- Knowledge graph cleared by emptying all 3 KG files:
-  - `knowledge_graph.json` (routing patterns, action effectiveness)
-  - `content_graph.json` (entity relationships for visualization)
-  - `memory_relationships.json` (memory links: related, evolution, conflicts)
-- Stats endpoint aggregates counts from all memory collections + file system
-
-**Impact**:
-- ✅ Users can fully manage their local data
-- ✅ Export before delete workflow supported
-- ✅ No hidden data accumulation
-- ✅ Clean slate option for testing/privacy
-- ✅ Respects active session (prevents breaking current chat)
-
----
-
-### Enhanced Semantic Chunking System (2025-10-04)
-**Implemented**: Token-based semantic chunking with source context preservation
-
-**Purpose**: Intelligently chunk documents to preserve semantic coherence, provide source attribution, and enable faster, more accurate retrieval.
-
-**Design Philosophy**:
-- **Semantic boundaries** - Split on natural breakpoints (headings, paragraphs, code blocks)
-- **Token consistency** - Use token-based sizing for predictable LLM context consumption
-- **Source attribution** - Track which section/chapter each chunk came from
-- **Fast heuristics** - No LLM required, sub-second processing
-- **Unified approach** - Consistent chunking system across all Roampal features
-
-**Problem Solved**:
-- Before: Character-based chunking split mid-concept, no source context, 20% redundant overlap
-- After: Semantic chunking preserves concepts intact, includes source headings, 15% adaptive overlap
-
-**Chunking Strategy**:
-
-1. **Token-Based Sizing** (using tiktoken)
-   - 800 tokens per chunk (~600 words)
-   - Consistent across all content types
-   - Matches LLM context window requirements
-
-2. **Semantic-Aware Splitting Priority**:
-   ```python
-   separators = [
-       "\n## ",      # Markdown H2 (sections) - highest priority
-       "\n# ",       # Markdown H1 (chapters)
-       "\n### ",     # Markdown H3 (subsections)
-       "\n\n\n",     # Multiple blank lines (major breaks)
-       "\n\n",       # Paragraph breaks
-       "```\n",      # Code block boundaries
-       "\n",         # Line breaks
-       ". ", "! ", "? ",  # Sentence endings
-       " "           # Word boundaries (last resort)
-   ]
-   ```
-
-3. **Source Context Preservation**:
-   - Extracts markdown headings with positions
-   - Maps each chunk to nearest preceding heading
-   - Falls back to document title if no headings
-
-4. **Code Detection** (fast heuristics):
-   ```python
-   code_patterns = [
-       r'\bdef\s+\w+\s*\(',     # Python functions
-       r'\bclass\s+\w+',        # Class definitions
-       r'\bfunction\s+\w+\s*\(', # JS functions
-       r'\bimport\s+[\w.]+',    # Import statements
-       r'```',                  # Code fences
-   ]
-   ```
-
-**Metadata Schema** (4 fields per chunk):
-```python
-{
-    "source_context": str,    # "Chapter 5 - Data Fetching" or title
-    "doc_position": float,    # 0.0-1.0 position in document
-    "has_code": bool,         # Detected via heuristics
-    "token_count": int        # Actual chunk size in tokens
-}
-```
-
-**Implementation**:
-
-**Helper Methods** (smart_book_processor.py):
-```python
-def _extract_headings(text: str) -> List[Dict]:
-    """Extract markdown headings with positions"""
-    # Returns: [{'title': str, 'position': int, 'level': int}, ...]
-
-def _find_source_context(chunk_pos: int, headings: List[Dict]) -> str:
-    """Find most relevant heading for chunk position"""
-    # Returns heading title or None
-
-def _detect_code_block(chunk: str) -> bool:
-    """Fast code detection using regex patterns"""
-    # Returns True if code detected
-```
-
-**Processing Pipeline** (lines 244-295):
-1. Extract document structure (headings)
-2. Chunk text with token-based splitter
-3. For each chunk:
-   - Find position in original text
-   - Locate source context (heading)
-   - Detect code presence
-   - Count tokens
-4. Store enriched chunks with metadata
-
-**Performance**:
-- Processing speed: <1 second per 1000 chunks
-- No LLM calls required
-- Zero API costs
-- 100% reliable (no JSON parsing issues)
-
-**Comparison**:
-
-| Metric | Old (Character-based) | New (Token-based) |
-|--------|----------------------|-------------------|
-| Chunk size | 1500 chars (250-400 words) | 800 tokens (~600 words) |
-| Overlap | 300 chars (20% fixed) | 150 tokens (15-20% adaptive) |
-| Processing time | <1 sec | <1 sec |
-| Source context | None | Heading/chapter |
-| Code detection | None | Heuristic-based |
-| Metadata fields | None | 4 useful fields |
-
-**Benefits**:
-
-1. **Better Context Preservation**:
-   - Chunks aligned to semantic boundaries (headings, paragraphs)
-   - Source attribution ("from Chapter 5...")
-   - Complete code blocks not split
-
-2. **Improved Retrieval**:
-   - LLM sees source context in metadata
-   - Can filter by has_code
-   - Position helps locate intro/conclusion
-
-3. **Consistent Sizing**:
-   - Token-based ensures predictable LLM consumption
-   - Adaptive overlap reduces redundancy
-
-**Example Output**:
-```python
-chunk_data = {
-    'text': "useEffect is used for side effects...",
-    'source_context': "Chapter 5 - Data Fetching with useEffect",
-    'position': 0.42,
-    'has_code': True,
-    'token_count': 650
-}
-```
-
-**Implementation Files**:
-
-1. **smart_book_processor.py** (C:\ROAMPAL\modules\memory\smart_book_processor.py)
-   - Lines 56-79: Token-based text splitter configuration
-   - Lines 87-154: Helper methods (_extract_headings, _find_source_context, _detect_code_block)
-   - Lines 244-295: Enhanced chunking pipeline in process_book()
-   - Lines 311-352: Updated storage methods for chunks_with_metadata
-
-2. **main.py** (C:\ROAMPAL\main.py)
-   - Lines 306-310: SmartBookProcessor initialization (no llm_service needed)
-
-**Tech Debt Removed** (2025-10-04):
-- Deleted 180 lines of LLM metadata extraction code
-- Removed unreliable JSON parsing logic
-- Eliminated llm_service dependency
-- Removed unused metadata fields (chunk_type, primary_topic, code_language)
-
-**Files Modified**:
-- [smart_book_processor.py](modules/memory/smart_book_processor.py) - Implemented semantic chunking
-- [main.py](main.py) - Removed llm_service parameter
-
-**Impact**:
-- ✅ 60% token reduction on document retrieval queries
-- ✅ 3-4x higher retrieval relevance (40% → 90%)
-- ✅ Surgical chunk selection (not shotgun retrieval)
-- ✅ Organic learning preserved (no preloaded importance)
-- ✅ Works with any LLM model (user's choice)
-- ✅ Unified across all Roampal features
-- ✅ Simple metadata schema (5 fields, easy to extend)
-
-**Future Enhancements**:
-- Context-aware chunk merging (combine adjacent relevant chunks)
-- User feedback on retrieval quality → refine classification
-- Multi-language document support (per-chunk language detection)
-- Cross-reference detection (chapter/section linking)
-
----
-
-### Memory Panel: Books Collection Filtering (2025-10-04)
-**Implemented**: Exclude books from Memory Panel to prevent UI clutter
-
-**Problem**: Books collection contains hundreds of chunks (107 chunks from one book), overwhelming the Memory Panel which should display working knowledge, not reference material.
-
-**Solution**: Filter books collection from Memory Panel display
-
-**Implementation** ([ConnectedChat.tsx:978](C:\ROAMPAL\ui-implementation\src\components\ConnectedChat.tsx#L978)):
-```typescript
-// Fetch from working knowledge collections (exclude books - they're reference material, not memories)
-const collections = ['working', 'history', 'patterns'];
-// 'books' intentionally excluded
-```
-
-**UX Rationale**:
-- **Memory Panel** = Active learned knowledge from conversations
-- **Books** = Passive reference material queried on-demand
-- **Separation** prevents 100+ book chunks from burying conversation memories
-
-**Book Access**:
-- Books remain fully searchable via LLM (search_memory tool)
-- Managed in Document Processor → "Manage Library" tab
-- Stats still shown in MemoryStatsPanel (book count)
-
-**Files Modified**:
-- [ConnectedChat.tsx](ui-implementation/src/components/ConnectedChat.tsx) - Line 978: Removed 'books' from collections array
-
----
-
-### Chat Feature Fixes (2025-10-03)
-
-Comprehensive evaluation and fixes for the chat messaging system, focusing on streaming reliability, state management, and timeout handling.
-
-#### P0-1: Complete Event Race Condition
-**Problem**: Pending batch chunks lost before complete event processing
-- When SSE complete event arrives, timeout is cleared immediately
-- Pending chunks in 30fps batch window are discarded
-- Last 1-2 words of response missing from UI
-
-**Fix**: Flush pending update before clearing timeout
-```typescript
-// useChatStore.ts:702-705
-if (pendingUpdate) {
-  clearTimeout(pendingUpdate);
-  flushUpdate();  // Execute pending update to capture last chunks
-  pendingUpdate = null;
-}
-```
-
-**Impact**: Last message chunks now always appear in UI
-
-#### P0-2: isProcessing State Leak on AbortError
-**Problem**: Early return on abort without state cleanup
-- When AbortError occurs, function returns immediately
-- Processing state never reset (isProcessing=true permanently)
-- UI permanently locked, user cannot send new messages
-
-**Fix**: Always cleanup state before any return
-```typescript
-// useChatStore.ts:834-848
-} catch (error: any) {
-  // Always cleanup processing state before any return
-  const isAbort = error.name === 'AbortError';
-
-  set({
-    isProcessing: false,
-    processingStage: 'idle',
-    processingStatus: null,
-    abortController: null
-  });
-
-  if (isAbort) {
-    return;  // Now safe to return
-  }
-  // ... error handling
-}
-```
-
-**Impact**: UI never gets stuck in processing state
-
-#### P0-3: Tool Results Not Persisted
-**Problem**: Memory search results lost across sessions
-- Tool execution results stored in-memory only
-- Session reload loses context of what memories were used
-- Cannot audit which memories influenced AI responses
-
-**Fix**: Persist tool results to session file metadata
-```python
-# agent_chat.py:722 - Updated signature
-async def _save_to_session_file(
-    self, conversation_id: str, user_message: str,
-    assistant_response: str, thinking: str = None,
-    hybrid_events: List[Dict] = None,
-    tool_results: List[Dict] = None  # NEW
-):
-    # ... existing code ...
-    if tool_results:
-        assistant_entry["metadata"]["toolResults"] = tool_results
-```
-
-**Impact**: Full audit trail of memory usage per message
-
-#### P0-4: AbortController Race Condition
-**Problem**: State update batching breaks immediate cancellation
-- AbortController created as local variable and set to state
-- Zustand batches state updates asynchronously
-- User cancels before state update completes → abort reference is null
-
-**Fix**: Use atomic state update with functional form
-```typescript
-// useChatStore.ts:569-573
-const abortController = new AbortController();
-set((state) => ({
-  ...state,
-  abortController  // Atomic update prevents race
-}));
-```
-
-**Impact**: Cancellation always works, even on rapid clicks
-
-#### P0-5: Rapid-Fire Message Race
-**Problem**: Multiple messages sent before previous completes
-- User sends message while stream is active
-- New request starts before old one aborts
-- Backend processes multiple requests simultaneously
-- Memory stores orphaned incomplete exchanges
-
-**Fix**: Abort existing request before starting new one
-```typescript
-// useChatStore.ts:517-522
-if (state.abortController) {
-  console.log('[sendMessage] Aborting previous request');
-  state.abortController.abort();
-  set({ abortController: null });
-}
-```
-
-**Impact**: Only one request active at a time, clean memory state
-
-#### P1-1: Citations Not Displayed After Tool Search (Fixed 2025-10-10)
-**Problem**: Citations not displayed when LLM uses native tool calling
-- LLM autonomously searches memory via `search_memory` tool
-- Tool results formatted as citations but not sent to frontend
-- Continuation stream completed without yielding `stream_complete` event
-- User cannot see which memories influenced response
-
-**Root Cause**: After native tool execution, continuation stream uses `break` to exit loop. This prevented reaching the `stream_complete` yield at end of generator.
-
-**Fix**: Yield citations immediately after tool continuation completes
-```python
-# agent_chat.py:1571-1585
-# Flush remaining continuation buffer
-if response_buffer:
-    yield {
-        "type": "token",
-        "content": ''.join(response_buffer)
-    }
-    response_buffer = []
-
-# Tool response handled, send completion with citations
-logger.info(f"[CITATIONS] Sending {len(citations)} citations after tool continuation")
-yield {
-    "type": "stream_complete",
-    "citations": citations
-}
-return  # Exit generator after tool completion
-```
-
-**Impact**: Citations now display correctly for all tool-based memory searches. User sees which memories were referenced in color-coded `<CitationsBlock>` component.
-
-#### P1-2: Invalid Tool Call Error Handling (Fixed 2025-10-10)
-**Problem**: Small models make invalid tool calls causing system crashes
-- qwen2.5:3b passes empty query string to `search_memory`: `{'collections': ['tools'], 'query': ''}`
-- Empty query causes `TypeError: unsupported operand type(s) for *: 'NoneType' and 'int'` in embedding calculation
-- System crashes instead of handling gracefully
-- User receives no response on UI
-
-**Root Cause**:
-1. No validation of LLM-generated tool arguments before execution
-2. No error handling in memory search when invalid data provided
-3. No fallback messaging when tool execution fails
-
-**Fix**: 3-tier defense system implemented
-
-**Tier 1 - Tool Argument Validation** ([agent_chat.py:1497-1515](../app/routers/agent_chat.py#L1497)):
-```python
-# Validate query is not empty
-query = tool_args.get("query", message)
-if not query or not query.strip():
-    logger.warning(f"[TOOL] Empty query provided, using user message as fallback: {message}")
-    query = message
-
-# Validate collections are valid
-collections = tool_args.get("collections", ["all"])
-valid_collections = ['working', 'history', 'patterns', 'books', 'memory_bank', 'all']
-collections = [c for c in collections if c in valid_collections]
-if not collections:
-    logger.warning(f"[TOOL] Invalid collections provided, using 'all' as fallback")
-    collections = ["all"]
-
-# Validate limit is positive integer
-limit = tool_args.get("limit", 5)
-if not isinstance(limit, int) or limit < 1:
-    logger.warning(f"[TOOL] Invalid limit {limit}, using default 5")
-    limit = 5
-```
-
-**Tier 2 - Memory Search Error Handling** ([unified_memory_system.py:428-688](../modules/memory/unified_memory_system.py#L428)):
-```python
-async def search(self, query: str, ...) -> Any:
-    # TIER 2: Error handling wrapper
-    try:
-        if not self.initialized:
-            await self.initialize()
-
-        # ... existing search logic ...
-
-    except Exception as e:
-        logger.error(f"[MEMORY] Search failed for query '{query}': {e}", exc_info=True)
-        # Return empty results instead of crashing
-        if return_metadata:
-            return {"results": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
-        else:
-            return []
-```
-
-**Tier 3 - Fallback Messaging** ([agent_chat.py:1542-1544](../app/routers/agent_chat.py#L1542)):
-```python
-else:
-    # TIER 3: Fallback messaging for empty results
-    tool_response_content = "No relevant memories found for this query. I'll answer based on my general knowledge."
-    logger.info(f"[TOOL] No memories found for query: {query}")
-```
-
-**Impact**:
-- System no longer crashes on invalid tool calls from small models
-- Users always receive responses even when LLM makes mistakes
-- Graceful degradation: uses user message as fallback query, searches all collections if invalid ones specified
-- Error logging provides visibility into LLM tool-calling quality
-
-#### P1-3: SSE Stream Timeout Detection
-**Problem**: LLM hangs leave UI in processing state forever
-- LLM crashes/hangs without closing stream
-- SSE connection stays open but no data arrives
-- User sees "thinking" spinner permanently
-- No automatic recovery
-
-**Fix**: 2-minute inactivity timeout with automatic cleanup
-```typescript
-// useChatStore.ts:618-640
-let lastDataReceivedTime = Date.now();
-const STREAM_TIMEOUT_MS = 120000; // 2 minutes
-streamTimeoutChecker = setInterval(() => {
-  const timeSinceLastData = Date.now() - lastDataReceivedTime;
-  if (timeSinceLastData > STREAM_TIMEOUT_MS) {
-    console.error('[SSE] Stream timeout - no data received');
-    clearInterval(streamTimeoutChecker);
-    abortController.abort();
-    set({
-      messages: [...state.messages, {
-        content: 'Stream timeout: AI did not respond within 2 minutes.',
-        sender: 'system'
-      }],
-      isProcessing: false
-    });
-  }
-}, 10000); // Check every 10 seconds
-
-// Update on every chunk
-lastDataReceivedTime = Date.now();
-```
-
-**Impact**: UI recovers automatically from LLM timeouts
-
-**Files Modified**:
-- `ui-implementation/src/stores/useChatStore.ts` - All P0 and P1 frontend fixes
-- `app/routers/agent_chat.py` - Tool persistence and citation streaming
-
----
-
-### Memory System Sync Fixes (2025-10-03)
-
-Comprehensive fixes for memory system frontend-backend synchronization, real-time updates, and data integrity.
-
-#### M1: No Real-Time Memory Updates
-**Problem**: Memory stored during chat not reflected in UI until manual refresh
-- Backend stores memory → No notification → UI shows stale data
-- User sees outdated memory panel, must click refresh button
-- 3-second arbitrary delay hoping backend finished processing
-
-**Fix**: SSE complete event with memory_updated flag
-```python
-# agent_chat.py:1215-1222
-complete_event = {
-    'type': 'complete',
-    'conversation_id': conversation_id,
-    'citations': citations,
-    'memory_updated': True,  # Signal frontend to refresh memory
-    'timestamp': datetime.utcnow().isoformat()
-}
-```
-
-```typescript
-// useChatStore.ts:732-737
-if (eventData.memory_updated) {
-  console.log('[SSE] Memory updated, triggering refresh event');
-  window.dispatchEvent(new CustomEvent('memoryUpdated', {
-    detail: { timestamp: eventData.timestamp }
-  }));
-}
-
-// ConnectedChat.tsx:907-918
-useEffect(() => {
-  const handleMemoryUpdate = (event: CustomEvent) => {
-    console.log('[ConnectedChat] Memory updated event received, refreshing...');
-    fetchMemories();
-    fetchKnowledgeGraph();
-  };
-  window.addEventListener('memoryUpdated', handleMemoryUpdate as EventListener);
-  return () => window.removeEventListener('memoryUpdated', handleMemoryUpdate as EventListener);
-}, []);
-```
-
-**Impact**: Instant memory panel updates after AI response completes
-
-#### M2: Excessive Memory Fetch Triggers
-**Problem**: Same data fetched 5+ times from different triggers
-- Component mount
-- conversationId change (2 different effects)
-- After assistant message + 3s delay
-- After memory update trigger + 3s delay
-- Initial load after 500ms
-
-**Fix**: Consolidated into single debounced effect
-```typescript
-// ConnectedChat.tsx:852-864
-// Consolidated memory fetch: on mount and conversation change (debounced)
-useEffect(() => {
-  const timeoutId = setTimeout(() => {
-    fetchMemories();
-    fetchKnowledgeGraph();
-  }, 300); // Single debounce point
-  return () => clearTimeout(timeoutId);
-}, [conversationId]); // Triggers on mount (conversationId=null) and on change
-```
-
-**Impact**: Reduced API calls from 5+ to 1, faster UI loading
-
-#### M3: Promotion Race Condition
-**Problem**: Auto-promotion uses fire-and-forget async task
-- asyncio.create_task() launches promotion without capturing context
-- If user switches conversation during promotion, wrong conversation_id
-- Errors silently swallowed, no logging
-
-**Fix**: Capture conversation_id and add error handling
-```python
-# unified_memory_system.py:383-389
-current_conv_id = self.conversation_id
-task = asyncio.create_task(
-    self._promote_valuable_working_memory(conversation_id=current_conv_id)
-)
-# Add error callback to log failures
-task.add_done_callback(lambda t: self._handle_promotion_error(t))
-
-# unified_memory_system.py:1563-1568
-def _handle_promotion_error(self, task: asyncio.Task):
-    """Handle errors from async promotion tasks"""
-    try:
-        task.result()  # Will raise if task failed
-    except Exception as e:
-        logger.error(f"Auto-promotion task failed: {e}", exc_info=True)
-
-# unified_memory_system.py:1673-1675 (REMOVED - 2025-10-07)
-# OLD CODE - This was blocking cross-conversation learning:
-# if conversation_id and metadata.get("conversation_id") != conversation_id:
-#     continue
-
-# NEW CODE - Cross-conversation promotion is NOW ALLOWED:
-# Note: Cross-conversation promotion is ALLOWED (working memory is global)
-# Valuable memories from any conversation should promote to history/patterns
-```
-
-**Impact (Updated 2025-10-07)**:
-- **FIXED**: Cross-conversation filter removed - valuable memories promote regardless of origin
-- Allows system to learn global patterns across all conversations
-- Working memory is now truly global - any valuable insight can become permanent knowledge
-- Promotions are score-based (≥0.7) and use-based (≥2 uses), not conversation-restricted
-
-#### M4: Silent Memory Storage Failures
-**Problem**: If memory.store() fails, no user notification
-- Retry logic exists but final failure is silent
-- User thinks memory was saved but it wasn't
-- Lost data with no indication
-
-**Fix**: Stream warning event on failure
-```python
-# agent_chat.py:1123-1126
-except Exception as e:
-    logger.error(f"Failed to store in memory: {e}", exc_info=True)
-    # Send warning event to frontend
-    yield f"data: {json.dumps({'type': 'warning', 'message': 'Memory storage failed but response was saved'})}\n\n"
-```
-
-```typescript
-// useChatStore.ts:770-772
-} else if (eventData.type === 'warning') {
-  console.warn('[SSE] Warning:', eventData.message);
-  // Could show toast notification here if desired
-}
-```
-
-**Impact**: User aware of storage failures, can retry if needed
-
-#### M5: Unused Retry Logic
-**Problem**: fetchKnowledgeGraph has retryCount parameter that's never used
-- Misleading function signature
-- Dead code confuses future maintenance
-
-**Fix**: Removed unused parameter
-```typescript
-// ConnectedChat.tsx:1023 (before)
-const fetchKnowledgeGraph = async (retryCount = 0) => {
-
-// ConnectedChat.tsx:1023 (after)
-const fetchKnowledgeGraph = async () => {
-```
-
-**Impact**: Cleaner code, no misleading signatures
-
-**Files Modified**:
-- `ui-implementation/src/stores/useChatStore.ts` - Warning event handling, memory update event
-- `ui-implementation/src/components/ConnectedChat.tsx` - Consolidated fetch triggers, event listener
-- `app/routers/agent_chat.py` - Memory update flag in complete event, warning on failure
-- `modules/memory/unified_memory_system.py` - Promotion error handling, conversation_id filter
-
----
-
-### Phase 3 Thinking & Tool Execution Display (2025-10-07)
-
-Comprehensive implementation of transparent AI reasoning and tool execution status display for Phase 3 autonomous memory search.
-
-
-#### Response Display Architecture - The Vision
-
-**User Experience Goals:**
-- Show thinking blocks progressively during generation (collapsible reasoning)
-- Show tool execution badges progressively (e.g., "Searching memory...")
-- Display complete final text when ready (not word-by-word streaming)
-- Reliable timeout mechanism (no infinite hangs)
-- Works with all LLM models
-
-**Current Implementation:**
-- Uses WebSocket at `/api/agent/stream` (migrated from SSE on 2025-10-10)
-- Progressive indicators work (thinking blocks, tool badges appear during generation)
-- Text streams token-by-token with proper batching
-- Timeout mechanism implemented (prevents infinite hangs)
-
-**What Needs to Be Built:**
-1. Batch final text delivery (accumulate complete response, send once)
-2. Add timeout wrapper (2-minute max to prevent hangs)
-3. Keep progressive indicators working during wait
-
-#### T1: Citations Scope Bug Fix
-
-**Problem**: Double responses caused by UnboundLocalError
-- [agent_chat.py:1405](../app/routers/agent_chat.py#L1405) referenced `citations` before assignment in tool execution path
-- Exception prevented clean `return`, allowing execution to continue
-- Second response generated after tool execution completed
-
-**Fix**: Define citations locally before use
-```python
-# agent_chat.py:1405-1408
-# Define citations locally before using (fix scope error)
-citations = search_results if search_results else []
-
-# Send complete event before exiting
-complete_event = {
-    'type': 'complete',
-    'conversation_id': conversation_id,
-    'citations': citations,
-    'memory_updated': True,
-    'timestamp': datetime.now().isoformat()
-}
-yield f"data: {json.dumps(complete_event)}\n\n"
-return  # Exit generator completely
-```
-
-**Impact**: No more duplicate responses from tool execution path
-
-#### T2: Thinking Tag Extraction (Already Implemented)
-
-**Discovery**: Thinking extraction was already fully implemented in both streaming paths!
-
-**Implementation Locations:**
-- Streaming with tool support: [agent_chat.py:598-622](../app/routers/agent_chat.py#L598)
-- Handles both `<think>` and `<thinking>` tag formats during WebSocket streaming
-
-**Features:**
-- Detects both `<think>` and `<thinking>` tag formats
-- Accumulates content between tags
-- Strips tags and sends clean content as SSE event
-- Handles incomplete tags across chunk boundaries
-
-```python
-# agent_chat.py:598-622 (excerpt)
-if "<think>" in chunk or "<thinking>" in chunk:
-    in_thinking = True
-    thinking_content += chunk
-elif "</think>" in chunk or "</thinking>" in chunk:
-    in_thinking = False
-    thinking_content += chunk
-    # Clean and send thinking event
-    clean_thinking = thinking_content
-    for tag in ["<think>", "</think>", "<thinking>", "</thinking>"]:
-        clean_thinking = clean_thinking.replace(tag, "")
-    yield f"data: {json.dumps({'type': 'thinking', 'content': clean_thinking.strip()})}\n\n"
-elif in_thinking:
-    thinking_content += chunk
-```
-
-**Impact**: Transparent AI reasoning visible to users in collapsible blocks
-
-#### T2.5: Token Streaming with Timeline Events (v0.2.5)
-
-**Goal**: Stream tokens in real-time while also supporting thinking tag filtering. Both goals achievable without sacrificing either.
-
-**The Pipeline:**
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ LLM (qwen3, deepseek, etc.)                                             │
-│ Outputs: Text chunks potentially containing <think>...</think> tags     │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ agent_chat.py stream_message() [line ~737-744]                          │
-│ STREAMS: yield {"type": "token", "content": chunk} for EACH chunk       │
-│ ALSO BUFFERS: full_response[] for thinking extraction at end            │
-│ Tool events (tool_start, tool_complete) yield IMMEDIATELY               │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ text_utils.py extract_thinking() [line ~74-99]                          │
-│ Extracts: Returns (thinking_content, clean_response) tuple              │
-│ Called AFTER streaming complete (line ~891)                             │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ WebSocket handler [line ~2944-2948]                                     │
-│ Forwards: token events in real-time to frontend                         │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ useChatStore.ts [line ~557-607]                                         │
-│ Builds: content string AND events[] timeline                            │
-│ Timeline enables chronological rendering (tool → text → tool → text)    │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ TerminalMessageThread.tsx [line ~324-358]                               │
-│ Renders: events[] in chronological order if present                     │
-│ Fallback: static order (tools first, then text) if no events            │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-**Timeline Event Structure:**
-```typescript
-// message.events[] - chronological rendering order
-interface TimelineEvent {
-  type: 'text' | 'tool_execution' | 'text_segment';
-  timestamp: number;
-  data: {
-    // For text: { chunk: string, firstChunk: boolean }
-    // For tool: { tool: string, status: string, arguments: object }
-    // For text_segment: { content: string }  // v0.2.5: Self-contained segment
-  };
-}
-
-// v0.2.5: Internal tracking for segment boundaries
-interface Message {
-  // ... other fields
-  _lastTextEndIndex?: number;  // Position in content where last segment ended
-}
-```
-
-**Implementation (Event Sourcing Pattern from DDIA):**
-- **Token streaming** [agent_chat.py:742-744]: Each chunk yields immediately AND buffers
-- **Events timeline** [useChatStore.ts:572-587]: First token creates message with events[]
-- **Tool events** [useChatStore.ts:647-700]: tool_start captures text_segment BEFORE tool, updates _lastTextEndIndex
-- **Trailing text** [useChatStore.ts:796-816]: stream_complete captures final text_segment after last tool
-- **Chronological render** [TerminalMessageThread.tsx:327-390]: Renders text_segment and tool events in order
-- **Live streaming** [TerminalMessageThread.tsx:332-337]: Shows accumulating text after last boundary during stream
-
-**Why This Works (v0.2.5 True Interleaving):**
-1. **Streaming tokens**: User sees text appear character-by-character
-2. **Thinking stripped at end**: Tags removed after complete response (line 891)
-3. **True interleaved display**: Text segments captured at tool boundaries, rendered in actual order
-4. **Event sourcing principle**: Each event is self-contained with its own content (not referencing accumulated state)
-5. **Best of both worlds**: Real-time UX + clean output + correct ordering
-
-**User Experience:**
-```
-Before (buffered):
-[5 seconds of nothing]
-✓ searching "preferences"  · 3 results
-All text appears at once...
-
-After (streaming with timeline):
-Let me search for that...        ← Text appears first
-⋯ searching "preferences"        ← Tool starts (visible immediately)
-✓ searching "preferences" · 3    ← Tool completes
-Based on the results, you...     ← More text after tool
-```
-
-**Impact**: Real-time streaming with tool visibility. Thinking tags stripped cleanly.
-
-#### T3: Tool Execution Status Events
-
-**Problem**: Users couldn't see when AI was using tools
-- Memory search happened silently
-- No indication of search progress or results
-- No transparency into autonomous tool decisions
-
-**Fix**: Added lifecycle events for tool execution
-
-**Tool Start Event:**
-```python
-# agent_chat.py:1259-1270
-tool_start_event = {
-    'type': 'tool_execution',
-    'tool': 'search_memory',
-    'status': 'running',
-    'params': {
-        'query': query,
-        'collections': collections,
-        'limit': limit
-    }
-}
-yield f"data: {json.dumps(tool_start_event)}\n\n"
-```
-
-**Tool Complete Event:**
-```python
-# agent_chat.py:1281-1289
-tool_complete_event = {
-    'type': 'tool_execution',
-    'tool': 'search_memory',
-    'status': 'completed',
-    'result_count': len(search_results),
-    'collections_searched': collections
-}
-yield f"data: {json.dumps(tool_complete_event)}\n\n"
-```
-
-**Impact**: Real-time tool execution visibility with status indicators
-
-#### T4: Smart Buffer Flushing
-
-**Problem**: Fixed 80-char threshold caused choppy streaming
-- Response chunks cut off mid-sentence
-- Poor reading experience during streaming
-- Arbitrary character count didn't respect natural language boundaries
-
-**Fix**: Sentence-boundary detection with intelligent fallback
-
-**Implementation:**
-```python
-# agent_chat.py:1383 (second stream) and 1522 (first stream)
-if len(stream_buffer) > 50 and '[' not in stream_buffer:
-    # Smart flushing: check for sentence boundary or force flush if too long
-    last_char = stream_buffer.rstrip()[-1:] if stream_buffer.rstrip() else ''
-    if last_char in '.!?\n' or len(stream_buffer) > 150:
-        # Strip tags and flush buffer
-        clean_buffer = stream_buffer
-        for tag in ["<think>", "</think>", "<thinking>", "</thinking>"]:
-            clean_buffer = clean_buffer.replace(tag, "")
-        clean_buffer = re.sub(r'\[search_memory\([^\]]*\)\]', '', clean_buffer)
-        # ... more tag stripping
-        if clean_buffer.strip():
-            yield f"data: {json.dumps({'type': 'text', 'content': clean_buffer})}\n\n"
-        stream_buffer = ""
-```
-
-**Changes:**
-- Lowered minimum threshold from 80 → 50 chars
-- Checks for sentence endings: `.!?\n`
-- Force flush at 150 chars for very long sentences
-- Applied to both streaming paths (first and second)
-
-**Impact**: Natural, readable streaming with complete thoughts
-
-#### T5: Frontend Components
-
-**Message Type Interface:**
-```typescript
-// EnhancedChatMessage.tsx:14-20
-toolExecutions?: Array<{
-  tool: string;
-  status: 'running' | 'completed' | 'failed';
-  description: string;
-  detail?: string;
-  metadata?: Record<string, any>;
-}>;
-```
-
-**SSE Event Handler:**
-```typescript
-// useChatStore.ts:755-795
-if (eventData.type === 'tool_execution') {
-  const { tool, status, params, result_count, collections_searched } = eventData;
-
-  const existingIndex = toolExecutions.findIndex(t => t.tool === tool && t.status === 'running');
-
-  if (status === 'running') {
-    let description = 'Executing tool';
-    let detail = '';
-
-    if (tool === 'search_memory') {
-      description = 'Searching memory';
-      detail = params?.query ? `Query: "${params.query}"` : '';
-    }
-
-    toolExecutions.push({ tool, status: 'running', description, detail, metadata: params });
-  } else if (status === 'completed' && existingIndex >= 0) {
-    toolExecutions[existingIndex] = {
-      ...toolExecutions[existingIndex],
-      status: 'completed',
-      detail: result_count !== undefined ? `Found ${result_count} results` : undefined
-    };
-  }
-
-  scheduleUpdate(true);  // Immediate update
-}
-```
-
-**Component Rendering:**
-```tsx
-// EnhancedChatMessage.tsx:128-133
-{message.toolExecutions && message.toolExecutions.length > 0 && (
-  <ToolExecutionDisplay
-    executions={message.toolExecutions}
-  />
-)}
-```
-
-**User Experience Flow:**
-1. User asks question requiring memory search
-2. Thinking block appears with AI's reasoning (purple brain icon, pulsing while streaming)
-3. Tool execution shows "Searching memory: Query 'xyz'" (blue spinner)
-4. Status changes to completed: "Found 5 results" (green checkmark)
-5. Response streams naturally with sentence boundaries
-6. Citations appear at bottom with color-coded collection names and text previews
-
-**Impact**: Complete transparency into AI decision-making and tool usage
-
-**Files Modified**:
-- `app/routers/agent_chat.py` - Citations fix, tool events, smart buffer flushing
-- `ui-implementation/src/stores/useChatStore.ts` - Tool execution event handling
-- `ui-implementation/src/components/EnhancedChatMessage.tsx` - Tool execution display integration
-- `ui-implementation/src/components/ToolExecutionDisplay.tsx:16-66` - Tool execution UI component
-
----
-
-### WebSocket Event Specification Reference
-
-Complete specification of all WebSocket event types used in the chat streaming system. (Migrated from SSE on 2025-10-10)
-
-| Event Type | Payload Structure | When Emitted | Frontend Handler | Purpose |
-|------------|-------------------|--------------|------------------|---------|
-| `thinking` | **DEPRECATED** (Feature removed 2025-10-17) | N/A | N/A | Streaming/XML parsing incompatibility |
-| `status` | `{type: 'status', message: string, timestamp: string}` | LLM emits `<status>` tags | useChatStore.ts:885-888 | Update processing status message |
-| `tool_execution` | `{type: 'tool_execution', tool: string, status: 'running'\|'completed'\|'failed', params: {...}, result_count?: number}` | Tool starts/completes | useChatStore.ts:799-864 | Show tool execution progress |
-| `text` | `{type: 'text', content: string}` | Complete response delivered | useChatStore.ts:865-884 | Display response content |
-| `title` | `{type: 'title', title: string, conversation_id: string}` | After first exchange | useChatStore.ts:742-747 | Auto-generate conversation title |
-| `citations` | `{type: 'citations', citations: array}` | Tool execution complete | useChatStore.ts:889-899 | Display memory references |
-| `complete` | `{type: 'complete', citations: array, memory_updated: boolean, timestamp: string}` | Response finished | useChatStore.ts (handler) | Finalize message, show citations |
-| `warning` | `{type: 'warning', message: string}` | Non-fatal issue | useChatStore.ts (handler) | User notification |
-| `error` | `{type: 'error', message: string}` | Fatal error | useChatStore.ts (handler) | Error handling |
-
-**Event Timeline Storage**: All events stored in `message.events[]` array with `{type, timestamp, data}` structure for chronological rendering.
-
----
-
-### UI Component Architecture Reference
-
-*Last verified: 2025-10-08*
-
-#### Component Hierarchy
-```
-ConnectedChat.tsx (main container)
-  └─ TerminalMessageThread.tsx (message list renderer)
-      ├─ ThinkingDots (inline) - Animated "Thinking." → "Thinking.." → "Thinking..." (v0.2.5)
-      ├─ CitationsBlock (inline) - Collapsible memory references
-      ├─ Tool execution badges (inline)
-      ├─ ReactMarkdown (message content)
-      └─ EnhancedChatMessage.tsx (legacy wrapper - being phased out)
-```
-
-#### Component Reference Table
-
-| Component | File Location | Key Sections | Purpose |
-|-----------|--------------|--------------|---------|
-| **TerminalMessageThread** | ui-implementation/src/components/TerminalMessageThread.tsx | TanStack Virtual useVirtualizer (v0.3.0)<br>10-25: ThinkingDots component (animated)<br>28-72: CitationsBlock component (inline)<br>MessageRow virtualized renderer<br>Chronological event timeline rendering<br>Processing indicator with ThinkingDots | Main message list renderer with TanStack Virtual (migrated from react-window in v0.3.0) for smooth 5000+ message scrolling, ResizeObserver auto-measurement |
-| **ThinkingDots** | (inline in TerminalMessageThread.tsx:10-25) | Blue animated "Thinking." → "Thinking.." → "Thinking..." (400ms cycle) | Processing status indicator during LLM thinking phase (v0.2.5) |
-| **ToolExecutionDisplay** | ui-implementation/src/components/ToolExecutionDisplay.tsx | 4-10: TypeScript interfaces<br>16-66: Component implementation<br>28-63: Status icon rendering | Tool execution status badges with running/completed/failed states |
-| **EnhancedChatMessage** | ui-implementation/src/components/EnhancedChatMessage.tsx | 7-34: Message interface<br>56-80: Assistant name fetching<br>134-139: Thinking block integration<br>142-148: Tool execution integration | Legacy message wrapper (being replaced by direct rendering in TerminalMessageThread) |
-| **CitationsBlock** | (inline in TerminalMessageThread.tsx:33-83) | Collapsible citations display with color-coded collections | Shows memory references used in responses |
-| **MemoryBankModal** | ui-implementation/src/components/MemoryBankModal.tsx | 1-13: react-window import + interfaces<br>38-40: Item height constants<br>174-182: Variable size calculation<br>184-231: ActiveMemoryRow renderer<br>408-417: Virtualized List component | Memory bank management UI with react-window virtualization for smooth scrolling at 1000+ items (v0.2.5) |
-
-#### State Management
-
-| Store | File Location | Key Sections | Purpose |
-|-------|--------------|--------------|---------|
-| **useChatStore** | ui-implementation/src/stores/useChatStore.ts | 44, 145: processingStatus state<br>550-710: JSON response handler<br><br><br> | Main chat state and JSON response handling (migrated from SSE 2025-10-08) |
-
-**Performance Note (v0.2.11)**: ConnectedChat.tsx uses granular Zustand selectors (lines 46-59) instead of destructuring the entire store. This prevents unnecessary re-renders when unrelated state changes:
-```tsx
-// Before: const { messages, ... } = useChatStore() - re-renders on ANY state change
-// After: Granular selectors - only re-renders when specific value changes
-const conversationId = useChatStore(state => state.conversationId);
-const connectionStatus = useChatStore(state => state.connectionStatus);
-const messages = useChatStore(state => state.messages);
-```
-
----
-
-### Book/Document Processor Fixes (2025-10-03)
-
-Comprehensive fixes for book upload, processing, and deletion with proper UI synchronization.
-
-#### D1: No Memory Panel Refresh After Book Upload
-**Problem**: Book processing completes but memory panel doesn't update
-- WebSocket notifies BookProcessorModal when processing finishes
-- Modal switches to library view and refreshes its own list
-- But MemoryPanelV2 (right sidebar) never receives notification
-- User sees new book in modal but not in main memory panel
-
-**Fix**: Dispatch memoryUpdated event on completion
-```typescript
-// BookProcessorModal.tsx:164-170
-// Clear processing timeout
-const timeout = processingTimeouts.current.get(fileId);
-if (timeout) {
-  clearTimeout(timeout);
-  processingTimeouts.current.delete(fileId);
-}
-
-// Notify memory panel to refresh (new book added to books collection)
-window.dispatchEvent(new CustomEvent('memoryUpdated', {
-  detail: { source: 'book_upload', timestamp: new Date().toISOString() }
-}));
-```
-
-**Impact**: Memory panel instantly shows newly uploaded books
-
-#### D2: Book Deletion Not Triggering Memory Refresh
-**Problem**: After deleting book, memory panel shows stale data
-- Delete endpoint properly removes from SQLite + ChromaDB
-- Frontend removes from BookProcessorModal state
-- But no notification to memory panel or knowledge graph
-
-**Fix**: Dispatch memoryUpdated event after delete
-```typescript
-// BookProcessorModal.tsx:108-111
-// Notify memory panel to refresh (book removed from books collection)
-window.dispatchEvent(new CustomEvent('memoryUpdated', {
-  detail: { source: 'book_delete', timestamp: new Date().toISOString() }
-}));
-```
-
-**Impact**: Memory panel immediately reflects deletions
-
-#### D3: WebSocket Error Handling Improved
-**Problem**: WebSocket error immediately marks file as failed
-- Error event sets status='error' without allowing reconnection
-- onclose reconnection logic never runs
-- Temporary network glitches cause permanent failures
-
-**Fix**: Let onclose handle reconnection, only log errors
-```typescript
-// BookProcessorModal.tsx:176-180
-ws.onerror = (error) => {
-  console.error(`WebSocket error for task ${taskId}:`, error);
-  // Don't immediately set to error - let onclose handle reconnection
-  // Only log the error here
-};
-```
-
-**Impact**: Temporary network issues don't fail uploads
-
-#### D4: Processing Timeout Protection
-**Problem**: Hung processing leaves UI in "processing" state forever
-- Background task crashes or WebSocket dies silently
-- No frontend timeout to detect hung state
-- User has to manually close modal and retry
-
-**Fix**: 5-minute processing timeout with automatic cleanup
-```typescript
-// BookProcessorModal.tsx:60,133-149
-const processingTimeouts = useRef<Map<string, number>>(new Map());
-
-ws.onopen = () => {
-  // Start processing timeout (5 minutes max)
-  const timeout = window.setTimeout(() => {
-    console.warn(`Processing timeout for task ${taskId}`);
-    ws.close();
-    setFiles(prev => prev.map(f =>
-      f.id === fileId
-        ? {
-            ...f,
-            status: 'error',
-            error: 'Processing timeout (5 minutes)',
-            message: 'Processing took too long'
-          }
-        : f
-    ));
-  }, 5 * 60 * 1000); // 5 minutes
-
-  processingTimeouts.current.set(fileId, timeout);
-};
-```
-
-**Impact**: Hung processing auto-fails after 5 minutes with clear error
-
-#### D5: Frontend File Validation
-**Problem**: Backend limit is 10MB but frontend doesn't check
-- User can select 50MB file
-- Full upload completes before error
-- Wasted bandwidth and time
-
-**Fix**: Pre-upload validation for size and type
-```typescript
-// BookProcessorModal.tsx:246-275
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-
-// Check file size
-if (file.size > MAX_FILE_SIZE) {
-  return {
-    status: 'error' as const,
-    error: `File exceeds 10MB limit (${(file.size / (1024 * 1024)).toFixed(1)}MB)`
-  };
-}
-
-// Check file type
-const allowedExtensions = ['.txt', '.md'];
-const extension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-if (!allowedExtensions.includes(extension)) {
-  return {
-    status: 'error' as const,
-    error: `Only .txt and .md files are supported`
-  };
-}
-```
-
-**Impact**: Instant feedback for invalid files, no wasted uploads
-
-#### D6: ChromaDB Delete Verification
-**Problem**: Deletion tries two ID formats but doesn't verify cleanup
-- Tries pattern match `{book_id}_chunk_*` first
-- Then tries chunk_ids from SQLite
-- If ID format changes, chunks orphaned in ChromaDB
-- No verification that all chunks were deleted
-
-**Fix**: Defensive deletion + verification logging
-```python
-# book_upload_api.py:635-653
-deleted_count = 0
-if book_chunk_ids:
-    books_adapter.collection.delete(ids=book_chunk_ids)
-    deleted_count = len(book_chunk_ids)
-
-# Also try old format chunk_ids (defensive - ensures cleanup)
-if chunk_ids:
-    try:
-        books_adapter.collection.delete(ids=chunk_ids)
-        deleted_count += len(chunk_ids)
-    except Exception as e:
-        # OK if these don't exist (already deleted by pattern match)
-        logger.debug(f"Chunk IDs already deleted: {e}")
-
-# Verify deletion
-if deleted_count != chunks_deleted:
-    logger.warning(f"ChromaDB deletion mismatch: deleted {deleted_count} embeddings but expected {chunks_deleted}")
-```
-
-**Impact**: Defensive cleanup prevents orphaned chunks, logging detects mismatches
-
-**Files Modified**:
-- `ui-implementation/src/components/BookProcessorModal.tsx` - All frontend fixes (D1-D5)
-- `backend/api/book_upload_api.py` - ChromaDB delete verification (D6)
-
-#### D7: Ghost Registry (v0.2.9)
-**Problem**: D6's deletion approach removes records from SQLite but leaves "ghost" vectors in ChromaDB's HNSW index. Searches still match these ghosts but content retrieval fails, returning `[No content]` results.
-
-**Root Cause**:
-- ChromaDB's `delete()` removes records from SQLite metadata store
-- HNSW binary index (`data_level0.bin`) retains the deleted vectors
-- Similarity search still finds ghost vectors by embedding match
-- When ChromaDB fetches document/metadata → gone from SQLite → empty content
-
-**Fix**: Two-pronged approach
-
-1. **Ghost Registry** ([ghost_registry.py](modules/memory/ghost_registry.py)) - Track deleted chunk IDs in a JSON blacklist file. Filter them out at query time before returning results.
-   ```python
-   # On book deletion - book_upload_api.py:705-714
-   ghost_registry = get_ghost_registry(settings.paths.data_dir)  # v0.2.9: Fixed data_path → data_dir
-   ghost_registry.add(all_deleted_ids)
-
-   # On book search - search_service.py:643-646
-   filtered_results = ghost_registry.filter_ghosts(formatted_results)
-   ```
-
-2. **Collection Nuke** ("Clear Books" button) - Replace chunk-by-chunk deletion with `delete_collection()` + `create_collection()`. This rebuilds the HNSW index from scratch - no ghosts possible.
-   ```python
-   # On "Clear Books" - data_management.py:301-311
-   client.delete_collection(name=collection_name)
-   adapter.collection = client.get_or_create_collection(
-       name=collection_name,
-       embedding_function=None,
-       metadata={"hnsw:space": "l2"}
-   )
-   ghost_registry.clear()  # Clean blacklist since fresh index
-   ```
-
-**Files**:
-- `modules/memory/ghost_registry.py` (NEW) - Ghost tracking class
-- `backend/api/book_upload_api.py` - Add deleted IDs to registry
-- `modules/memory/search_service.py` - Filter ghosts from search results
-- `app/routers/data_management.py` - Nuke/recreate + clear registry
-
-**Impact**: Users no longer see `[No content]` results after deleting books
-
-#### D8: v0.2.9 Bug Fixes
-
-**PathSettings Fix**: Fixed `settings.paths.data_path` → `settings.paths.data_dir` in 3 locations:
-- `book_upload_api.py:711` - Ghost registry initialization
-- `data_management.py:318` - Clear books ghost registry
-- `search_service.py:645` - Search ghost filtering
-
-**UMS Facade Fixes**:
-- Added `cleanup_action_kg_for_doc_ids()` passthrough method to `unified_memory_system.py:585-597`
-- Added `transparency_context` parameter to `search()` facade method (line 417)
-- Fixes TypeError when agent_chat.py passes transparency context to UMS
-
-**Timeout Protection**:
-- `embedding_service.py:33-90` - Model loading runs in daemon thread with 120s timeout
-- `chromadb_adapter.py:175-203` - Upsert runs in daemon thread with 60s timeout
-- `chromadb_adapter.py:268-290` - Query runs in ThreadPoolExecutor with 10s timeout (prevents UI freeze)
-- `search_service.py:272-287` - Search wrapper with 15s timeout (graceful fallback to empty results)
-- Prevents indefinite hangs on model loading failures, SQLite locks, or HNSW corruption
-
----
-
-## Production Readiness Enhancements (2025-09-30)
-
-### Complete Backup & Restore System with Selective Export
-**Implemented**: Full system backup/restore functionality with granular export control
-
-**Features**:
-- **Selective Export**: Choose which data types to include in backup
-  - **Sessions**: Conversation history (.jsonl files)
-  - **Memory**: ChromaDB vector embeddings (the actual memory)
-  - **Books**: Uploaded documents and database
-  - **Knowledge**: Knowledge graph, relationships, outcomes
-  - Default: All data types included
-- **Size Estimation**: Real-time preview of export size before creation
-  - Per-category breakdown (sessions: X MB, memory: Y MB, etc.)
-  - File counts for each category
-  - Updates dynamically as selections change
-- **Smart Filenames**: Descriptive names based on content
-  - Full backup: `roampal_backup_20250930_143022.zip`
-  - Selective: `roampal_sessions_memory_20250930_143022.zip`
-- **Restore Functionality**: Upload backup zip to restore system state
-- **Pre-restore Backup**: Automatically backs up current data before restoration
-- **Backup Management**: List backups, cleanup old backups (keep last 7)
-
-**API Endpoints**:
-```python
-POST /api/backup/create                              # Full backup
-POST /api/backup/create?include=sessions,memory      # Selective backup
-GET  /api/backup/estimate?include=sessions           # Size estimate
-GET  /api/backup/list                                # List all backups
-POST /api/backup/restore                             # Restore from ZIP
-DELETE /api/backup/cleanup?keep=7                    # Cleanup old backups
-```
-
-**UI Features**:
-- **Settings Modal** (SettingsModal.tsx): Simple "Export Data" button at bottom of settings
-- **Export Modal** (ExportModal.tsx): Opens when Export Data clicked
-  - **Checkbox interface**: Select/deselect individual data types
-  - **Real-time size preview**: Shows estimated size as you select
-  - **File counts**: Displays number of files per category
-  - **Select All/Deselect All**: Quick toggle for convenience
-  - **Visual feedback**: Loading states, disabled buttons, success messages
-  - **Responsive design**: Fits to page with `max-h-[90vh]` overflow
-  - **Consistent styling**: Blue buttons match Memory/Knowledge/New Conversation buttons
-
-**Example Usage**:
-```typescript
-// Export only conversations (light backup)
-POST /api/backup/create?include=sessions
-
-// Export conversations + memory (preserve context)
-POST /api/backup/create?include=sessions,memory
-
-// Export everything (full backup)
-POST /api/backup/create
-```
-
-**Files Added**:
-- `app/routers/backup.py` - Backup/restore API with selective export (v1.1)
-- `ui-implementation/src/components/SettingsModal.tsx` - Settings modal with Export Data button
-- `ui-implementation/src/components/ExportModal.tsx` - Selective export interface with checkboxes
-
-**Technical Implementation**:
-- **Modular backup functions**: `_backup_sessions()`, `_backup_memory()`, `_backup_books()`, `_backup_knowledge()`
-- **Query parameter validation**: Rejects invalid data types with clear error messages
-- **Metadata versioning**: Backup includes `backup_type` (full/selective) and `included_types` list
-- **No technical debt**: Clean separation of concerns, reusable functions, comprehensive error handling
-
-**Impact**: Users can now:
-- Create targeted backups (e.g., just conversations for sharing)
-- Reduce backup size when only specific data needed
-- Preview exact size before exporting
-- Make informed decisions about what to backup
-- Save bandwidth/storage with selective exports
-
----
-
-### File Locking for Race Condition Prevention (Updated 2025-10-02)
-**Implemented**: File-level locking to prevent data corruption from concurrent writes
-
-**Changes**:
-- Added `filelock==3.13.1` to requirements.txt
-- Knowledge graph writes use `FileLock` with 10-second timeout
-- Memory relationships writes use `FileLock` with 10-second timeout
-- Session file writes use `FileLock` with 10-second timeout + atomic operations
-- All file writes use atomic operations (temp file + rename)
-- Session writes include `os.fsync()` to guarantee disk persistence
-
-**Files Modified**:
-- `modules/memory/unified_memory_system.py` - Added file locking to `_save_kg_sync()` and `_save_relationships_sync()`
-- `app/routers/agent_chat.py` - Enhanced `_save_to_session_file()` with FileLock, atomic writes, and fsync
-
-**Session File Protection**:
-Session files now use a robust write pattern:
-1. **FileLock** - Prevents concurrent writes from multiple requests/tabs
-2. **Read existing content** - Preserves all previous conversation
-3. **Write to temp file** - Append new entries atomically
-4. **os.fsync()** - Force OS to write data to physical disk (prevents buffer loss on power failure)
-5. **Atomic rename** - Replace original file only after successful write
-
-**Power Failure Safety**:
-- No partial JSON lines (temp file + atomic rename)
-- No data loss from OS buffer cache (fsync guarantees disk write)
-- No file corruption from interrupted writes (FileLock prevents interleaving)
-
-**Impact**: Eliminates race conditions, power-loss corruption, and multi-tab interleaving. Session files are now production-safe.
-
----
-
-### Memory Leak Fixes and Lifecycle Management (Updated 2025-10-02)
-**Implemented**: Comprehensive cleanup of background tasks and system resources
-
-**Changes**:
-- Background tasks stored in `UnifiedMemorySystem._background_tasks` list
-- Tasks properly cancelled and awaited during shutdown
-- WebSocket connections always cleaned up in `finally` blocks
-- Explicit WebSocket close on disconnect/error
-- **NEW**: Lifespan cleanup now calls `memory.cleanup()` and closes LLM client
-- **NEW**: Graceful shutdown with error handling for cleanup operations
-
-**Files Modified**:
-- `main.py` - Added proper cleanup logic to lifespan context manager (lines 404-423)
-- `modules/memory/unified_memory_system.py` - Background task tracking and cleanup
-
-**Cleanup Sequence on Shutdown**:
-1. Cancel all background tasks (promotion loop, startup cleanup)
-2. Wait for tasks to complete (2-second timeout)
-3. Save knowledge graph to disk
-4. Save memory relationships to disk
-5. Close ChromaDB adapters
-6. Close LLM client connection
-
-**Impact**: System can run for days/weeks without memory leaks. Clean shutdown guarantees no data loss on restart/deployment. All background tasks terminate properly.
-
----
-
-### Exit Button / App Lifecycle (v0.2.8)
-**Implemented**: Proper app lifecycle management with explicit Exit button
-
-**Problem**: Clicking the X button was supposed to kill the backend Python process, but orphan processes remained. The `CloseRequested` handler in main.rs wasn't reliably terminating the backend.
-
-**Solution**: Instead of fighting the close behavior, embrace it:
-- **X button** = app hides, backend keeps running (fast reopen)
-- **Exit button** = clean shutdown via Settings modal (no orphans)
-
-**Implementation**:
-
-**Rust (main.rs:304-321)**:
-```rust
-#[tauri::command]
-fn exit_app(backend: State<BackendProcess>, app_handle: tauri::AppHandle) {
-    // Kill backend process
-    if let Ok(mut backend) = backend.0.lock() {
-        if let Some(mut child) = backend.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-    // Exit app
-    app_handle.exit(0);
-}
-```
-
-**React (SettingsModal.tsx:220-237)**:
-```tsx
-<button
-  onClick={async () => {
-    await invoke('exit_app');
-  }}
-  className="w-full h-10 ... bg-red-600/10 hover:bg-red-600/20 border border-red-600/30"
->
-  <span className="text-sm font-medium text-red-500">Exit Roampal</span>
-</button>
-```
-
-**User Experience**:
-- X button: App closes but backend stays ready for quick reopen
-- Settings → Exit Roampal: Full shutdown, no orphan processes
-
-**Files Modified**:
-- `main.rs:304-321` - Added `exit_app` Tauri command
-- `main.rs:429-451` - Modified `CloseRequested` to not kill backend on X click
-- `SettingsModal.tsx:220-237` - Added "Exit Roampal" button
-
-**Impact**: No more orphan backend processes. Users have clear control over app lifecycle.
-
----
-
-### Inline Title Generation Optimization (Updated 2025-10-02)
-**Implemented**: Title generation now happens inline during streaming response instead of separate API call
-
-**Problem Solved**: Previous implementation made 2 LLM calls for every new conversation:
-1. First call: Generate chat response
-2. Second call: Generate title from conversation
-
-**New Approach**:
-- After first exchange (2 messages), title is auto-generated inline during the streaming response
-- Title generation happens immediately after response completes, before completion event
-- Uses same LLM context, just a simple follow-up prompt
-- Title is streamed back to frontend as `{type: 'title'}` event
-- Uses the fixed atomic write system for session file updates
-
-**Technical Flow**:
-```
-User sends first message
-→ Stream response (thinking + text)
-→ Save to session file (atomic write)
-→ Count messages in session file
-→ If message_count == 2:
-    → Generate title inline (single LLM call)
-    → Update session file with FileLock (atomic)
-    → Stream title event to frontend
-→ Send completion event
-```
-
-**Benefits**:
-- ✅ 50% reduction in LLM calls for new conversations (2 calls → 1 call)
-- ✅ 3-5 seconds faster for users creating new chats
-- ✅ Title appears automatically without frontend triggering separate request
-- ✅ Still uses atomic writes for data safety
-
-**Files Modified**:
-- `app/routers/agent_chat.py` - Added inline title generation after first exchange (lines 1095-1144)
-
-**Impact**: Significant performance improvement for new conversation creation. Reduces API overhead and improves user experience with instant title display.
-
----
-
-### System Health Monitoring
-**Implemented**: Real-time system health and resource monitoring
-
-**Endpoints**:
-- `GET /api/system/health` - Comprehensive health check with warnings
-- `GET /api/system/disk-space` - Detailed disk space metrics
-- `GET /api/system/data-sizes` - Breakdown of data storage usage
-
-**Metrics Tracked**:
-- Disk space (free/used GB and percentages)
-- ChromaDB size and file count
-- Session count
-- Books database size
-- Backup folder size and count
-- Integrity check results
-
-**Files Added**:
-- `app/routers/system_health.py` - System health monitoring API
-
-**Impact**: Users can monitor system health, get warnings before running out of space, and identify large data directories.
-
----
-
-## Recent Improvements (2025-09-30)
-
-### Book Processor Content Retrieval Fix
-**Issue**: Memory search API returned empty `content` field for book chunks
-**Root Cause**: Metadata in ChromaDB upsert didn't include actual chunk text (only book_id, chunk_index, type)
-**Fix**: Added `content` and `text` fields to metadata dictionary in `smart_book_processor.py:284-290`
-**Impact**: Book chunks now fully searchable and retrievable with content visible in UI
-**Files Modified**: `modules/memory/smart_book_processor.py`
-
-### Security Enhancements
-**Added**:
-- UUID format validation in delete endpoint (prevents path traversal accidents)
-- UTF-8 encoding validation (rejects binary files with .txt extension)
-- Metadata length limits (200 chars title, 1000 chars description)
-- Prompt injection pattern detection (logs warnings for user awareness)
-- Environment-based exception logging (traceback only in DEBUG mode)
-
-**Files Modified**:
-- `backend/api/book_upload_api.py` (validations, error handling)
-- `modules/memory/smart_book_processor.py` (content warning detection)
-
-### Chunking Strategy
-**Implementation**: RecursiveCharacterTextSplitter with hierarchical separator priority
-- Respects document structure (paragraphs → sentences → clauses → words)
-- 1500-char target with 300-char overlap for context preservation
-- Multi-language support (Latin, CJK, Arabic/Urdu punctuation)
-- Intelligent boundary detection prevents mid-sentence splits
-
-**Performance**:
-- Small files (1 chunk): ~1 second processing time
-- Large books (65 chunks): ~2-3 seconds processing time
-- Parallel embedding generation (10 chunks per batch)
-
-## Production Readiness Summary (Updated 2025-10-03)
-
-### For Single-User Local Use: ✅ PRODUCTION READY
-
-**What Was Fixed (Latest Updates)**:
-1. ✅ **Complete Backup/Restore** - One-click data protection with selective export
-2. ✅ **File Locking + Atomic Writes** - All critical files use FileLock + temp file pattern
-3. ✅ **Power Failure Protection** - Session files use fsync() to guarantee disk writes
-4. ✅ **Lifecycle Management** - Proper cleanup of background tasks and resources on shutdown
-5. ✅ **Memory Leak Fixes** - Clean shutdown and connection management
-6. ✅ **System Health Monitoring** - Disk space and resource tracking
-7. ✅ **Race Condition Fixes** - Global service init, file writes, title generation (2025-10-03)
-8. ✅ **Frontend Sync Improvements** - Error cleanup, WebSocket heartbeat (2025-10-03)
-9. ✅ **Conversation History Loading** - Context preserved across restarts (2025-10-03)
-10. ✅ **KG Save Debouncing** - 80-90% reduction in file I/O under load (2025-10-03)
-
-**Data Integrity Guarantees**:
-- **No file corruption**: FileLock prevents concurrent write conflicts
-- **No power loss data loss**: Atomic writes + fsync() guarantee durability
-- **No orphaned tasks**: Background tasks properly cancelled on shutdown
-- **No resource leaks**: ChromaDB connections and file handles closed cleanly
-
-**What You Get**:
-- **Data Safety**: Full backup system + corruption-proof file writes
-- **Reliability**: Power-loss resistant, no data corruption from concurrent operations
-- **Stability**: System runs for weeks without crashes or leaks
-- **Visibility**: Health monitoring shows disk space and data sizes
-- **Clean Shutdown**: All data persisted, tasks terminated, connections closed
-
-**Architecture Assessment (2025-10-02)**:
-- **Core Design**: Solid 5-tier memory architecture with intelligent learning
-- **Data Integrity**: Production-grade file handling with atomic operations
-- **Resource Management**: Proper lifecycle management and cleanup
-- **Error Handling**: Graceful degradation when components unavailable
-- **Knowledge Graph**: Correctly implemented as rebuildable cache (not critical path)
-
-**Remaining Limitations (By Design for Single-User)**:
-- No authentication (not needed for localhost)
-- No horizontal scaling (single user doesn't need it)
-- Embedded ChromaDB (simpler for single user)
-- Local file storage (privacy-first, no cloud)
-
-**Production Readiness Score**: **8/10** for single-user local deployment
-- Deductions: Limited test coverage, no CI/CD, manual deployment
-
-**Recommended Usage**:
-- ✅ Daily personal use
-- ✅ Offline coding assistant
-- ✅ Private knowledge management
-- ✅ Learning and experimentation
-- ✅ Small team deployments (with caution)
-
-**Not Recommended For**:
-- ❌ Multi-user production without modifications
-- ❌ Public internet deployment without authentication
-- ❌ Business-critical applications requiring 99.9% uptime and SLAs
-
-**Best Practices**:
-1. **Regular Backups**: Use Settings → Export Data weekly
-2. **Disk Space**: Keep at least 5GB free
-3. **Monitor Health**: Check `/api/system/health` if issues arise
-4. **Backup Before Updates**: Export data before system changes
-5. **Clean Restarts**: System now guarantees clean shutdown on restart/reload
-
----
 
 ## Security
 
@@ -7180,775 +3814,32 @@ User sends first message
    - Test file uploads with edge cases (large files, weird encodings)
    - Never disable CORS restrictions
 
----
 
-## Recent Updates (October 2025)
+## Out-of-Memory graceful degradation
 
-### 2025-10-07: Terminal UX Redesign & System Polish
+When a model is configured with a context window too large for the host's RAM/VRAM, Ollama terminates the runner with `"llama runner process has terminated: exit status 2"`. The chat path handles this in three layers:
 
-#### Terminal-Style Interface Overhaul
-**Problem**: Modern web-style UI didn't match terminal aesthetic
-**Solution**: Complete redesign with ASCII symbols and minimal styling
+1. **Lightweight health check during model switch.** `model_switcher.py` validates a new model with `num_ctx=2048, num_predict=10`, so the switch itself succeeds even on weak hardware.
+2. **Auto-retry on OOM during chat.** `ollama_client.py` detects the `terminated` error in 500 responses, retries the same request with `num_ctx=2048`, and tags the payload `_oom_recovered=True`.
+3. **User-facing warning.** The recovered response is prefixed with a "Memory limit reached" banner that names the original context size and points at Settings → Context Window Settings → lower context for the offending model.
 
-**UI Changes**:
-1. **Tool Execution Badges** - `TerminalMessageThread.tsx:409-446`
-   - Before: Bordered pills with backgrounds, technical names
-   - After: Terminal-style lines with symbols (✓ ⋯ ✗), plain language
-   - Format: `✓ searched memory (Found 5 results)`
-   - Monospace font, no borders, Unix-style status indicators
-
-2. **Thinking Status** - `ThinkingDots` (inline in TerminalMessageThread.tsx:10-25)
-   - Before (v0.2.4): Collapsible ThinkingBlock with ASCII arrows
-   - After (v0.2.5): Animated "Thinking." → "Thinking.." → "Thinking..." status
-   - Blue monospace text, 400ms cycle, no collapsible block
-
-3. **Citations Block** - `TerminalMessageThread.tsx:10-59`
-   - Before: Card-style with borders, emoji icons
-   - After: Tree-view with bracket notation `[5] references`
-   - Indented structure with border-left, no backgrounds
-   - **Full text display**: All truncation removed
-     - Frontend: Removed 150-char UI limit
-     - Backend: Removed 200-char citation limit (agent_chat.py:271)
-     - Citations now show complete memory content
-
-4. **Visual Hierarchy**
-   - Removed all button backgrounds/borders
-   - Consistent ASCII symbols (▶▼✓✗⋯)
-   - Lowercase labels (Unix convention)
-   - Information-dense, distraction-free
-   - Matches tools like git, less, tree
-
-**Backend Fixes**:
-1. **Duplicate Citations** - `useChatStore.ts:862-864`
-   - Problem: Backend sent 5 citations, UI showed 10 (concatenated SSE + complete events)
-   - Fix: Use complete event only as authoritative source
-   - Now shows correct count
-
-2. **MEMORY_BANK Tags Leaking** - ~~DEPRECATED~~ (See 2025-10-11 migration below)
-   - ~~Problem: Internal syntax `[MEMORY_BANK: tag="..." content="..."]` visible in UI~~
-   - ~~Temporary Fix: Added regex cleaning to all streaming buffer paths~~
-   - **PERMANENT FIX (2025-10-11)**: Migrated to structured tool calls - tags architecturally impossible to leak
-
-3. **Enhanced MEMORY_BANK Instructions** - `agent_chat.py:699-710`
-   - Added 4 concrete examples
-   - Explicit "Store user facts" directive
-   - Simplified from 50 lines to 30 lines
-   - Removed "MANDATORY", "NEW", motivational fluff
-
-4. **Thinking Made Optional** - `agent_chat.py:1135-1145`
-   - Changed from "ALWAYS" to "may optionally use"
-   - LLM can choose when to show reasoning
-   - Cleaner responses when thinking isn't needed
-
-**Prompt Simplification**:
-- Removed verbose explanations and context markers
-- Condensed formatting instructions (7 lines → 1 line)
-- Cut fluff like "Use it actively!" and "this helps you..."
-- Focused on essential information only
-
-**Impact**: Terminal-native UX, clean prompts, proper citation counts, no tag leakage
+Strong-hardware users never see this path. Weak-hardware users get a working response on the first message and a one-click permanent fix.
 
 ---
 
-### 2025-10-11: MEMORY_BANK Migration to Structured Tools
+## Per-release implementation notes
 
-#### Complete Architecture Overhaul: Inline Tags → Structured Tool Calls
+Historical per-release implementation breakdowns are maintained in `dev/docs/releases/vX.Y.Z/RELEASE_NOTES.md`:
 
-**Problem Solved:**
-- Inline tags `[MEMORY_BANK: tag="..." content="..."]` were leaking to UI during streaming
-- Tags could split across chunks: `"[MEMO" + "RY_BANK: ..."`
-- Complex regex filtering across 4 yield points (fragile, edge cases)
-- Mixed control flow with user-facing content (architectural anti-pattern)
+- v0.3.0 — `releases/v0.3.0/RELEASE_NOTES.md` (duplicate-prompt race, data deletion toasts, ChromaDB 1.x migration safety)
+- v0.3.1 — `releases/v0.3.1/RELEASE_NOTES.md` (KG removed, TagCascade landed, ONNX embeddings)
+- v0.3.2 — `releases/v0.3.2/RELEASE_NOTES.md` (TagCascade `$contains` repair, chat-path latency, customer bug batch)
+- v0.3.3 — `releases/v0.3.3/RELEASE_NOTES.md` (multimodal images, dynamic capability detection, issue-#8 closure, 21 defects)
 
-**Solution: Tool-Based Memory Operations**
-
-1. **Added 3 Memory Bank Tools** - `tool_definitions.py:37-97`
-   ```python
-   create_memory(content="fact", tag="identity|preference|goal|context")
-   update_memory(old_content="old fact", new_content="new fact")
-   archive_memory(content="outdated fact")
-   ```
-   - Structured JSON tool calls (like `search_memory`)
-   - Clean separation from text response
-   - Impossible for tags to leak to UI
-
-2. **Updated System Prompt** - `agent_chat.py:1310-1321`
-   - Removed inline tag syntax completely
-   - Tool-based examples: `create_memory(content="...", tag="...")`
-   - Clear directive: "DO NOT say 'I'll remember' without calling the tool"
-
-3. **Tool Execution Handlers** - `agent_chat.py:852-952`
-   - `create_memory`: Stores with metadata (tags, importance, confidence, status, etc.)
-   - `update_memory`: Semantic search → update with reason="llm_update"
-   - `archive_memory`: Semantic search → archive item
-   - Proper logging: `[MEMORY_BANK TOOL] Created/Updated/Archived`
-
-4. **Removed ALL Streaming Filters**
-   - Line 705: Tool continuation filter → removed
-   - Line 720: Batch yielding filter → removed
-   - Line 830: Native tool filter → removed
-   - Line 962: Remaining buffer filter → removed
-   - **Result**: Zero filtering complexity, zero tag leakage
-
-5. **Backwards Compatibility** - `agent_chat.py:965-976`
-   - Old inline tag extraction kept as fallback (DEPRECATED)
-   - Warns if LLM outputs old-style tags
-   - Smooth transition, no breaking changes
-
-**Architecture Comparison:**
-
-Before (Inline Tags):
-```
-LLM → "Text [MEMORY_BANK: tag='x' content='y']"
-    → Stream chunks: "[ME" + "MORY" + "_BA" + "NK..."
-    → Regex filter (fails on splits)
-    → UI sees leaked tags ❌
-```
-
-After (Structured Tools):
-```
-LLM → "Text" + TOOL_CALL(create_memory, {content, tag})
-    → Stream text: "Text" (clean)
-    → Execute tool separately
-    → UI never sees tags ✅
-```
-
-**Benefits:**
-- ✅ **Zero tag leakage** - Architecturally impossible
-- ✅ **Clean architecture** - Matches industry standards (ChatGPT, Claude API)
-- ✅ **No filtering complexity** - Removed 4 regex filter points
-- ✅ **Proper streaming** - No delays, no edge cases
-- ✅ **Maintainable** - Standard tool pattern, easy to extend
-
-**Tech Debt Resolved:**
-- Inline control tokens → Structured output
-- Regex streaming filters → No filtering needed
-- Tag leakage risk → Impossible by design
-
-**Files Modified:**
-- `utils/tool_definitions.py`: Added create_memory, update_memory, archive_memory
-- `app/routers/agent_chat.py`: Tool handlers, prompt update, filter removal
-- All 4 streaming filter points eliminated
-
-**Impact**: Production-ready memory bank system with clean separation of concerns, following modern AI agent best practices.
-
----
-
-### 2025-10-08: Confidence Scoring Fix & Persistence Improvements
-
-#### Citation Confidence Calculation Fixed (Backend Learning Layer)
-**Context**: This fix applies to BACKEND confidence calculation for internal learning (outcome detection, memory promotion). Confidence scores are NOT displayed in UI (removed Oct 7, 2025).
-
-**Problem**: Backend confidence calculations showing 0.00% regardless of relevance
-**Root Cause**: Formula assumed ChromaDB distances of 0-2.0, but actual distances were 300-500+
-
-**Investigation Findings**:
-- Old formula: `confidence = 1.0 / (1.0 + distance)`
-- With distance=381: `1.0 / 382 = 0.0026` → displayed as "0.00%"
-- ChromaDB returns raw L2/cosine distances in high-dimensional space (not normalized)
-
-**Solution**: Exponential decay formula that works with any distance range
-```python
-# New formula (works for all LLMs and embedding models)
-CONFIDENCE_SCALE_FACTOR = 100.0
-confidence = math.exp(-distance / CONFIDENCE_SCALE_FACTOR)
-```
-
-**Results with Actual Data**:
-- distance=320 → confidence=0.041 (4.1%) - close match
-- distance=381 → confidence=0.022 (2.2%) - moderate match
-- distance=474 → confidence=0.009 (0.9%) - distant match
-
-**Code Changes**:
-- `app/routers/agent_chat.py:79` - Updated `_format_search_results_as_citations()`
-- `modules/memory/unified_memory_system.py:651, 665` - Updated transparency context tracking
-- Added detailed docstring explaining scale factor tuning
-
-**Impact**:
-- Enables accurate memory system learning (outcome tracking relies on confidence)
-- Allows filtering of low-quality results during retrieval
-- Works consistently across different LLMs and embedding models
-- **Note**: Users do not see these scores - purely for backend decision-making
-
-#### Tool Call Message Persistence Fixed
-**Problem**: Messages with search_memory tool calls disappeared after page refresh
-**Root Cause**: Early return in streaming path bypassed ALL persistence logic
-
-**Investigation Findings**:
-- Tool execution path returned early at line 1573 (old code)
-- Skipped: session file save, memory storage, title generation, doc_id tracking
-- Only messages WITHOUT tool calls persisted correctly
-
-**Solution**: Refactored into single source of truth for persistence
-```python
-# New shared function (agent_chat.py:859-1016)
-async def _persist_conversation_turn(
-    conversation_id, user_message, response_content,
-    thinking_content, thinking_sent, search_results, session_file
-) -> (exchange_doc_id, title)
-```
-
-**Code Changes**:
-- Created `_persist_conversation_turn()` shared method
-- Both normal path (line 1905) and tool call path (line 1717) now use same function
-- Zero code duplication, single maintenance point
-- Proper error handling with user-facing warnings
-
-**Impact**:
-- Citations now persist across refresh
-- Memory system learns from tool-call conversations
-- Outcome scoring works for all message types
-- Cleaner, more maintainable codebase
-
-**Outcome Detection Character Limit Removed** - `agent_chat.py:1366-1372`
-- **Issue**: 10-character minimum threshold blocked meaningful short feedback ("TERRIBLE", "WOW TY")
-- **Root Cause**: Arbitrary filter meant to save LLM calls but prevented critical user feedback
-- **Fix**: Removed character limit guard - OutcomeDetector LLM already handles noise by returning "unknown"
-- **Impact**: All user messages now eligible for outcome detection regardless of length
-
----
-
-### 2025-10-07: UI/UX Improvements & Bug Fixes (Earlier)
-
-#### Enhanced Transparency & Flow
-**Problem**: Users couldn't see what the LLM was doing or which memories were being used
-**Solution**: Complete overhaul of visual feedback system
-
-**UI Changes**:
-1. **Citation Confidence Scores Removed** - `TerminalMessageThread.tsx:46-50`
-   - Issue: ChromaDB distance metrics showing 0% or 67% for all results (unreliable)
-   - Fix: Show only collection names (color-coded), no confidence scores
-
-2. **Tool Execution Display Added** - `TerminalMessageThread.tsx:378-396`
-   - Feature: Compact pill badges `tool_name + status_icon`
-   - Visual: ✓ completed, spinner running, ✗ failed
-   - Order: Renders BEFORE thinking block for chronological clarity
-
-3. **Citations Redesigned** - `TerminalMessageThread.tsx:7-71`
-   - Changed from: Inline preview with broken scores
-   - Changed to: Collapsible "X memories" section with full text previews
-
-4. **Markdown Support Added** - `TerminalMessageThread.tsx:277-363`
-   - LLM can use: **bold**, *italic*, `code`, headings, lists, code blocks, callouts
-   - Dependencies: `react-markdown`, `remark-gfm`, `rehype-raw`
-   - Custom callouts: `:::success`, `:::warning`, `:::info`
-
-**Backend Fixes**:
-1. **Cross-Conversation Promotion Enabled** - `unified_memory_system.py:1673-1675`
-   - Removed conversation ID filter blocking cross-conversation learning
-   - Valuable memories from ANY conversation now promote to history/patterns
-
-2. **Memory Bank Capacity Limit** - `unified_memory_system.py:2341-2357`
-   - Added 500-item limit with clear error message
-   - Prevents LLM spam, requires user cleanup
-
-3. **Embedding Cache** - `embedding_service.py:32-117`
-   - MD5-based cache with 200-item LRU eviction
-   - ~30% reduction in redundant embedding generation
-
-4. **Citation Formatting** - `agent_chat.py:46-75`
-   - Created helper function to convert distance → confidence
-   - Fixed backend/frontend data format mismatch
-
-**Data Flow Fixes**:
-1. **Citation Handler** - `useChatStore.ts:813-824`
-   - Added missing handler for citation events
-2. **Message Mapping** - `ConnectedChat.tsx:1193`
-   - Pass toolExecutions through to components
-3. **Tool Events** - `useChatStore.ts:777-811`
-   - Capture and update tool execution states
-
-**Impact**: Real-time tool feedback, proper citations, markdown formatting, cross-conversation learning, better performance
+This document describes the current state of the system, not the history of how it got there.
 
 ---
 
 ## License
 
-Apache 2.0 License - See LICENSE file for details
----
-
-## Known Issues
-
-### Memory_bank Doc_ID Mismatch (FIXED - 2025-11-26)
-
-**Location**: `unified_memory_system.py:store_memory_bank()`
-
-**Issue**: Returned doc_id didn't match stored doc_id, causing retrieval failures
-
-**Root Cause**:
-- `store_memory_bank()` generated ID: `memory_bank_xxxxx`
-- Called `store()` which regenerated ID: `memory_bank_xxxxx_timestamp`
-- Returned first ID, but document stored under second ID
-- Result: Any code trying to retrieve/update using returned ID would fail
-
-**Evidence**:
-- Storyteller test showed "Document not found" errors for all create_memory operations
-- LLM couldn't search newly created memories (0% success rate)
-- Deduplication failed (couldn't find existing docs to check similarity)
-- Caused spam of duplicate memories as LLM retried failed operations
-
-**Fix Implemented (2025-11-26)**:
-- `store_memory_bank()` now captures doc_id returned by `store()` instead of pre-generating
-- Line 3637: `doc_id = await self.store(...)` instead of generating then ignoring return value
-- All create_memory operations now return correct retrievable IDs
-- Deduplication works properly (can find existing docs)
-
-**Impact**: Fixed memory_bank reliability, deduplication, and LLM tool success rates
-
-### Model Switching Timeout
-
-**Location**: `app/routers/model_switcher.py:204-221`
-
-**Issue**: Model switching frequently fails with timeout error
-
-**Root Cause**:
-- Backend performs a health check after model switch (10-second timeout)
-- Large models (7B+) not in VRAM take 5-20 seconds to load
-- First inference after loading is slowest (cold start)
-- 10-second timeout is too aggressive for cold starts
-
-**Workaround**: Try switching again - second attempt usually succeeds as model is cached
-
-**Fix Implemented (2025-10-16)**:
-- Health check now uses lightweight parameters (`num_ctx: 2048`, `num_predict: 10`)
-- Model switching succeeds on all hardware
-- Actual chat uses full context (32768) but gracefully degrades if OOM
-
-## Out-of-Memory (OOM) Graceful Degradation (NEW - 2025-10-16)
-
-### Problem: Ollama Crashes with Large Context on Weak Hardware
-
-**Issue**: Models configured with large context windows (32K+) cause Ollama to crash on systems with insufficient RAM/VRAM. Error: `"llama runner process has terminated: exit status 2"`
-
-**Solution**: 3-tier error handling with automatic retry and user guidance.
-
-### Architecture
-
-#### 1. Lightweight Health Check ([model_switcher.py:262-282](../app/routers/model_switcher.py))
-
-Health check uses minimal parameters to avoid OOM during model switching:
-
-```python
-health_payload = {
-    "model": model_name,
-    "messages": [{"role": "user", "content": "test"}],
-    "stream": False,
-    "options": {
-        "num_ctx": 2048,      # Minimal context for health check only
-        "num_predict": 10     # Just need a few tokens to verify it works
-    }
-}
-```
-
-**Result**: All hardware can successfully switch models, regardless of RAM limitations.
-
-#### 2. OOM Detection & Auto-Retry ([ollama_client.py:162-176](../modules/llm/ollama_client.py))
-
-Detects "terminated" error from Ollama and automatically retries with reduced context:
-
-```python
-if api_response.status_code == 500:
-    error_text = api_response.text
-    if "terminated" in error_text.lower():
-        logger.warning(f"OOM detected, retrying with reduced context (2048)")
-        original_ctx = payload["options"].get("num_ctx", "unknown")
-        payload["options"]["num_ctx"] = 2048  # Retry with minimal context
-        api_response = await self.client.post("/api/chat", json=payload)
-        payload["_oom_recovered"] = True  # Mark for warning message
-```
-
-**Applies to both:**
-- Non-streaming: `generate_response()` (line 162-176)
-- Streaming: `stream_response_with_tools()` (line 680-726)
-
-#### 3. User Guidance ([ollama_client.py:330-341](../modules/llm/ollama_client.py))
-
-Prepends warning message to response with actionable fix:
-
-```python
-warning_msg = (
-    f"⚠️ **Memory Limit Reached**\n\n"
-    f"This model ran out of memory with {original_ctx} context window. "
-    f"Reduced to 2048 tokens for this response.\n\n"
-    f"**To fix permanently:** Open Settings → Context Window Settings → "
-    f"Lower context for `{actual_model}` to 8K or less.\n\n"
-    f"---\n\n"
-)
-```
-
-### Behavior
-
-**Strong Hardware (Most Users)**:
-- Model uses full configured context (e.g., 32768)
-- No OOM errors, no warnings, no performance penalty
-
-**Weak Hardware (Insufficient RAM/VRAM)**:
-- First message of each session:
-  1. Tries full context (32768) → Ollama crashes (~5-8 sec)
-  2. Auto-retries with minimal context (2048) → succeeds
-  3. Shows warning with instructions
-- User can permanently lower context via Settings UI
-- Subsequent messages in same session repeat OOM cycle (no session memory by design)
-
-### Integration with Context Management
-
-Works seamlessly with existing context window system:
-- Uses `get_context_size()` from `config/model_contexts.py` ✅
-- User can adjust via `POST /api/model/context/{model_name}` API ✅
-- Frontend ModelContextSettings.tsx provides UI control ✅
-- OOM fix intercepts AFTER context configuration, BEFORE Ollama crash ✅
-
-### Benefits
-
-1. **Universal Compatibility**: Works on all hardware without configuration
-2. **Graceful Degradation**: Strong PCs get full performance, weak PCs still work
-3. **User Empowerment**: Clear instructions to fix permanently
-4. **No Special Casing**: Same codebase for all hardware tiers
-5. **Minimal Tech Debt**: Only 25 lines of code across 2 methods
-
-**Files Modified**:
-- `app/routers/model_switcher.py` - Lightweight health check (lines 262-282)
-- `modules/llm/ollama_client.py` - OOM detection (lines 162-176, 680-726), user warning (lines 330-341)
-
-**Additional Fixes (2025-10-22)**:
-1. Memory refresh blocked by streaming state - Event dispatch moved outside streaming check (useChatStore.ts:723)
-2. Tool indicators disappeared during streaming - toolExecutions explicitly preserved at 3 update points (lines 581, 604, 745)
-3. archive_memory indicator disappeared - Messages with tools but no text content are preserved (lines 732-748)
-4. Backend memory flag conditional - Changed to memory_updated: True on ALL responses (agent_chat.py:830)
-
----
-
-## v0.3.0 Bug Fixes (2026-01-16)
-
-### Duplicate Prompts Race Condition (FIXED)
-
-**Location**: `app/routers/agent_chat.py:3526-3556`
-
-**Issue**: Users saw duplicate responses when sending messages quickly, creating a "ghost" effect where two AI responses appeared for a single prompt.
-
-**Root Cause**:
-- WebSocket handler created new streaming task BEFORE properly cancelling existing task
-- Race condition: old task continued sending tokens while new task started
-- Both tasks wrote to same WebSocket, interleaving their outputs
-- Made worse by LLM latency - old task could run for several seconds after "cancellation"
-
-**Fix Implemented**:
-```python
-# v0.3.0: Cancel existing task FIRST, await completion, THEN create new task
-existing_task = _active_tasks.get(conversation_id)
-if existing_task and not existing_task.done():
-    existing_task.cancel()
-    try:
-        # Wait for cancellation to complete (with timeout)
-        await asyncio.wait_for(asyncio.shield(existing_task), timeout=2.0)
-    except (asyncio.CancelledError, asyncio.TimeoutError):
-        pass  # Expected
-```
-
-**Key Insight**: `task.cancel()` doesn't wait for cancellation - must `await` the task to ensure it's fully stopped before creating a new one.
-
----
-
-### Data Deletion Silent Failure (FIXED)
-
-**Location**: `src/components/MemoryBankModal.tsx:113-175`
-
-**Issue**: Delete button in Memory Bank did nothing - no feedback, no error, no action.
-
-**Root Cause**:
-- Frontend fetch calls had no error handling
-- Failed API calls (500 errors) were silently swallowed
-- User had no way to know operation failed
-- Common with corrupted SQLite databases from version upgrades
-
-**Fix Implemented**:
-```typescript
-// v0.3.0: Add error handling and Toast feedback
-const handleDelete = async (id: string) => {
-  try {
-    const response = await fetch(`http://127.0.0.1:23816/memory-bank/${id}`, {
-      method: 'DELETE'
-    });
-    if (response.ok) {
-      setToast({ message: 'Memory permanently deleted', type: 'success' });
-      fetchData();
-    } else {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      setToast({ message: `Failed to delete: ${error.detail}`, type: 'error' });
-    }
-  } catch (error) {
-    setToast({ message: 'Network error - check backend', type: 'error' });
-  }
-};
-```
-
-**Added**: Toast component for success/error feedback on all memory operations.
-
----
-
-### ChromaDB Migration Corruption (FIXED)
-
-**Location**: `modules/memory/unified_memory_system.py:232-307`
-
-**Issue**: Users upgrading from v0.2.3 or earlier had corrupted working memories, causing app crashes.
-
-**Root Cause**:
-- ChromaDB 1.x migration added `topic` column to SQLite schema
-- Migration wasn't wrapped in transaction - partial failures left DB corrupted
-- No validation that migration succeeded before continuing
-- Corrupted state persisted across restarts
-
-**Fix Implemented**:
-```python
-# v0.3.0: Transaction wrapper with validation
-cursor.execute("BEGIN TRANSACTION")
-try:
-    # Apply migrations
-    for table, column, col_type in migrations_needed:
-        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
-
-    # Validate before commit
-    cursor.execute("PRAGMA table_info(collections)")
-    if 'topic' not in {col[1] for col in cursor.fetchall()}:
-        cursor.execute("ROLLBACK")
-        raise RuntimeError("Migration validation failed")
-
-    cursor.execute("COMMIT")
-except Exception:
-    cursor.execute("ROLLBACK")
-    raise
-```
-
----
-
-### Collection Health Check & Auto-Repair (NEW)
-
-**Location**: `modules/memory/unified_memory_system.py:309-396`
-
-**Issue**: Corrupted collections from failed migrations caused permanent app breakage with no recovery path.
-
-**Solution**: Startup health check with auto-repair for working collection.
-
-**Implementation**:
-```python
-async def _health_check_collections(self):
-    """
-    v0.3.0: Check health of all collections on startup.
-    Auto-repairs working collection if corrupted (temporary data, acceptable loss).
-    """
-    for name, adapter in self.collections.items():
-        try:
-            # Test query capability (most common failure mode)
-            adapter.collection.query(query_texts=["health check"], n_results=1)
-        except Exception as e:
-            if name == "working":
-                await self._repair_working_collection()  # Recreate it
-            else:
-                logger.error(f"Collection {name} corrupted - manual repair needed")
-```
-
-**Key Design Decisions**:
-- Only auto-repairs `working` collection (24h TTL, temporary data)
-- Other collections require manual intervention (valuable historical data)
-- Health check runs at startup, before services initialize
-- Logs clear diagnostic information for debugging
-
----
-
-### Routing KG Patterns Never Persisted (FIXED)
-
-**Location**: `modules/memory/knowledge_graph_service.py:753-768`
-
-**Issue**: Routing patterns in `knowledge_graph.json` were always empty (0 patterns) despite active use. The system appeared to learn routing but lost all patterns on every KG visualization poll.
-
-**Root Cause**:
-- `get_kg_entities()` called `reload_kg()` to sync with MCP process changes
-- `reload_kg()` wiped in-memory patterns (loaded from empty disk file)
-- Routing patterns added by `update_kg_routing()` during the 5-second debounce window were lost
-- If UI polled KG visualization while patterns were pending save, they were destroyed forever
-
-**Fix Implemented**:
-```python
-# v0.3.0 FIX: Flush pending saves BEFORE reload to prevent race condition
-if self._kg_save_pending:
-    async with self._kg_save_lock:
-        if self._kg_save_task and not self._kg_save_task.done():
-            self._kg_save_task.cancel()
-            try:
-                await self._kg_save_task
-            except asyncio.CancelledError:
-                pass
-    # Immediate save of pending changes
-    await self._save_kg()
-    self._kg_save_pending = False
-    logger.info("[KG] Flushed pending save before reload")
-
-# Now safe to reload from disk
-self.reload_kg()
-```
-
-**Key Insight**: The debounced save pattern (batch writes for performance) conflicts with reload-on-read pattern (sync with external process). Must flush pending writes before reload.
-
-**Note**: Bug existed since v0.2.0 service extraction but went unnoticed until v0.3.0 KG audit.
-
----
-
-**Files Modified**:
-- `app/routers/agent_chat.py` - Task cancellation (lines 3526-3556)
-- `src/components/MemoryBankModal.tsx` - Toast feedback (lines 113-175, 496-503)
-- `modules/memory/unified_memory_system.py` - Migration safety (232-307), health check (309-396)
-- `modules/memory/knowledge_graph_service.py` - KG flush-before-reload (lines 753-768)
-
----
-
-## v0.3.1 Implemented: Tag-Routed Overlap Cascade (Replaces KG)
-
-> **Status:** Implemented and shipped. Benchmark-validated on roampal-labs LoCoMo dataset (1,537 questions). Mirrors roampal-core v0.4.9.x architecture. See [v0.3.1 Release Notes](releases/v0.3.1/RELEASE_NOTES.md) for full details.
-
-### Why: KG Proved Harmful
-
-Benchmark data across 2000+ turns proved the Knowledge Graph actively hurts retrieval:
-- KG+CE: 74.6% accuracy (graph adding noise, expansion pulling irrelevant entities)
-- Wilson+CE: 78.7% accuracy (no graph, just Wilson scoring + cross-encoder)
-- KG edge scores frozen at 0.5 — the graph never actually learned
-- Graph expansion turned precise queries into vague ones
-
-The Routing KG, Content KG, and Action KG add complexity without improving results. Tags replace all KG functionality with a simpler, faster, proven-better approach.
-
-### What: Tag-Routed Overlap Cascade
-
-**Store time:** LLM extracts topic nouns (people, places, objects) from each memory. Tags stored as pipe-delimited metadata field. Extraction prompt focuses on WHO and WHAT the text is about — skips pronouns, meta-words, generic verbs.
-
-**Query time (v0.3.1 landed, v0.3.2 corrected):** Extract nouns from query using word-boundary matching (prevents `car` matching `caroline`). For each matched tag (max 8), over-fetch candidates from the collection via vector + text hybrid query (`top_k = limit * 8`), then filter by tag membership in Python by parsing the `noun_tags` metadata string. Count tag overlaps — memories matching more query tags rank higher.
-
-> **v0.3.2 correction:** The v0.3.1 implementation used a ChromaDB `where`-clause filter `{"noun_tags": {"$contains": ...}}`, but ChromaDB rejects `$contains` in `where` (it is only valid in `where_document`). Every TagCascade query silently threw an exception, was caught, and fell through to unfiltered cosine. v0.3.2 Section 0m replaces the broken filter with over-fetch + Python-side tag match. Retrieval quality restored to the benchmark-validated design. See `dev/docs/releases/v0.3.2/RELEASE_NOTES.md` Section 0m.
-
-**TagCascade pool construction (v0.3.1):**
-1. Fill 40-candidate pool from highest overlap tier down (cosine distance tiebreak within each tier)
-2. Cosine-fill remaining pool slots from unfiltered search (catches untagged memories)
-3. CE reranks pool — raw CE score as final ranking (NO Wilson blend)
-4. If no tags match → straight cosine candidates → CE rerank
-
-**Two-lane injection (v0.3.1):**
-- Lane 1: 4 summaries (`memory_type != "fact"`)
-- Lane 2: 4 facts (`memory_type == "fact"`)
-- Total: 8 memories per context injection
-
-**Key properties:**
-- Can never perform worse than cosine — worst case falls back to it
-- No tags match at all → straight cosine search, one CE pass
-- Raw CE score is the only ranking signal (Wilson proved harmful at p<0.0001)
-- Wilson score still computed as metadata (display, promotion thresholds)
-- Single CE pass of 40 candidates — efficient and proven on LoCoMo benchmark
-
-### Desktop-Specific Implementation Plan
-
-**Files to modify:**
-
-| File | Change |
-|------|--------|
-| `modules/memory/tag_service.py` | NEW — Noun tag extraction via LLM (same as core) |
-| `modules/memory/tag_migration.py` | NEW — One-time backfill of noun tags on existing memories |
-| `modules/memory/search_service.py` | Replace KG entity boost with tag-routed overlap cascade + CE quality gate |
-| `modules/memory/unified_memory_system.py` | Tag extraction on `store()`, tag set rebuild on init, remove KG wiring, top-3+nursery slots |
-| `modules/memory/memory_bank_service.py` | Noun tag extraction on `store()` (alongside existing category tags) |
-| `modules/memory/scoring_service.py` | Remove memory_bank special-case `(0.0, 1.0)` weighting — use same 5-tier system for all collections |
-| `modules/memory/config.py` | Remove `graph_backend` references |
-| `modules/memory/knowledge_graph_service.py` | Archive to `dev/archive/kg/` |
-| `modules/memory/content_graph.py` | Archive to `dev/archive/kg/` |
-| `modules/memory/routing_service.py` | Remove KG routing phases, simplify to tag-based routing |
-| `app/routers/agent_chat.py` | Remove KG visualization calls, update outcome recording |
-| `app/routers/memory_visualization_enhanced.py` | Replace KG graph visualization with tag cloud / tag relationship view |
-
-**Desktop-specific implementation notes:**
-- KG visualization (green/purple nodes) replaced by tag cloud in Memory Panel. Substack-style tag filter with typeahead suggestions.
-- Memory bank category tags (`identity`, `preference`, `goal`) remain separate from noun tags. Category tags classify WHAT KIND of memory, noun tags classify WHAT IT'S ABOUT.
-- Cold start context (`get_cold_start_context()`) uses `TAG_PRIORITIES` for category ordering — unaffected by TagCascade.
-- BM25 hybrid search retained. Tag routing narrows the candidate pool BEFORE BM25+cosine+CE.
-- Emoji scoring (👍🤷👎➖) removed — sidecar is sole scorer via 7-rule guide.
-- Backend process lifecycle (Tauri manages Python subprocess) unaffected.
-
-**What stays the same:**
-- 5-tier memory collections (books, working, history, patterns, memory_bank)
-- Scoring & promotion pipeline (Wilson, time-weighted, promotion thresholds)
-- Cross-encoder reranking (mmarco-mMiniLMv2-L12-H384-v1, multilingual, ONNX)
-- BM25 hybrid search
-- Contextual retrieval (Anthropic technique)
-- Memory bank CRUD and category tags
-- Cold start context injection
-- MCP server tools
-- Session management, backup/restore
-- All frontend components except KG visualization
-
-**What gets removed:**
-- `knowledge_graph_service.py` — Routing KG, routing phases, concept extraction via n-grams
-- `content_graph.py` — Entity co-occurrence graph, green/purple nodes
-- Action KG effectiveness tracking (context→action→collection mapping)
-- KG entity boost in `search_service.py`
-- `graph_backend` config option
-- KG visualization in `memory_visualization_enhanced.py`
-
-**What replaces it:**
-- `tag_service.py` — LLM-based noun tag extraction (simpler than n-gram concept extraction)
-- Tag-routed overlap cascade in `search_service.py` (simpler than KG routing phases)
-- Tag cloud visualization (simpler than graph visualization)
-
-### Shared Code with Core
-
-Desktop's memory module (`modules/memory/`) mirrors core's (`roampal/backend/modules/memory/`). The v0.4.5 changes apply identically to both:
-- Same `tag_service.py` can be shared
-- Same `tag_migration.py` backfill logic
-- Same scoring changes in `scoring_service.py`
-- Same cascade logic in `search_service.py`
-
-The only desktop-specific work is updating the frontend visualization and ensuring `agent_chat.py` routes correctly without KG dependencies.
-
-### Final Benchmark Evidence (roampal-labs LoCoMo)
-
-From roampal-labs LoCoMo evaluation (1,537 non-adversarial questions):
-
-| Config | Hit@1 Clean | Hit@1 Poison | p-value |
-|--------|-------------|--------------|---------|
-| **TagCascade + cosine** | **27.3%** | **29.0%** | **baseline** |
-| Overlap + cosine | 25.8% | 28.0% | p=0.0003 |
-| Pure CE | 25.4% | 28.4% | — |
-| TagCascade + Wilson | 23.0% | 25.0% | p<0.0001 |
-
-Wilson hurts retrieval by 4.3 points. Two-lane adds +6.1 Hit@1. Nursery: zero benefit (p=1.0).
-
----
-
-## v0.3.2 Implemented: Maintenance, Correctness, and Performance
-
-> **Status:** Shipped. See [v0.3.2 Release Notes](releases/v0.3.2/RELEASE_NOTES.md) for the full item-by-item breakdown.
-
-v0.3.2 is a maintenance release — no new retrieval features, no new memory tiers, no benchmark re-run. It ships chat-path performance fixes, a batch of customer-reported bug fixes, test-debt cleanup, and correctness repairs to v0.3.1 systems that were silently broken.
-
-**Retrieval correctness (Sections 0m, 0n):**
-- **TagCascade `$contains` where-clause fix** — the v0.3.1 tag-prefilter silently errored on every query and fell through to unfiltered cosine. Replaced with over-fetch + Python-side tag match. TagCascade's tag-scoping now actually runs in production.
-- **Memory_bank multi-key `where` filter** — a latent sibling bug in the same function, masked by the `$contains` exception throwing first. Fixed with explicit `$and` wrapping, matching the pattern already used in the cosine-fill path.
-
-**LLM tag extraction correctness (Sections 0o, 0p):**
-- **TagService sidecar-swap staleness** — the wrapper function bridging TagService to the sidecar captured client/model as closure locals at boot. Any mid-session sidecar swap (via `/sidecar/set`, `/sidecar/mirror`, or mirror-follow-chat) left the closure pointing at the stale client; extraction calls failed silently at DEBUG level. Refactored to look up `app.state.sidecar_client` dynamically at call time; failures now log at WARNING.
-- **Sync `extract_tags()` vs async `llm_extract_fn`** — `store_memory_bank` called the sync `extract_tags()` which couldn't await the production async `llm_extract_fn`, returning a coroutine that crashed iteration in `_normalize_llm_tags`. Every AI-created memory_bank entry landed with no auto-extracted noun_tags. Caller fixed to use `await extract_tags_async`; service-side guard added to fail loudly if any future caller reintroduces the pattern.
-
-**Memory hygiene (Section 9):**
-- **Fact dedup on store** — semantically identical facts previously produced separate ChromaDB entries. Two write surfaces (`UnifiedMemorySystem.store()` fact branch, `store_memory_bank`) now share `_find_duplicate_fact` with asymmetric scope by write persistence: ephemeral sidecar writes defer to any more-persistent existing copy; permanent-persistence writes never block on an ephemeral working-tier copy. Threshold: cosine distance < 0.32 in L2 space (≈ `cos_sim > 0.95` for unit-normalized 768-d embeddings).
-
-**Chat-path latency (Section 0):**
-- Two retrieval lanes parallelized via `asyncio.gather()`, ONNX models warmed at startup, WebSocket-ready poll replaces a hardcoded 500 ms sleep, blocking ONNX inference offloaded to an executor. Steady-state pre-LLM overhead: ~1.2–2.2 s → ~400–900 ms. Message-1: ~3–6 s → ~400–900 ms. Retrieval quality unchanged.
-
-**Shared-DB safety (Section 0j):**
-- Desktop's Memory Panel and lifecycle read sites now tolerate both `metadata["timestamp"]` (desktop-written) and `metadata["created_at"]` (core-written) for shared-ChromaDB scenarios with the `pip install roampal` MCP server. No data migration; field unification deferred to v0.3.3.
-
-**Provider error handling (Sections 0a, 0c, 0f, 0g):**
-- Universal HTTP-error parsing for Ollama/LM Studio replaces model-specific blocklists. Capability-detected retries on tools-unsupported responses. Stale-model 404s surface as actionable UI text. VRAM-aware warnings. Sidecar defaults to mirror the chat model to avoid single-GPU reload penalty.
-
-**UI surfaces (Sections 0h, 0l, Sections 6-8):**
-- Memory Panel tag pills render correctly (JSON-encoded `noun_tags` flattened in the endpoint). Model dropdown shows full Ollama tag (`gemma4:26b` vs `gemma4:e2b`). Chat-header sidecar picker demoted to a read-only status badge; all configuration moved to Settings → Advanced. Error toasts added for chat + sidecar with parity visibility.
-
-**Test-debt cleanup (Sections 1-3):**
-- MemoryPanelV2 tag tests rewritten against the v0.3.1 Substack-style tag input. OllamaRequiredModal tests updated to match the rewritten onboarding modal. Deprecation warnings cleared across Pydantic V1 decorators, `datetime.utcnow()` usage, and GitHub Actions Node version pinning.
-
-**Benchmark status:** No new benchmark evidence in v0.3.2. All retrieval-quality characterization remains valid against the v0.3.1 roampal-labs LoCoMo run — because v0.3.2's TagCascade correction brings production behavior *into* agreement with the benchmarked design (the v0.3.1 production run was silently using unfiltered cosine due to the `$contains` bug, so the shipping behavior now matches the benchmark-validated design rather than diverging from it).
-
+Apache 2.0 — see `LICENSE` for details.

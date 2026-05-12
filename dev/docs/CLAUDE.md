@@ -6,20 +6,20 @@ AI coding assistant instructions for Roampal. For system design, see `ARCHITECTU
 ## Quick Start
 
 ```bash
-# Backend
-python main.py                    # Start FastAPI (port 8000)
+# Backend (default port 8001; PROD desktop builds use 8765, DEV desktop builds 8766)
+python main.py
 
 # Frontend
 cd ui-implementation && npm run tauri:dev  # Desktop app
 
 # Validate
-python validate_system.py         # Check everything works
+pytest tests/ -v                   # Run backend test suite
 ```
 
 ## Core Rules
 
 ### MUST (Break these = broken system)
-- Run `validate_system.py` after core changes
+- Run `pytest tests/` after core changes
 - Use `conversation_id` in all chat requests
 - Call `/api/chat/switch-conversation` when switching
 - Include `TransparencyContext` in new operations
@@ -93,7 +93,7 @@ Memory Storage → modules/memory/unified_memory_system.py:156-230
 Memory Promotion → main.py:59-95
 Model Switch → app/routers/model_switcher.py:78-150
 Session CRUD → app/routers/sessions.py:45-180
-Book Upload → backend/api/book_upload_api.py:32-213
+Book Upload → backend.api.book_upload_api (file: backend/backend/api/book_upload_api.py in packaged releases)
 
 UI Chat → ui-implementation/src/components/ConnectedChat.tsx:200-800
 UI Messages → ui-implementation/src/components/EnhancedChatMessage.tsx:50-250
@@ -107,8 +107,8 @@ WebSocket → ui-implementation/src/stores/useChatStore.ts:800-950
 ### Add API Endpoint
 1. Add to `app/routers/agent_chat.py`
 2. Update OpenAPI schema if needed
-3. Run `python validate_system.py`
-4. Test with `curl localhost:8000/docs`
+3. Run `pytest tests/ -v`
+4. Test with `curl localhost:8001/docs` (or 8765 in PROD desktop)
 
 ### Fix Memory Issues
 1. Check ChromaDB: `ls data/chromadb/`
@@ -130,16 +130,18 @@ WebSocket → ui-implementation/src/stores/useChatStore.ts:800-950
 
 ### Switch Models
 ```bash
+# Replace PORT with 8001 (dev), 8765 (PROD desktop), or 8766 (DEV desktop)
+
 # Check available models from all providers
-curl localhost:8000/api/model/providers/all/models
+curl localhost:PORT/api/model/providers/all/models
 
 # Switch model (auto-detects provider)
-curl -X POST localhost:8000/api/model/switch \
+curl -X POST localhost:PORT/api/model/switch \
   -H "Content-Type: application/json" \
   -d '{"model_name":"qwen2.5:7b", "provider":"ollama"}'
 
 # Or for LM Studio
-curl -X POST localhost:8000/api/model/switch \
+curl -X POST localhost:PORT/api/model/switch \
   -H "Content-Type: application/json" \
   -d '{"model_name":"qwen2.5-7b-instruct", "provider":"lmstudio"}'
 ```
@@ -148,18 +150,15 @@ curl -X POST localhost:8000/api/model/switch \
 
 ```bash
 # Backend
-pytest tests/test_core.py -v      # Core functionality
-pytest tests/test_memory.py -v    # Memory system
-python validate_system.py          # Full validation
+pytest tests/ -v                  # Full backend suite
+pytest tests/unit/ -v             # Unit tests only
+pytest tests/integration/ -v      # Integration tests only
 
 # Frontend
 cd ui-implementation
 npm run lint                      # Linting
 npm run build                     # Type check
 npm run test                      # Unit tests
-
-# Integration
-python test_clean_system.py       # End-to-end test
 ```
 
 ## Current State
@@ -169,7 +168,7 @@ python test_clean_system.py       # End-to-end test
 Providers: Ollama (port 11434) | LM Studio (port 1234)
 Model: Auto-detected from available providers
 Mode: Chat with Memory (memory + learning enabled)
-Port: 8000 (backend), 5174 (frontend dev)
+Port: 8001 (backend default; 8765 PROD desktop / 8766 DEV desktop), 5174 (frontend dev)
 
 # Feature Flags
 Memory: true
@@ -183,9 +182,9 @@ Patterns: 0-2 items (score-based)
 Books: Persistent reference docs
 
 # Active Services
-- ChromaDB in embedded mode (data/chromadb/)
+- ChromaDB in embedded mode (data/chroma_db/)
 - LLM Providers: Ollama (11434) or LM Studio (1234)
-- SQLite for outcomes tracking
+- JSONL session logs (data/sessions/)
 ```
 
 ## Project Structure
@@ -216,7 +215,7 @@ Roampal/
 
 ### WebSocket Disconnects
 - Check `session_id` consistency
-- Verify no CORS issues (port 8000/5173)
+- Verify no CORS issues (backend port matches `ROAMPAL_ALLOWED_ORIGINS`)
 - Browser console for WS errors
 
 ### Model Switching Fails
@@ -230,16 +229,16 @@ Roampal/
 - Clear browser cache if needed
 
 ### Tests Failing
-- ChromaDB data exists? Check data/chromadb/
+- ChromaDB data exists? Check data/chroma_db/
 - Ollama running? Port 11434
-- Clean state: `rm -rf data/chromadb && python main.py`
+- Clean state: `rm -rf data/chroma_db && python main.py`
 
 ## API Quick Reference
 
 ```python
-# Chat
-POST /api/agent/chat
-  {"message": "...", "conversation_id": "...", "mode": "learning"}
+# Chat (streaming)
+POST /api/agent/stream
+  {"message": "...", "conversation_id": "...", "mode": "learning", "images": [...]}
 
 # Memory
 GET /api/memory/stats
@@ -275,7 +274,8 @@ ROAMPAL_ENABLE_OUTCOME_TRACKING=true
 
 # Optional
 ROAMPAL_LOG_LEVEL=INFO
-ROAMPAL_PORT=8000
+ROAMPAL_PORT=8001            # 8765 PROD desktop, 8766 DEV desktop
+ROAMPAL_DATA_DIR=Roampal     # 'Roampal_DEV' for dev builds
 ```
 
 ## When to Edit What

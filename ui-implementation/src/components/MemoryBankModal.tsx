@@ -151,12 +151,45 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
     }
   };
 
+  // v0.3.3 Defect 13: two distinct delete handlers — active-view soft-archive
+  // (`handleDelete`, routes through `/delete/` → `user_delete_memory()` →
+  // `archive(reason="user_delete")`) vs archived-view hard-delete
+  // (`handlePermanentDelete`, routes through `/permanent-delete/` →
+  // `user_permanent_delete_memory()` → `delete_permanent(force=True)` +
+  // phantom sweep). The buttons in active view and archived view used to
+  // share one handler that always called `/delete/`, which became a no-op
+  // on already-archived entries after Section 7. Split below preserves
+  // active-view soft-archive behavior while wiring archived-view to the
+  // new hard-delete route.
   const handleDelete = async (id: string) => {
-    if (!confirm('Permanently delete this memory? This cannot be undone.')) return;
+    if (!confirm('Delete this memory? It will be moved to the archived view and can be restored later.')) return;
 
     setDeletingId(id);
     try {
       const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory-bank/delete/${id}`, {
+        method: 'DELETE'
+      });
+      if (response.ok) {
+        setToast({ message: 'Memory archived', type: 'success' });
+        fetchData();
+      } else {
+        const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        setToast({ message: `Failed to delete: ${error.detail || response.statusText}`, type: 'error' });
+      }
+    } catch (error) {
+      console.error('Failed to delete memory:', error);
+      setToast({ message: 'Failed to delete memory. Please try again.', type: 'error' });
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handlePermanentDelete = async (id: string) => {
+    if (!confirm('Permanently delete this memory? This cannot be undone.')) return;
+
+    setDeletingId(id);
+    try {
+      const response = await apiFetch(`${ROAMPAL_CONFIG.apiUrl}/api/memory-bank/permanent-delete/${id}`, {
         method: 'DELETE'
       });
       if (response.ok) {
@@ -167,7 +200,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
         setToast({ message: `Failed to delete: ${error.detail || response.statusText}`, type: 'error' });
       }
     } catch (error) {
-      console.error('Failed to delete memory:', error);
+      console.error('Failed to permanently delete memory:', error);
       setToast({ message: 'Failed to delete memory. Please try again.', type: 'error' });
     } finally {
       setDeletingId(null);
@@ -279,9 +312,9 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
                 <ArrowPathIcon className="w-4 h-4" />
               </button>
               <button
-                onClick={() => handleDelete(memory.id)}
+                onClick={() => handlePermanentDelete(memory.id)}
                 className="p-1.5 text-zinc-400 hover:text-red-400 hover:bg-zinc-700 rounded transition-colors"
-                title="Delete"
+                title="Delete permanently"
               >
                 <TrashIcon className="w-4 h-4" />
               </button>
@@ -294,7 +327,7 @@ export const MemoryBankModal: React.FC<MemoryBankModalProps> = ({ isOpen, onClos
         </div>
       </div>
     );
-  }, [archivedMemories, handleRestore, handleDelete]);
+  }, [archivedMemories, handleRestore, handlePermanentDelete]);
 
   if (!isOpen) return null;
 

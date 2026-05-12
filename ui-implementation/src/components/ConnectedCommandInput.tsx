@@ -1,20 +1,23 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { PaperAirplaneIcon } from '@heroicons/react/24/outline';
+import { PaperAirplaneIcon, PhotoIcon } from '@heroicons/react/24/outline';
 import { useChatStore } from '../stores/useChatStore';
 import logger from '../utils/logger';
 
 interface ConnectedCommandInputProps {
   hasChatModel?: boolean;
+  modelHasVision?: boolean;
 }
 
 /**
  * Connected version of CommandInput that uses the chat store
  */
-const ConnectedCommandInputComponent: React.FC<ConnectedCommandInputProps> = ({ hasChatModel = true }) => {
+const ConnectedCommandInputComponent: React.FC<ConnectedCommandInputProps> = ({ hasChatModel = true, modelHasVision = false }) => {
   const [message, setMessage] = useState('');
   const [showCommands, setShowCommands] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
+  const [attachments, setAttachments] = useState<File[]>([]);  // v0.3.3 Section 4: image attachments
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const {
     sendMessage,
@@ -105,15 +108,46 @@ const ConnectedCommandInputComponent: React.FC<ConnectedCommandInputProps> = ({ 
     const helpText = COMMANDS.map(cmd => `${cmd.name} - ${cmd.description}`).join('\n');
     logger.info('Available commands:\n' + helpText);
   }
-  
-  const handleSend = async () => {
-    if (!message.trim() || isProcessing) return;
+
+  // v0.3.3 Section 4: Image handling helpers
+  const addImageFiles = useCallback((files: FileList | File[]) => {
+    const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+    if (imageFiles.length) {
+      setAttachments(prev => [...prev, ...imageFiles]);
+    }
+  }, []);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    if (!modelHasVision) return;
+
+    const items = e.clipboardData.items;
+    const imageFiles: File[] = [];
+    for (const item of items) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length) {
+      e.preventDefault();
+      setAttachments(prev => [...prev, ...imageFiles]);
+    }
+  }, [modelHasVision]);
+
+  const removeAttachment = useCallback((index: number) => {
+    setAttachments(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+    const handleSend = async () => {
+    if ((!message.trim() && attachments.length === 0) || isProcessing) return;
 
     // Store message before clearing
     const messageToSend = message;
 
     // Clear input immediately
     setMessage('');
+    const filesToSend = attachments;
+    setAttachments([]);
 
     // Check for commands
     if (messageToSend.startsWith('/')) {
@@ -141,10 +175,10 @@ const ConnectedCommandInputComponent: React.FC<ConnectedCommandInputProps> = ({ 
         }
       }
       // Still send the message
-      await sendMessage(messageToSend);
+      await sendMessage(messageToSend, filesToSend.length ? filesToSend : undefined);
     } else {
       // Regular message
-      await sendMessage(messageToSend);
+      await sendMessage(messageToSend, filesToSend.length ? filesToSend : undefined);
     }
   };
 
@@ -206,12 +240,34 @@ const ConnectedCommandInputComponent: React.FC<ConnectedCommandInputProps> = ({ 
 
       {/* Input container */}
       <div className="p-3 bg-zinc-950 border border-zinc-800 focus-within:border-blue-500/50 rounded-2xl transition-all">
+        {/* v0.3.3 Section 4: Image attachment previews */}
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2 pb-2 border-b border-zinc-800">
+            {attachments.map((file, index) => (
+              <div key={index} className="relative group">
+                <img
+                  src={URL.createObjectURL(file)}
+                  alt="attachment"
+                  className="w-16 h-16 rounded-lg object-cover ring-1 ring-zinc-700"
+                />
+                <button
+                  onClick={() => removeAttachment(index)}
+                  className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Textarea and actions */}
         <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
+            onPaste={handlePaste}  // v0.3.3 Section 4: paste images
             onKeyDown={handleKeyDown}
             placeholder={!hasChatModel ? "Install a chat model to start" : isProcessing ? "Processing... (type your next message)" : "Ready when you are."}
             disabled={!hasChatModel}
@@ -219,16 +275,38 @@ const ConnectedCommandInputComponent: React.FC<ConnectedCommandInputProps> = ({ 
             style={{ minHeight: '24px', maxHeight: '208px', overflowY: 'auto' }}
             rows={1}
           />
-          
+
+          {/* v0.3.3 Section 4: Photo icon button - gated by model vision capability */}
+          {modelHasVision && (
+            <>
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept="image/*"
+                multiple
+                onChange={(e) => e.target.files && addImageFiles(e.target.files)}
+                className="hidden"
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                type="button"
+                className="p-1.5 text-zinc-500 hover:text-zinc-300 transition-colors"
+                title="Attach image (paste also supported)"
+              >
+                <PhotoIcon className="w-5 h-5" />
+              </button>
+            </>
+          )}
+
           {/* Action buttons */}
           <div className="flex items-center gap-1">
             <button
               onClick={isProcessing ? cancelProcessing : handleSend}
-              disabled={!isProcessing && !message.trim()}
+              disabled={!isProcessing && !message.trim() && attachments.length === 0}
               className={`p-1.5 transition-all duration-200 ${
                 isProcessing
                   ? 'text-red-500 hover:text-red-400 hover:scale-110'
-                  : message.trim()
+                  : (message.trim() || attachments.length > 0)
                   ? 'text-blue-500 hover:text-blue-400 hover:scale-110 hover:drop-shadow-[0_0_8px_rgba(59,130,246,0.5)]'
                   : 'text-zinc-600 cursor-not-allowed'
               }`}

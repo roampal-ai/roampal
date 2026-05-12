@@ -160,9 +160,9 @@ Works with any tool-calling model via Ollama or LM Studio:
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](dev/docs/architecture.md) | 5-tier memory, knowledge graphs, technical deep-dive |
+| [Architecture](dev/docs/architecture.md) | 5-tier memory, retrieval pipeline, technical deep-dive |
 | [Benchmarks](dev/docs/releases/v0.3.1/RELEASE_NOTES.md#benchmark-evidence) | LoCoMo evaluation, TagCascade results |
-| [Release Notes](dev/docs/releases/v0.3.2/RELEASE_NOTES.md) | Latest (v0.3.2): chat-path latency fixes, fact dedup, universal provider error handling, shared-DB timestamp tolerance, TagCascade filter correctness |
+| [Release Notes](dev/docs/releases/v0.3.3/RELEASE_NOTES.md) | Latest (v0.3.3): multimodal image input, dynamic capability + context detection, ChromaDB phantom-handling closing issue #8, atomic config writes, Harmony token cleanup |
 
 ---
 

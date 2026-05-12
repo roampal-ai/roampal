@@ -60,11 +60,27 @@ async def _call_llm(
     system_prompt: str = "You are part of a memory system. Return ONLY valid JSON. No other text. Be concise.",
 ) -> Optional[Dict[str, Any]]:
     """Call LLM via OllamaClient and extract JSON response."""
+    # v0.3.3 Defect 16 (preventive layer): prepend `/no_think\n` to BOTH
+    # system_prompt and user prompt before dispatch. This is a token-level
+    # instruction that qwen3-family models honor as "skip thinking mode
+    # for this turn." Ported from roampal-core's OpenCode plugin
+    # (plugins/opencode/roampal.ts:1051-1052, 1274-1275) which has used
+    # this pattern since v0.5.3.1. Critical for the sidecar path because:
+    #   • LM Studio's non-streaming /v1/chat/completions returns
+    #     reasoning_content + empty content when thinking burns max_tokens.
+    #   • Without suppression, qwen3.6-35b-a3b spent its full 4000-token
+    #     budget on <think>...</think> reasoning, leaving content empty,
+    #     leading _call_llm to return None and retry-queue to drop tasks
+    #     after 3 attempts (see backend log 18:12-18:20 this session).
+    # The reactive fallback in ollama_client.py:159-181 (read
+    # reasoning_content if content empty) remains as a safety net for any
+    # model that ignores the /no_think prefix. Non-qwen3 models simply
+    # see /no_think as plain text and ignore it — no negative side effect.
     try:
         response = await client.generate_response(
-            prompt=prompt,
+            prompt=f"/no_think\n{prompt}",
             model=model,
-            system_prompt=system_prompt,
+            system_prompt=f"/no_think\n{system_prompt}",
         )
         if not response:
             return None
@@ -129,7 +145,7 @@ You responded:
 "{assistant_msg[:8000]}"
 
 The user then followed up with:
-"{followup[:4000]}"
+"{followup[:8000]}"
 {memory_section}
 Respond with ONLY a JSON object:
 {{ "summary": "<~300 chars>", "outcome": "<worked|failed|partial|unknown>"{memory_score_template} }}

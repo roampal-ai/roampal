@@ -1,286 +1,10 @@
 """
-Unit tests for MCP (Model Context Protocol) handler functions in main.py.
+Unit tests for MCP-related logic — scoring path branching and Claude Code config detection.
 
-Tests critical functions:
-- _should_clear_action_cache: Detects conversation boundaries (time gaps, topic shifts)
-- _cache_action_with_boundary_check: Caches actions with automatic boundary detection
-- detect_mcp_client: Identifies which MCP client is connected
+v0.3.3 §12: Action-KG tests removed alongside the dead code they covered
+(_should_clear_action_cache, _cache_action_with_boundary_check, _mcp_action_cache,
+MCP_CACHE_EXPIRY_SECONDS). The Action-KG plan never landed past v0.3.1's KG removal.
 """
-
-import pytest
-from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock, AsyncMock
-import sys
-import asyncio
-
-# Import the functions under test
-# We need to set up imports carefully since main.py has side effects
-sys.path.insert(0, str(__file__).rsplit('tests', 1)[0])
-
-from main import (
-    _should_clear_action_cache,
-    _cache_action_with_boundary_check,
-    _mcp_action_cache,
-    MCP_CACHE_EXPIRY_SECONDS,
-)
-from modules.memory.types import ActionOutcome
-
-
-class TestShouldClearActionCache:
-    """Tests for _should_clear_action_cache - conversation boundary detection."""
-
-    def setup_method(self):
-        """Clear cache before each test."""
-        _mcp_action_cache.clear()
-
-    def test_no_existing_cache_returns_false(self):
-        """Should return False when no cache exists for session."""
-        should_clear, reason = _should_clear_action_cache("new_session", "coding")
-
-        assert should_clear is False
-        assert "No existing cache" in reason
-
-    def test_same_context_same_time_no_clear(self):
-        """Should not clear when context is same and recent."""
-        session_id = "test_session"
-        _mcp_action_cache[session_id] = {
-            "actions": [],
-            "last_context": "coding",
-            "last_activity": datetime.now()
-        }
-
-        should_clear, reason = _should_clear_action_cache(session_id, "coding")
-
-        assert should_clear is False
-        assert "same_conversation" in reason
-
-    def test_time_gap_triggers_clear(self):
-        """Should clear cache when time gap exceeds threshold."""
-        session_id = "test_session"
-        old_time = datetime.now() - timedelta(seconds=MCP_CACHE_EXPIRY_SECONDS + 100)
-        _mcp_action_cache[session_id] = {
-            "actions": [MagicMock()],  # Dummy action
-            "last_context": "coding",
-            "last_activity": old_time
-        }
-
-        should_clear, reason = _should_clear_action_cache(session_id, "coding")
-
-        assert should_clear is True
-        assert "time_gap" in reason
-
-    def test_context_shift_triggers_clear(self):
-        """Should clear cache when context shifts to different topic."""
-        session_id = "test_session"
-        _mcp_action_cache[session_id] = {
-            "actions": [MagicMock()],
-            "last_context": "coding",
-            "last_activity": datetime.now()
-        }
-
-        should_clear, reason = _should_clear_action_cache(session_id, "fitness")
-
-        assert should_clear is True
-        assert "context_shift" in reason
-        assert "coding" in reason
-        assert "fitness" in reason
-
-    def test_general_context_ignored(self):
-        """Shifts to/from 'general' should not trigger clear (too noisy)."""
-        session_id = "test_session"
-        _mcp_action_cache[session_id] = {
-            "actions": [MagicMock()],
-            "last_context": "coding",
-            "last_activity": datetime.now()
-        }
-
-        # Shift to general - should NOT clear
-        should_clear, reason = _should_clear_action_cache(session_id, "general")
-        assert should_clear is False
-
-        # Shift from general - should NOT clear either
-        _mcp_action_cache[session_id]["last_context"] = "general"
-        should_clear, reason = _should_clear_action_cache(session_id, "coding")
-        assert should_clear is False
-
-    def test_recent_activity_no_clear(self):
-        """Should not clear when activity is recent even with time passed."""
-        session_id = "test_session"
-        recent_time = datetime.now() - timedelta(seconds=60)  # 1 minute ago
-        _mcp_action_cache[session_id] = {
-            "actions": [],
-            "last_context": "coding",
-            "last_activity": recent_time
-        }
-
-        should_clear, reason = _should_clear_action_cache(session_id, "coding")
-
-        assert should_clear is False
-
-
-class TestCacheActionWithBoundaryCheck:
-    """Tests for _cache_action_with_boundary_check - action caching with boundaries."""
-
-    def setup_method(self):
-        """Clear cache before each test."""
-        _mcp_action_cache.clear()
-
-    def test_first_action_creates_cache(self):
-        """First action for a session should create cache entry."""
-        session_id = "new_session"
-        action = ActionOutcome(
-            action_type="search_memory",
-            context_type="coding",
-            outcome="unknown"
-        )
-
-        _cache_action_with_boundary_check(session_id, action, "coding")
-
-        assert session_id in _mcp_action_cache
-        assert len(_mcp_action_cache[session_id]["actions"]) == 1
-        assert _mcp_action_cache[session_id]["last_context"] == "coding"
-
-    def test_subsequent_actions_appended(self):
-        """Subsequent actions should be appended to cache."""
-        session_id = "test_session"
-        action1 = ActionOutcome(
-            action_type="search_memory",
-            context_type="coding",
-            outcome="unknown"
-        )
-        action2 = ActionOutcome(
-            action_type="add_to_memory_bank",
-            context_type="coding",
-            outcome="unknown"
-        )
-
-        _cache_action_with_boundary_check(session_id, action1, "coding")
-        _cache_action_with_boundary_check(session_id, action2, "coding")
-
-        assert len(_mcp_action_cache[session_id]["actions"]) == 2
-
-    def test_context_shift_clears_and_restarts(self):
-        """Context shift should clear old actions and start fresh."""
-        session_id = "test_session"
-        old_action = ActionOutcome(
-            action_type="search_memory",
-            context_type="coding",
-            outcome="unknown"
-        )
-
-        # Add initial action
-        _cache_action_with_boundary_check(session_id, old_action, "coding")
-        assert len(_mcp_action_cache[session_id]["actions"]) == 1
-
-        # Context shift should clear and add new
-        new_action = ActionOutcome(
-            action_type="search_memory",
-            context_type="fitness",
-            outcome="unknown"
-        )
-        _cache_action_with_boundary_check(session_id, new_action, "fitness")
-
-        # Should have only 1 action (old ones cleared)
-        assert len(_mcp_action_cache[session_id]["actions"]) == 1
-        assert _mcp_action_cache[session_id]["last_context"] == "fitness"
-
-    def test_last_activity_updated(self):
-        """Last activity timestamp should be updated on each action."""
-        session_id = "test_session"
-        action = ActionOutcome(
-            action_type="search_memory",
-            context_type="coding",
-            outcome="unknown"
-        )
-
-        before = datetime.now()
-        _cache_action_with_boundary_check(session_id, action, "coding")
-        after = datetime.now()
-
-        last_activity = _mcp_action_cache[session_id]["last_activity"]
-        assert before <= last_activity <= after
-
-    def test_time_gap_clears_cache(self):
-        """Time gap exceeding threshold should clear cache."""
-        session_id = "test_session"
-
-        # Manually set up old cache
-        old_time = datetime.now() - timedelta(seconds=MCP_CACHE_EXPIRY_SECONDS + 100)
-        _mcp_action_cache[session_id] = {
-            "actions": [MagicMock(), MagicMock(), MagicMock()],  # 3 old actions
-            "last_context": "coding",
-            "last_activity": old_time
-        }
-
-        # Add new action - should clear the 3 old ones
-        new_action = ActionOutcome(
-            action_type="search_memory",
-            context_type="coding",
-            outcome="unknown"
-        )
-        _cache_action_with_boundary_check(session_id, new_action, "coding")
-
-        # Should have only 1 action
-        assert len(_mcp_action_cache[session_id]["actions"]) == 1
-
-
-class TestMCPCacheExpiry:
-    """Tests for MCP cache expiry configuration."""
-
-    def test_expiry_constant_is_reasonable(self):
-        """Cache expiry should be a reasonable value (5-30 minutes)."""
-        assert 300 <= MCP_CACHE_EXPIRY_SECONDS <= 1800  # 5-30 minutes
-
-    def test_expiry_is_integer(self):
-        """Cache expiry should be an integer for seconds calculation."""
-        assert isinstance(MCP_CACHE_EXPIRY_SECONDS, int)
-
-
-class TestActionOutcomeIntegration:
-    """Tests for ActionOutcome type integration with cache."""
-
-    def setup_method(self):
-        """Clear cache before each test."""
-        _mcp_action_cache.clear()
-
-    def test_action_outcome_fields_preserved(self):
-        """ActionOutcome fields should be preserved in cache."""
-        session_id = "test_session"
-        action = ActionOutcome(
-            action_type="search_memory",
-            context_type="coding",
-            outcome="worked",
-            action_params={"query": "test query", "limit": 5},
-            collection="history",
-            doc_id="doc_123"
-        )
-
-        _cache_action_with_boundary_check(session_id, action, "coding")
-
-        cached_action = _mcp_action_cache[session_id]["actions"][0]
-        assert cached_action.action_type == "search_memory"
-        assert cached_action.context_type == "coding"
-        assert cached_action.outcome == "worked"
-        assert cached_action.action_params == {"query": "test query", "limit": 5}
-        assert cached_action.collection == "history"
-        assert cached_action.doc_id == "doc_123"
-
-    def test_multiple_action_types(self):
-        """Different action types should all be cacheable."""
-        session_id = "test_session"
-        action_types = ["search_memory", "add_to_memory_bank", "update_memory", "get_context_insights"]
-
-        for action_type in action_types:
-            action = ActionOutcome(
-                action_type=action_type,
-                context_type="coding",
-                outcome="unknown"
-            )
-            _cache_action_with_boundary_check(session_id, action, "coding")
-
-        assert len(_mcp_action_cache[session_id]["actions"]) == 4
-        cached_types = [a.action_type for a in _mcp_action_cache[session_id]["actions"]]
-        assert cached_types == action_types
 
 
 class TestMemoryScoresParameter:
@@ -458,7 +182,6 @@ class TestClaudeCodeMCPDetection:
 
     def test_claude_code_config_path_detection(self, tmp_path):
         """Should detect ~/.claude.json as Claude Code CLI config."""
-        from pathlib import Path
 
         # Simulate Claude Code CLI config structure
         config_path = tmp_path / ".claude.json"
@@ -483,7 +206,6 @@ class TestClaudeCodeMCPDetection:
 
     def test_claude_code_vs_claude_desktop_format(self):
         """Claude Code uses flat format, Claude Desktop uses nested."""
-        import json
 
         # Claude Code CLI format (v0.3.0 fix target)
         claude_code_format = {
@@ -509,7 +231,6 @@ class TestClaudeCodeMCPDetection:
 
     def test_wrong_path_not_detected_as_claude_code(self, tmp_path):
         """~/.claude/mcp.json should NOT be detected as Claude Code CLI config."""
-        from pathlib import Path
 
         # This is the WRONG path - Claude Code doesn't use this
         wrong_dir = tmp_path / ".claude"
@@ -555,7 +276,6 @@ class TestClaudeCodeMCPDetection:
 
     def test_roampal_connection_detection(self, tmp_path):
         """Should correctly detect roampal connection status."""
-        import json
 
         # Connected config
         connected_config = {

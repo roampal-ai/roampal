@@ -40,7 +40,6 @@ from typing import Dict, Any, Optional
 # Core services
 from modules.embedding.embedding_service import EmbeddingService
 from modules.memory.unified_memory_system import UnifiedMemorySystem
-from modules.memory.types import ActionOutcome
 from modules.llm.ollama_client import OllamaClient
 from config.feature_flag_validator import FeatureFlagValidator
 from config.settings import DATA_PATH
@@ -61,6 +60,7 @@ from app.routers.backup import router as backup_router
 from app.routers.memory_bank import router as memory_bank_router
 from app.routers.system_health import router as system_health_router
 from app.routers.data_management import router as data_management_router
+from app.routers.attachments import router as attachments_router  # v0.3.3 §4 Defect 4
 from backend.api.book_upload_api import router as book_upload_router
 from app.routers.mcp import router as mcp_router
 from app.routers.mcp_servers import (
@@ -100,84 +100,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# MCP session-based caches for outcome scoring and cold-start injection
-_mcp_search_cache = {}  # {session_id: {"doc_ids": [...], "query": "...", "timestamp": ...}}
-_mcp_first_tool_call = (
-    set()
-)  # Track first tool call per session for cold-start injection
-_mcp_action_cache = {}  # {session_id: {"actions": [...], "last_context": str, "last_activity": datetime}} - Track tool actions for Action-Effectiveness KG
-
-# MCP conversation boundary detection configuration
-MCP_CACHE_EXPIRY_SECONDS = (
-    600  # 10 minutes - clear cache if no activity (new conversation likely started)
-)
-
-
-def _should_clear_action_cache(session_id: str, new_context: str) -> tuple[bool, str]:
-    """
-    Detect conversation boundaries to prevent cross-conversation action scoring.
-
-    MCP protocol doesn't provide conversation IDs, so we infer boundaries from:
-    1. Time gaps (10+ minutes = likely new conversation)
-    2. Context shifts (coding → fitness = likely new conversation)
-
-    Returns:
-        (should_clear: bool, reason: str)
-    """
-    if session_id not in _mcp_action_cache:
-        return False, "No existing cache"
-
-    cache = _mcp_action_cache[session_id]
-    last_activity = cache.get("last_activity")
-    last_context = cache.get("last_context")
-
-    # Signal 1: TIME GAP - 10+ minutes since last tool call
-    if last_activity:
-        time_gap = (datetime.now() - last_activity).total_seconds()
-        if time_gap > MCP_CACHE_EXPIRY_SECONDS:
-            return True, f"time_gap={time_gap:.0f}s (>{MCP_CACHE_EXPIRY_SECONDS}s)"
-
-    # Signal 2: CONTEXT SHIFT - Topic changed significantly
-    # Ignore shifts to/from "general" (too noisy, not reliable)
-    if last_context and new_context != last_context:
-        if last_context != "general" and new_context != "general":
-            return True, f"context_shift: {last_context} → {new_context}"
-
-    return False, "same_conversation"
-
-
-def _cache_action_with_boundary_check(
-    session_id: str, action: "ActionOutcome", context_type: str
-):
-    """
-    Cache action with automatic conversation boundary detection.
-
-    Clears cache if conversation boundary detected, then caches the new action.
-    """
-    # Check for conversation boundary
-    should_clear, reason = _should_clear_action_cache(session_id, context_type)
-    if should_clear:
-        actions_discarded = len(_mcp_action_cache[session_id].get("actions", []))
-        logger.warning(
-            f"[MCP] Conversation boundary detected ({reason}). "
-            f"Clearing {actions_discarded} cached actions to prevent cross-conversation scoring."
-        )
-        del _mcp_action_cache[session_id]
-
-    # Initialize cache if needed
-    if session_id not in _mcp_action_cache:
-        _mcp_action_cache[session_id] = {
-            "actions": [],
-            "last_context": context_type,
-            "last_activity": datetime.now(),
-        }
-
-    # Add action
-    _mcp_action_cache[session_id]["actions"].append(action)
-
-    # Update metadata
-    _mcp_action_cache[session_id]["last_activity"] = datetime.now()
-    _mcp_action_cache[session_id]["last_context"] = context_type
+# v0.3.3 §12: _mcp_search_cache and _mcp_action_cache removed — they were
+# leftovers from the v0.2.6 Action-KG plan (KG removed in v0.3.1). Both had
+# no readers; record_action_outcome was a no-op stub. Cold-start dedup state
+# kept because _inject_cold_start_if_needed actually reads it.
+_mcp_first_tool_call: set[str] = set()
 
 
 async def _inject_cold_start_if_needed(
@@ -284,6 +211,9 @@ async def lifespan(app: FastAPI):
                 logger.info(
                     f"✓ UnifiedMemorySystem initialized (server mode: {use_chromadb_server})"
                 )
+
+                # v0.3.3: Clean up phantom ChromaDB entries from pre-fix hard deletes
+                await app.state.memory._startup_cleanup_memory_bank_phantoms()
 
                 # Initialize session cleanup manager
                 sessions_dir = Path(DATA_PATH) / "sessions"
@@ -785,10 +715,46 @@ async def lifespan(app: FastAPI):
 
         # Start sidecar retry queue processor
         try:
-            from modules.memory.sidecar_queue import process_retry_queue
+            from modules.memory.sidecar_queue import (
+                process_retry_queue,
+                register_terminal_failure_callback,
+                register_retry_success_callback,
+            )
+
+            # v0.3.3 Defect 14: wire the queue's outcome callbacks to app.state
+            # so the UI's /api/model/sidecar/status indicator only alarms when
+            # the queue actually drops a score (3-attempt budget exhausted),
+            # not on the inevitable single-attempt transient failures the
+            # queue is designed to absorb.
+            def _on_terminal_failure(item: Dict[str, Any]) -> None:
+                doc_id = item.get("doc_id", "unknown")
+                task_type = item.get("task_type", "task")
+                last_err = item.get("last_error", "unknown error")
+                # Use the short form so the chat-header badge / status panel
+                # stays readable; the full traceback is in the backend log.
+                app.state.sidecar_last_error = (
+                    f"Dropped {task_type} for {doc_id} after retries: "
+                    f"{str(last_err)[:120]}"
+                )
+                logger.error(
+                    f"[SIDECAR] Terminal failure surfaced to UI: {doc_id} ({task_type})"
+                )
+
+            def _on_retry_success(item: Dict[str, Any]) -> None:
+                # Queue self-healed — clear any sticky error from a prior
+                # terminal failure or from older code paths.
+                if getattr(app.state, "sidecar_last_error", ""):
+                    app.state.sidecar_last_error = ""
+                    logger.info(
+                        f"[SIDECAR] Retry self-healed — cleared sidecar_last_error "
+                        f"(was set from earlier terminal failure)"
+                    )
+
+            register_terminal_failure_callback(_on_terminal_failure)
+            register_retry_success_callback(_on_retry_success)
 
             asyncio.create_task(process_retry_queue())
-            logger.info("✓ Sidecar retry queue processor started")
+            logger.info("✓ Sidecar retry queue processor started with status callbacks (Defect 14)")
         except ImportError as e:
             logger.warning(f"Sidecar queue module not available: {e}")
 
@@ -906,6 +872,7 @@ app.include_router(
 )  # System health and disk monitoring
 app.include_router(mcp_router)  # MCP integrations (Claude Desktop, Claude Code, Cursor)
 app.include_router(mcp_servers_router)  # v0.2.5: External MCP tool server management
+app.include_router(attachments_router)  # v0.3.3 §4 Defect 4: image attachment bytes endpoint
 
 
 @app.get("/health")
@@ -1123,12 +1090,7 @@ async def run_mcp_server():
             f"[MCP] Embedding pre-warm failed (first search will be slow): {e}"
         )
 
-    # Initialize MCP Session Manager with memory reference (CRITICAL for automatic outcome detection)
-    from modules.mcp.session_manager import MCPSessionManager
     from modules.mcp.client_detector import detect_mcp_client, get_client_display_name
-
-    mcp_session_manager = MCPSessionManager(DATA_PATH, memory)
-    logger.info("[MCP] Session manager initialized with automatic outcome detection")
 
     # Create MCP server
     server = Server("roampal-memory")
@@ -1431,62 +1393,6 @@ ACTIVE MEMORY MANAGEMENT:
         client_name = get_client_display_name(session_id)
         logger.info(f"[MCP] Tool called: {name} from {client_name}")
 
-        # Record tool call to analytics file (background, non-blocking)
-        async def log_tool_call():
-            try:
-                analytics_file = data_path / "mcp_tool_calls.jsonl"
-                with open(analytics_file, "a", encoding="utf-8") as f:
-                    f.write(
-                        json.dumps(
-                            {
-                                "tool": name,
-                                "session_id": session_id,
-                                "client": client_name,
-                                "timestamp": datetime.now().isoformat(),
-                                "args_summary": {
-                                    k: str(v)[:100] for k, v in arguments.items()
-                                },  # Truncate long args
-                            }
-                        )
-                        + "\n"
-                    )
-            except Exception as e:
-                logger.error(f"[MCP] Failed to log tool call: {e}")
-
-        asyncio.create_task(log_tool_call())
-
-        # Detect context type for Action-Effectiveness KG tracking (v0.2.1)
-        session_id = detect_mcp_client()
-        context_type = "general"  # Default fallback
-
-        # Get recent conversation for context detection
-        session_file = data_path / "mcp_sessions" / f"{session_id}.json"
-        recent_conv = []
-        if session_file.exists():
-            try:
-                session_data = json.loads(session_file.read_text(encoding="utf-8"))
-                turns = session_data.get("turns", [])[-5:]  # Last 5 turns
-                for turn in turns:
-                    user_msg = turn.get("user_message", "")
-                    ai_msg = turn.get("ai_response", "")
-                    if user_msg:
-                        recent_conv.append({"role": "user", "content": user_msg})
-                    if ai_msg:
-                        recent_conv.append({"role": "assistant", "content": ai_msg})
-            except Exception as e:
-                logger.warning(
-                    f"[MCP] Failed to load session for context detection: {e}"
-                )
-
-        # Detect context for this interaction
-        try:
-            context_type = await memory.detect_context_type(
-                system_prompts=[], recent_messages=recent_conv
-            )
-            logger.info(f"[MCP] Context detected: {context_type}")
-        except Exception as e:
-            logger.warning(f"[MCP] Context detection failed: {e}")
-
         try:
             if name == "search_memory":
                 query = arguments.get("query")
@@ -1610,44 +1516,6 @@ ACTIVE MEMORY MANAGEMENT:
                         )
                     # sort_by == "relevance" is default (no re-sorting needed, vector similarity order)
 
-                # Cache doc_ids from scorable collections for outcome-based scoring
-                # Per architecture.md line 572-573: Cache doc_ids + query + collections for record_response scoring
-                cached_doc_ids = []
-                result_collections = set()  # Track which collections actually returned results (ALL, for KG routing)
-                if results:
-                    for r in results:
-                        metadata = r.get("metadata", {})
-                        collection = r.get("collection") or metadata.get(
-                            "collection", "unknown"
-                        )
-                        doc_id = r.get("doc_id") or r.get("id")
-
-                        # Track ALL collections for KG routing updates (architecture.md line 1088-1104)
-                        result_collections.add(collection)
-
-                        # Cache ALL doc_ids for Action KG tracking (v0.2.6 - unified with internal system)
-                        # Books and memory_bank now tracked for doc-level effectiveness insights
-                        if doc_id:
-                            cached_doc_ids.append(doc_id)
-
-                # v0.2.9: Build position mapping for selective scoring (related=[1, 3] support)
-                positions = {}
-                for idx, doc_id in enumerate(cached_doc_ids, 1):
-                    positions[idx] = doc_id
-
-                _mcp_search_cache[session_id] = {
-                    "doc_ids": cached_doc_ids,
-                    "positions": positions,  # v0.2.9: Position -> doc_id mapping for related param
-                    "query": query,
-                    "collections": list(
-                        result_collections
-                    ),  # Cache ACTUAL collections that returned results
-                    "timestamp": datetime.now(),
-                }
-                logger.info(
-                    f"[MCP] Cached {len(cached_doc_ids)} doc_ids from query '{query[:50]}' (result collections: {result_collections}, positions: 1-{len(cached_doc_ids)})"
-                )
-
                 if not results:
                     collection_str = (
                         ", ".join(collections)
@@ -1722,29 +1590,6 @@ ACTIVE MEMORY MANAGEMENT:
                 # Apply cold-start injection if this is first tool call
                 text = await _inject_cold_start_if_needed(session_id, text, memory)
 
-                # Track action for Action-Effectiveness KG (will be scored on record_response)
-                collections_used = (
-                    list(result_collections)
-                    if result_collections
-                    else (collections if collections else ["all"])
-                )
-                for coll in collections_used:
-                    action = ActionOutcome(
-                        action_type="search_memory",
-                        context_type=context_type,
-                        outcome="unknown",  # Will be set when record_response is called
-                        action_params={"query": query, "limit": limit},
-                        collection=coll if coll != "all" else None,
-                        doc_id=cached_doc_ids[0]
-                        if cached_doc_ids
-                        else None,  # v0.2.6: Track first result for doc-level insights
-                    )
-                    _cache_action_with_boundary_check(session_id, action, context_type)
-
-                logger.info(
-                    f"[MCP] Cached {len(collections_used)} search_memory actions (context={context_type}, total_cached={len(_mcp_action_cache[session_id]['actions'])})"
-                )
-
                 return types.CallToolResult(
                     content=[types.TextContent(type="text", text=text)]
                 )
@@ -1778,20 +1623,6 @@ ACTIVE MEMORY MANAGEMENT:
                 text = f"Added to memory bank (ID: {doc_id})"
                 text = await _inject_cold_start_if_needed(session_id, text, memory)
 
-                # Track action for Action-Effectiveness KG
-                action = ActionOutcome(
-                    action_type="create_memory",
-                    context_type=context_type,
-                    outcome="unknown",
-                    action_params={"content_preview": content[:50]},
-                    doc_id=doc_id,
-                    collection="memory_bank",
-                )
-                _cache_action_with_boundary_check(session_id, action, context_type)
-                logger.info(
-                    f"[MCP] Cached create_memory action (context={context_type}, total_cached={len(_mcp_action_cache[session_id]['actions'])})"
-                )
-
                 return types.CallToolResult(
                     content=[types.TextContent(type="text", text=text)]
                 )
@@ -1824,20 +1655,6 @@ ACTIVE MEMORY MANAGEMENT:
                     text = f"Updated memory (ID: {doc_id})"
                     text = await _inject_cold_start_if_needed(session_id, text, memory)
 
-                    # Track action for Action-Effectiveness KG
-                    action = ActionOutcome(
-                        action_type="update_memory",
-                        context_type=context_type,
-                        outcome="unknown",
-                        action_params={"new_content_preview": new_content[:50]},
-                        doc_id=doc_id,
-                        collection="memory_bank",
-                    )
-                    _cache_action_with_boundary_check(session_id, action, context_type)
-                    logger.info(
-                        f"[MCP] Cached update_memory action (context={context_type}, total_cached={len(_mcp_action_cache[session_id]['actions'])})"
-                    )
-
                     return types.CallToolResult(
                         content=[types.TextContent(type="text", text=text)]
                     )
@@ -1869,20 +1686,6 @@ ACTIVE MEMORY MANAGEMENT:
 
                     text = f"Archived memory (ID: {doc_id})"
                     text = await _inject_cold_start_if_needed(session_id, text, memory)
-
-                    # Track action for Action-Effectiveness KG
-                    action = ActionOutcome(
-                        action_type="archive_memory",
-                        context_type=context_type,
-                        outcome="unknown",
-                        action_params={"content_preview": content[:50]},
-                        doc_id=doc_id,
-                        collection="memory_bank",
-                    )
-                    _cache_action_with_boundary_check(session_id, action, context_type)
-                    logger.info(
-                        f"[MCP] Cached archive_memory action (context={context_type}, total_cached={len(_mcp_action_cache[session_id]['actions'])})"
-                    )
 
                     return types.CallToolResult(
                         content=[types.TextContent(type="text", text=text)]
@@ -1936,16 +1739,6 @@ ACTIVE MEMORY MANAGEMENT:
                         conversation_id=session_id,
                         recent_conversation=recent_conv,
                     )
-
-                    # Cache doc_ids for scoring
-                    cached_doc_ids = context.get("doc_ids", [])
-                    if cached_doc_ids:
-                        _mcp_search_cache[session_id] = {
-                            "doc_ids": cached_doc_ids,
-                            "query": query,
-                            "source": "get_context_insights",
-                            "timestamp": datetime.now().isoformat(),
-                        }
 
                     # Format response
                     user_facts = context.get("user_facts", [])
@@ -2026,7 +1819,7 @@ ACTIVE MEMORY MANAGEMENT:
                     "role": "learning",
                     "source": session_id,
                     "score": 0.7,
-                    "timestamp": datetime.now().isoformat(),
+                    "created_at": datetime.now().isoformat(),
                 }
                 # Extract noun_tags for TagCascade (LLM via TagService, no regex)
                 if noun_tags:
@@ -2087,7 +1880,7 @@ ACTIVE MEMORY MANAGEMENT:
                         "role": "learning",
                         "source": session_id,
                         "score": 0.5,
-                        "timestamp": datetime.now().isoformat(),
+                        "created_at": datetime.now().isoformat(),
                     }
                     if noun_tags:
                         summary_metadata["noun_tags"] = json.dumps(noun_tags)
@@ -2117,7 +1910,7 @@ ACTIVE MEMORY MANAGEMENT:
                                 "role": "fact",
                                 "source": session_id,
                                 "score": 0.5,
-                                "timestamp": datetime.now().isoformat(),
+                                "created_at": datetime.now().isoformat(),
                             }
                             if fact_noun_tags:
                                 fact_metadata["noun_tags"] = json.dumps(fact_noun_tags)
@@ -2129,30 +1922,6 @@ ACTIVE MEMORY MANAGEMENT:
                             stored_facts += 1
                         except Exception as e:
                             logger.warning(f"Failed to store fact: {e}")
-
-                # 4. Score Action-Effectiveness KG
-                actions_scored = 0
-                if (
-                    exchange_outcome in ["worked", "failed", "partial"]
-                    and session_id in _mcp_action_cache
-                ):
-                    cache = _mcp_action_cache[session_id]
-                    cached_actions = cache.get("actions", [])
-                    for action in cached_actions:
-                        action.outcome = exchange_outcome
-                        try:
-                            await memory.record_action_outcome(action)
-                            actions_scored += 1
-                        except Exception as e:
-                            logger.warning(
-                                f"[MCP] Failed to record action outcome: {e}"
-                            )
-
-                # 5. Clear caches after scoring
-                if session_id in _mcp_search_cache:
-                    del _mcp_search_cache[session_id]
-                if session_id in _mcp_action_cache:
-                    del _mcp_action_cache[session_id]
 
                 # Build response
                 parts = [f"Scored ({scored_count} memories updated)"]

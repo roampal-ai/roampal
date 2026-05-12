@@ -33,6 +33,9 @@ class MemoryBankService:
 
     # Capacity limit for memory bank
     MAX_ITEMS = 500
+    # v0.3.3 Section 8D: capacity-pressure auto-cleanup thresholds
+    ACTIVE_THRESHOLD = 400  # trigger consideration at 80% of MAX_ITEMS
+    ARCHIVED_RATIO_THRESHOLD = 0.5  # cleanup if >50% of total is archived
 
     def __init__(
         self,
@@ -81,6 +84,14 @@ class MemoryBankService:
         Raises:
             ValueError: If memory bank is at capacity
         """
+        # v0.3.3 Section 8D: opportunistic cleanup before capacity check.
+        # Archived entries still occupy the underlying ChromaDB collection
+        # even though _get_count() excludes them — long-running installs
+        # accumulate dead weight that degrades HNSW performance. Cleanup
+        # only fires when active is near MAX and archived dominates total,
+        # so the cost is bounded.
+        self._maybe_cleanup_archived()
+
         # Capacity check
         current_count = self._get_count()
         if current_count >= self.MAX_ITEMS:
@@ -283,23 +294,120 @@ class MemoryBankService:
         logger.info(f"User restored memory: {doc_id}")
         return True
 
-    async def delete(self, doc_id: str) -> bool:
-        """
-        User permanently deletes memory (hard delete).
+    async def delete_permanent(self, doc_id: str, *, force: bool = False) -> bool:
+        """v0.3.3 Section 8F: permanently hard-delete a memory_bank entry.
+
+        HNSW phantom risk: this leaves debris in the vector index that
+        bypasses metadata filters until the next phantom sweep. ONLY call
+        from contexts that follow up with a phantom sweep
+        (`cleanup_archived`, explicit GDPR flow).
+
+        For user-initiated deletes, call archive() instead.
 
         Args:
             doc_id: Memory to delete
+            force: Must be True; gate prevents future code from accidentally
+                wiring user-facing paths to hard delete.
 
         Returns:
             Success status
+
+        Raises:
+            RuntimeError: if force is not True.
         """
+        if not force:
+            raise RuntimeError(
+                "delete_permanent() requires force=True. "
+                "For user-facing deletes, use archive() instead."
+            )
         try:
             self.collection.delete_vectors([doc_id])
-            logger.info(f"User permanently deleted memory: {doc_id}")
+            logger.info(f"Permanently deleted memory: {doc_id}")
             return True
         except Exception as e:
             logger.error(f"Failed to delete memory {doc_id}: {e}")
             return False
+
+    def _sweep_phantoms(self) -> int:
+        """v0.3.3 Section 8A: remove HNSW-orphaned IDs from memory_bank.
+
+        ChromaDB's delete() marks entries as deleted but leaves IDs in
+        list_all_ids(). get_fragment() returns None for these phantoms
+        because document and metadata are gone. Safe to remove from the
+        index permanently.
+
+        Returns:
+            Number of phantom entries removed
+        """
+        try:
+            all_ids = self.collection.list_all_ids()
+            phantom_ids = [
+                doc_id for doc_id in all_ids
+                if not self.collection.get_fragment(doc_id)
+            ]
+            if phantom_ids:
+                self.collection.delete_vectors(phantom_ids)
+                logger.info(f"Swept {len(phantom_ids)} phantom entries from memory_bank")
+            return len(phantom_ids)
+        except Exception as e:
+            logger.warning(f"Phantom sweep error: {e}")
+            return 0
+
+    def _maybe_cleanup_archived(self) -> None:
+        """v0.3.3 Section 8D: auto-cleanup under capacity pressure.
+
+        Triggers when:
+          - active count >= ACTIVE_THRESHOLD (80% of MAX_ITEMS), AND
+          - archived entries >= ARCHIVED_RATIO_THRESHOLD of underlying total.
+
+        No-op otherwise. Cheap to call on every store(); the gates make
+        the actual cleanup rare.
+        """
+        try:
+            active = self._get_count()
+            if active < self.ACTIVE_THRESHOLD:
+                return
+            total = len(self.collection.list_all_ids())
+            archived = total - active
+            if total == 0 or archived / total < self.ARCHIVED_RATIO_THRESHOLD:
+                return
+            cleaned = self.cleanup_archived()
+            if cleaned:
+                logger.info(
+                    f"Auto-cleanup at capacity pressure: removed {cleaned} archived entries"
+                )
+        except Exception as e:
+            logger.warning(f"Auto-cleanup error: {e}")
+
+    def cleanup_archived(self) -> int:
+        """v0.3.3 Section 8A: hard-delete archived memory_bank entries.
+
+        Each delete_vectors() call leaves HNSW debris, so we sweep
+        phantoms immediately after — otherwise the cleanup itself
+        re-creates the bug class it's trying to fix.
+
+        Returns:
+            Number of archived entries deleted (phantom sweep count not included)
+        """
+        try:
+            all_ids = self.collection.list_all_ids()
+        except Exception as e:
+            logger.warning(f"cleanup_archived list_all_ids failed: {e}")
+            return 0
+
+        archived_ids = []
+        for doc_id in all_ids:
+            doc = self.collection.get_fragment(doc_id)
+            if doc and doc.get("metadata", {}).get("status") == "archived":
+                archived_ids.append(doc_id)
+
+        if archived_ids:
+            self.collection.delete_vectors(archived_ids)
+            logger.info(f"Cleaned up {len(archived_ids)} archived memories")
+            # Sweep the phantoms we just created.
+            self._sweep_phantoms()
+
+        return len(archived_ids)
 
     def get(self, doc_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -427,11 +535,21 @@ class MemoryBankService:
         ]
 
     def _get_count(self) -> int:
-        """Get current item count."""
+        """Get current active item count (excludes archived entries).
+
+        v0.3.3: collection.count() includes ALL documents including archived ones,
+        which inflates the capacity check and blocks new writes after deletion.
+        """
         try:
-            return self.collection.collection.count()
+            all_ids = self.collection.list_all_ids()
+            count = 0
+            for doc_id in all_ids:
+                doc = self.collection.get_fragment(doc_id)
+                if doc and doc.get("metadata", {}).get("status", "active") != "archived":
+                    count += 1
+            return count
         except Exception as e:
-            logger.warning(f"Could not get memory_bank count: {e}")
+            logger.warning(f"Could not get memory_bank active count: {e}")
             return 0
 
     async def _get_all_items(self, limit: int) -> List[Dict[str, Any]]:

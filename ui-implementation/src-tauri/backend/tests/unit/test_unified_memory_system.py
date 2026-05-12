@@ -156,6 +156,17 @@ class TestStore:
         assert metadata["custom"] == "value"
         assert metadata["text"] == "test text"
 
+    @pytest.mark.asyncio
+    async def test_store_sets_created_at_not_timestamp(self, mock_ums):
+        """Should use created_at for all new memory writes (Section 1 unification)."""
+        await mock_ums.store("test text")
+
+        call_args = mock_ums.collections["working"].upsert_vectors.call_args
+        metadata = call_args[1]["metadatas"][0]
+
+        assert "created_at" in metadata, "New writes must carry created_at"
+        assert "timestamp" not in metadata, "New writes must NOT carry legacy timestamp field"
+
 
 class TestSearch:
     """Test search functionality."""
@@ -752,14 +763,13 @@ class TestV032MemoryBankDedup:
         mock_ums.collections["working"].upsert_vectors.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_memory_bank_scan_uses_no_filter(self, mock_ums):
-        """memory_bank rows don't carry memory_type — scan must pass filters=None
-        or we'd miss every existing entry. Guards against a tempting but wrong
-        unification of FACT_DEDUP_FILTERS."""
+    async def test_memory_bank_scan_filters_archived(self, mock_ums):
+        """v0.3.3: memory_bank dedup filters out archived entries to avoid matching
+        soft-deleted memories. Uses {"status": {"$ne": "archived"}} instead of None."""
         await mock_ums.store_memory_bank(text="Something", tags=["identity"])
         memory_bank_call = mock_ums.collections["memory_bank"].query_vectors.await_args
         assert memory_bank_call is not None
-        assert memory_bank_call.kwargs.get("filters") is None
+        assert memory_bank_call.kwargs.get("filters") == {"status": {"$ne": "archived"}}
 
     @pytest.mark.asyncio
     async def test_distant_memory_bank_fact_is_not_deduped(self, mock_ums):
@@ -863,6 +873,136 @@ class TestV032ChromaDBTelemetry:
             settings_arg = call_kwargs.get("settings")
             assert settings_arg is not None, "settings= must be passed"
             assert settings_arg.anonymized_telemetry is False
+
+
+class TestV033StartupBackfill:
+    """v0.3.3 Section 8C: legacy memory_bank entries get status=active backfilled."""
+
+    def _build_system_with_bank(self, ids, fragments):
+        """Build a UnifiedMemorySystem with a mocked memory_bank_service."""
+        from modules.memory.unified_memory_system import UnifiedMemorySystem
+
+        ums = UnifiedMemorySystem.__new__(UnifiedMemorySystem)
+        bank = MagicMock()
+        bank.collection = MagicMock()
+        bank.collection.list_all_ids = MagicMock(return_value=ids)
+        bank.collection.get_fragment = MagicMock(
+            side_effect=lambda doc_id: fragments.get(doc_id)
+        )
+        bank.collection.update_fragment_metadata = MagicMock()
+        bank._sweep_phantoms = MagicMock(return_value=0)
+        ums._memory_bank_service = bank
+        return ums, bank
+
+    @pytest.mark.asyncio
+    async def test_backfills_entries_missing_status(self):
+        """Legacy entries with no status field receive status=active."""
+        ums, bank = self._build_system_with_bank(
+            ids=["legacy1", "legacy2"],
+            fragments={
+                "legacy1": {"metadata": {"text": "x"}},
+                "legacy2": {"metadata": {"text": "y"}},
+            },
+        )
+        await ums._startup_cleanup_memory_bank_phantoms()
+        assert bank.collection.update_fragment_metadata.call_count == 2
+        bank.collection.update_fragment_metadata.assert_any_call(
+            "legacy1", {"status": "active"}
+        )
+        bank.collection.update_fragment_metadata.assert_any_call(
+            "legacy2", {"status": "active"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_skips_entries_with_existing_status(self):
+        """Post-fix entries (status already set) are untouched."""
+        ums, bank = self._build_system_with_bank(
+            ids=["modern"],
+            fragments={"modern": {"metadata": {"status": "active"}}},
+        )
+        await ums._startup_cleanup_memory_bank_phantoms()
+        bank.collection.update_fragment_metadata.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_phantom_entries(self):
+        """If get_fragment returns None, the ID is a phantom — skip it."""
+        ums, bank = self._build_system_with_bank(
+            ids=["phantom", "live"],
+            fragments={"live": {"metadata": {"text": "y"}}},  # phantom missing
+        )
+        await ums._startup_cleanup_memory_bank_phantoms()
+        bank.collection.update_fragment_metadata.assert_called_once_with(
+            "live", {"status": "active"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_swallows_errors(self):
+        """list_all_ids() raising must not propagate; sweep still runs first."""
+        from modules.memory.unified_memory_system import UnifiedMemorySystem
+
+        ums = UnifiedMemorySystem.__new__(UnifiedMemorySystem)
+        bank = MagicMock()
+        bank.collection = MagicMock()
+        bank.collection.list_all_ids = MagicMock(side_effect=Exception("boom"))
+        bank._sweep_phantoms = MagicMock(return_value=0)
+        ums._memory_bank_service = bank
+
+        # Should not raise
+        await ums._startup_cleanup_memory_bank_phantoms()
+        bank._sweep_phantoms.assert_called_once()
+
+
+class TestV033PhantomFilterOR:
+    """v0.3.3 Section 8B: list_all_ids() rejects mid-state phantoms.
+
+    Mirrors core v0.5.6 Item 6 — tightens the AND-form phantom filter
+    (which only rejected when both doc AND metadata were absent) to OR-form,
+    rejecting whenever either is missing.
+    """
+
+    def _make_adapter(self, ids, documents, metadatas):
+        from modules.memory.chromadb_adapter import ChromaDBAdapter
+
+        adapter = ChromaDBAdapter.__new__(ChromaDBAdapter)
+        adapter.collection = MagicMock()
+        adapter.collection.get = MagicMock(
+            return_value={"ids": ids, "documents": documents, "metadatas": metadatas}
+        )
+        return adapter
+
+    def test_valid_entry_passes(self):
+        adapter = self._make_adapter(
+            ids=["a"], documents=["text"], metadatas=[{"status": "active"}]
+        )
+        assert adapter.list_all_ids() == ["a"]
+
+    def test_doc_none_metadata_cached_is_phantom(self):
+        """Mid-state: document cleared but metadata still HNSW-cached."""
+        adapter = self._make_adapter(
+            ids=["phantom"], documents=[None], metadatas=[{"status": "active"}]
+        )
+        assert adapter.list_all_ids() == []
+
+    def test_doc_cached_metadata_none_is_phantom(self):
+        """Mid-state: metadata cleared but document still HNSW-cached."""
+        adapter = self._make_adapter(
+            ids=["phantom"], documents=["text"], metadatas=[None]
+        )
+        assert adapter.list_all_ids() == []
+
+    def test_both_missing_is_phantom(self):
+        """Classic phantom: both fields absent."""
+        adapter = self._make_adapter(
+            ids=["phantom"], documents=[None], metadatas=[None]
+        )
+        assert adapter.list_all_ids() == []
+
+    def test_empty_metadata_dict_is_phantom(self):
+        """Metadata is present but empty dict — treated as phantom under OR-form."""
+        adapter = self._make_adapter(
+            ids=["phantom"], documents=["text"], metadatas=[{}]
+        )
+        assert adapter.list_all_ids() == []
 
 
 if __name__ == "__main__":

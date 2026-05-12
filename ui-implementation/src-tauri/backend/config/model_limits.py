@@ -17,6 +17,8 @@ import time
 from functools import lru_cache
 import threading
 
+from utils.atomic_json import write_json_atomic
+
 logger = logging.getLogger(__name__)
 
 # Cache for model configurations
@@ -491,15 +493,14 @@ def load_calibration_data(model_name: str) -> Optional[Dict]:
 
 def save_calibration_data(model_name: str, calibration: Dict):
     """
-    Save calibration data for future use.
+    Save calibration data for future use (crash-safe atomic write, v0.3.3).
     """
     os.makedirs("data/model_calibrations", exist_ok=True)
-    calibration_file = f"data/model_calibrations/{model_name.replace(':', '_')}.json"
+    calibration_file = Path(f"data/model_calibrations/{model_name.replace(':', '_')}.json")
 
     try:
-        with open(calibration_file, 'w') as f:
-            json.dump(calibration, f, indent=2)
-            logger.info(f"Saved calibration data for {model_name}")
+        write_json_atomic(calibration_file, calibration)
+        logger.info(f"Saved calibration data for {model_name}")
     except Exception as e:
         logger.error(f"Failed to save calibration data: {e}")
 

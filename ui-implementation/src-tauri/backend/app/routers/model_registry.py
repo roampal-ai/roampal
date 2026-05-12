@@ -9,12 +9,22 @@ Features:
 """
 from fastapi import APIRouter, HTTPException
 from typing import List, Dict, Any, Optional
+import asyncio
 import logging
 import subprocess
 import re
 import sys
 
-from config.model_contexts import MODEL_CONTEXTS, get_context_size
+from config.model_contexts import (
+    MODEL_CONTEXTS,
+    get_context_size,
+    get_cached_vision,
+    get_cached_tools,
+    fetch_ollama_capabilities,
+    probe_vision,
+    _save_caps_cache,
+    _caps_cache_key,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["model-registry"])
@@ -160,11 +170,14 @@ async def detect_gpu_info() -> Dict[str, Any]:
 
     try:
         # Try nvidia-smi first (NVIDIA GPUs)
-        result = subprocess.run(
+        # v0.3.3 Defect 18: wrap sync subprocess in asyncio.to_thread so a
+        # hanging external process can't freeze the FastAPI event loop.
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["nvidia-smi", "--query-gpu=name,memory.total,memory.free,memory.used,utilization.gpu",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=5,
-            creationflags=_SUBPROCESS_FLAGS
+            creationflags=_SUBPROCESS_FLAGS,
         )
 
         if result.returncode == 0:
@@ -251,63 +264,35 @@ def get_recommended_models(vram_gb: float) -> List[Dict[str, Any]]:
 
     return recommendations
 
-# Tool-capable model families (whitelist based on testing)
-TOOL_CAPABLE_FAMILIES = {
-    "verified": [
-        # Models personally tested with reliable tool calling
-        "qwen2.5:14b", "qwen2.5:32b", "qwen2.5:72b",
-        "llama3.3:70b", "llama3.1:70b",
-        "gpt-oss:20b", "gpt-oss:120b",
-        "mixtral:8x7b",
-        "command-r", "command-r-plus",
-        # Llama 4 - Native tool calling, MoE architecture
-        "llama4:scout", "llama4:maverick",
-        # Qwen3 - Native Hermes-style tool calling
-        "qwen3:32b", "qwen3-coder:30b",
-    ],
-    "compatible": [
-        # Same family as verified, may have issues with complex context
-        "qwen2.5:7b", "qwen2.5:3b",  # Smaller qwen2.5 variants - tool calling may be unreliable
-        "llama3.2:3b", "llama3.2:8b", "llama3.1:8b",  # Llama 3.x family
-        "mistral:7b", "phi-4", "phi3",
-        # Qwen3 smaller variants (same family)
-        "qwen3:8b", "qwen3:4b", "qwen3:14b",
-    ],
-    "experimental": [
-        # Available but known issues with tools
-        "deepseek-r1", "deepseek-coder", "deepseek-v3", "dolphin",
-        # Gemma - No native tool support, needs fine-tuned versions
-        "gemma2:9b", "gemma2:27b",
-    ]
-}
+# v0.3.3 Section 4H — tool capability is read from the dynamic capability
+# cache populated by fetch_ollama_capabilities on registry refresh. No more
+# hardcoded tier table that goes stale every time a new model ships.
+#
+# The "tier" concept is preserved only as informational metadata derived from
+# the actual capabilities — verified=tools present, experimental=tools absent.
+# Nothing gates runtime behavior on tier anymore.
 
-def get_model_tier(model_name: str) -> str:
-    """Determine model tier (verified/compatible/experimental)"""
-    model_lower = model_name.lower()
+def get_model_tier(model_name: str, provider: str) -> str:
+    """Informational tier derived from cached capabilities.
 
-    # Check verified first (highest confidence)
-    for verified_model in TOOL_CAPABLE_FAMILIES["verified"]:
-        if verified_model in model_lower:
-            return "verified"
+    'verified' = model declares 'tools' capability via Ollama /api/show
+    'experimental' = no tools capability OR cache miss (cold start)
 
-    # Check compatible (same family, likely works)
-    for compatible_model in TOOL_CAPABLE_FAMILIES["compatible"]:
-        if compatible_model in model_lower:
-            return "compatible"
+    This is descriptive only — UI sort/badge hints. Tool-capability gating
+    uses is_tool_capable directly against the cache.
+    """
+    return "verified" if is_tool_capable(model_name, provider) else "experimental"
 
-    # Check experimental (known issues)
-    for experimental_model in TOOL_CAPABLE_FAMILIES["experimental"]:
-        if experimental_model in model_lower:
-            return "experimental"
 
-    # Unknown models default to experimental
-    return "experimental"
+def is_tool_capable(model_name: str, provider: str) -> bool:
+    """Whether the model supports tool calling, from dynamic capability cache.
 
-def is_tool_capable(model_name: str) -> bool:
-    """Check if model supports reliable tool calling"""
-    tier = get_model_tier(model_name)
-    # Only verified and compatible models are considered tool-capable
-    return tier in ["verified", "compatible"]
+    Ollama: reads /api/show capabilities populated on registry refresh.
+    LM Studio: defaults True (no metadata exposed in OpenAI-compatible API).
+    Runtime tool-incompatibility detection in ollama_client.py retries
+    without tools if the model 400s — false-positives self-heal.
+    """
+    return get_cached_tools(model_name, provider)
 
 def get_model_description(model_name: str, tier: str) -> str:
     """Generate description based on model name and tier"""
@@ -457,15 +442,97 @@ async def get_model_registry(
             else:
                 models = []
 
+            # v0.3.3 §4H — populate capability cache BEFORE the per-model loop,
+            # so the sync get_cached_* readers below have fresh data.
+            #
+            # Ollama exposes capabilities via /api/show, so a single GET per
+            # model is enough.
+            #
+            # LM Studio's OpenAI-compatible /v1/models does NOT expose
+            # capabilities, so we fire probe_vision (1x1 PNG canary) per model.
+            # probe_vision is cache-aware (24h TTL) — warm path returns
+            # immediately without a network call, cold path actually probes.
+            if provider_name == "ollama" and models:
+                import asyncio
+                base_url = f"http://localhost:{provider_config['port']}"
+                eligible = [
+                    m for m in models
+                    if not any(x in m.lower() for x in ['embed', 'nomic', 'bge-', 'minilm'])
+                ]
+                await asyncio.gather(
+                    *(fetch_ollama_capabilities(m, base_url) for m in eligible),
+                    return_exceptions=True,
+                )
+            elif provider_name == "lmstudio" and models:
+                # v0.3.3 Defect 9: prefer LM Studio's native `/api/v0/models`
+                # extension over the canary probe. The OpenAI-spec `/v1/models`
+                # does NOT expose capabilities, but LM Studio's richer endpoint
+                # returns `type == "vlm"` for Vision-Language Models and lists
+                # `tool_use` in `capabilities`. This is instant, deterministic,
+                # and works even when the model is in `state: "loading"` (the
+                # canary probe needs the model fully loaded and times out at
+                # 10 s, leaving large vision models like qwen3.6-35b-a3b
+                # permanently classified as `vision: false` until they finish
+                # warming up). Fall back to the canary probe only when the
+                # extended endpoint isn't available (older LM Studio builds).
+                import asyncio
+                import httpx
+                base_url = f"http://localhost:{provider_config['port']}"
+                eligible = [
+                    m for m in models
+                    if not any(x in m.lower() for x in ['embed', 'nomic', 'bge-', 'minilm'])
+                ]
+                used_extended_api = False
+                try:
+                    async with httpx.AsyncClient(timeout=3.0) as caps_client:
+                        v0_resp = await caps_client.get(f"{base_url}/api/v0/models")
+                    if v0_resp.status_code == 200:
+                        v0_lookup = {
+                            m.get("id"): m for m in v0_resp.json().get("data", [])
+                        }
+                        for m in eligible:
+                            meta = v0_lookup.get(m)
+                            if not meta:
+                                continue
+                            # Always include "tools" for LM Studio to preserve
+                            # the existing default-True behavior (see
+                            # get_cached_tools comment in model_contexts.py).
+                            # Without this, writing a cache entry that omits
+                            # "tools" would flip tool-capable models to False
+                            # on older LM Studio builds where /api/v0/models
+                            # doesn't list tool_use. Runtime retry-on-400 in
+                            # ollama_client already self-heals false positives.
+                            caps_set = {"tools"}
+                            if meta.get("type") == "vlm":
+                                caps_set.add("vision")
+                            _save_caps_cache(
+                                _caps_cache_key(m, "lmstudio"), caps_set
+                            )
+                        used_extended_api = True
+                        logger.info(
+                            f"[REGISTRY] Populated LM Studio caps from "
+                            f"/api/v0/models for {len(eligible)} model(s)"
+                        )
+                except (httpx.HTTPError, ValueError, TypeError) as caps_err:
+                    logger.debug(
+                        f"[REGISTRY] /api/v0/models unavailable, falling back "
+                        f"to canary probe: {caps_err}"
+                    )
+                if not used_extended_api:
+                    await asyncio.gather(
+                        *(probe_vision(m, "lmstudio", base_url) for m in eligible),
+                        return_exceptions=True,
+                    )
+
             # Process each model
             for model_name in models:
-                # Skip non-chat models (embeddings, vision, etc.)
-                if any(x in model_name.lower() for x in ['embed', 'llava', 'nomic', 'bge-', 'minilm']):
+                # Skip non-chat models (embeddings only) - multimodal models like llava are valid chat APIs now
+                if any(x in model_name.lower() for x in ['embed', 'nomic', 'bge-', 'minilm']):
                     continue
 
-                # Check tool capability
-                tier = get_model_tier(model_name)
-                if tool_capable_only and not is_tool_capable(model_name):
+                # Check tool capability (reads dynamic capability cache)
+                tier = get_model_tier(model_name, provider_name)
+                if tool_capable_only and not is_tool_capable(model_name, provider_name):
                     continue
 
                 # Get context window
@@ -489,9 +556,9 @@ async def get_model_registry(
                     "max_context": max_context,
                     "quantization": quantization,
                     "capabilities": {
-                        "tools": is_tool_capable(model_name),
+                        "tools": is_tool_capable(model_name, provider_name),
                         "streaming": True,
-                        "vision": "llava" in model_name.lower() or "gemma3" in model_name.lower()
+                        "vision": get_cached_vision(model_name, provider_name)
                     },
                     "description": get_model_description(model_name, tier)
                 })
@@ -504,38 +571,64 @@ async def get_model_registry(
         "models": registry,
         "count": len(registry),
         "providers": available_providers,
-        "tool_capable_families": TOOL_CAPABLE_FAMILIES
+    }
+
+
+@router.post("/api/model/probe_vision/{model_name}")
+async def probe_model_vision(model_name: str) -> Dict[str, Any]:
+    """Run a vision capability probe for a specific model.
+
+    Uses the async canary-image method with disk caching.
+    Returns immediately if a valid cached result exists (< 24h old).
+    """
+    from app.routers.model_switcher import PROVIDERS, detect_provider
+    from config.model_contexts import (
+        _caps_cache_key,
+        _load_caps_cache,
+        probe_vision as _probe_vision,
+    )
+
+    provider_info = None
+    for pname, pconfig in PROVIDERS.items():
+        info = await detect_provider(pname, pconfig)
+        if info:
+            provider_info = (pname, f"http://localhost:{pconfig['port']}")
+            break
+
+    if not provider_info:
+        raise HTTPException(status_code=503, detail="No model provider available")
+
+    # Check capability cache before probing so we can report whether the
+    # result came from cache (v0.3.3 §4H: unified caps cache replaces the
+    # old vision-only cache).
+    cache_key = _caps_cache_key(model_name, provider_info[0])
+    was_cached = bool(_load_caps_cache().get(cache_key))
+
+    result = await _probe_vision(model_name, provider_info[0], provider_info[1])
+
+    return {
+        "model": model_name,
+        "vision_capable": result,
+        "cached": was_cached and result is not None,
     }
 
 
 @router.get("/api/model/tiers")
 async def get_model_tiers() -> Dict[str, Any]:
-    """
-    Get information about model tiers and tool capability.
+    """v0.3.3 §4H deprecation: tier groupings are no longer hardcoded.
 
-    Returns tier definitions and which models belong to each tier.
+    Tier is now derived per-model from dynamic Ollama /api/show capabilities
+    (see is_tool_capable in this file). The frontend should read each
+    installed model's `tier` field from `/api/model/registry` directly
+    instead of consulting a static tier→[models] map.
     """
     return {
-        "tiers": {
-            "verified": {
-                "name": "Verified",
-                "description": "Models personally tested with reliable tool calling",
-                "badge": "✅",
-                "models": TOOL_CAPABLE_FAMILIES["verified"]
-            },
-            "compatible": {
-                "name": "Compatible",
-                "description": "Same family as verified models, likely works but untested",
-                "badge": "⚠️",
-                "models": TOOL_CAPABLE_FAMILIES["compatible"]
-            },
-            "experimental": {
-                "name": "Experimental",
-                "description": "Available but may have issues with tool calling",
-                "badge": "🧪",
-                "models": TOOL_CAPABLE_FAMILIES["experimental"]
-            }
-        }
+        "deprecated": True,
+        "message": (
+            "Hardcoded tier groupings were removed in v0.3.3. "
+            "Read per-model `tier` from /api/model/registry instead."
+        ),
+        "tiers": {},
     }
 
 
@@ -573,13 +666,16 @@ async def get_model_catalog() -> Dict[str, Any]:
 
     for model_name, quants in QUANTIZATION_OPTIONS.items():
         repo = HUGGINGFACE_REPOS.get(model_name)
-        tier = get_model_tier(model_name)
         context_size = get_context_size(model_name)
 
+        # v0.3.3 §4H — catalog models are pre-install candidates with no
+        # running provider to query. Tier/tool_capable are intentionally
+        # absent here; the frontend should fetch the authoritative values
+        # from /api/model/registry after the user installs the model.
         model_entry = {
             "name": model_name,
-            "tier": tier,
-            "tool_capable": is_tool_capable(model_name),
+            "tier": "unknown",
+            "tool_capable": None,
             "context_window": context_size,
             "huggingface_repo": repo,
             "quantizations": []
@@ -647,8 +743,11 @@ async def get_model_recommendations(
         if model not in by_model:
             by_model[model] = {
                 "model": model,
-                "tier": get_model_tier(model),
-                "tool_capable": is_tool_capable(model),
+                # v0.3.3 §4H: pre-install recommendations have no provider to
+                # query; tier/tool_capable are populated on /api/model/registry
+                # once the user actually installs the model.
+                "tier": "unknown",
+                "tool_capable": None,
                 "available_quantizations": []
             }
         by_model[model]["available_quantizations"].append({

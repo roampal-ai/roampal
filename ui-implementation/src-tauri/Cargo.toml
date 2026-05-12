@@ -1,6 +1,6 @@
 [package]
 name = "roampal"
-version = "0.3.2-hotfix.1"
+version = "0.3.3"
 description = "Roampal - Your AI that actually remembers"
 authors = ["Roampal Team"]
 license = "Apache-2.0"
@@ -17,6 +17,19 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.11", features = ["json", "stream"] }
 tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3"
+
+# v0.3.3 Fix A: Windows Job Object support for orphan-sidecar cleanup.
+# Wraps the bundled Python child in a job with KILL_ON_JOB_CLOSE so the
+# kernel terminates it whenever Tauri exits for any reason (clean shutdown,
+# crash, force-quit, BSOD recovery) — preventing the os-error-32 file-lock
+# pile-up and the production port-collision risk on next launch.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [features]
 default = ["custom-protocol"]

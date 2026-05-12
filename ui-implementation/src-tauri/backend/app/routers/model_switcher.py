@@ -38,9 +38,32 @@ router = APIRouter(tags=["model-switcher"])
 # Global state for concurrency control
 _download_lock = asyncio.Lock()
 _switch_lock = asyncio.Lock()  # v0.3.0: Prevent concurrent model switches
+_rediscovery_lock = asyncio.Lock()  # v0.3.3 Defect 17: serialize cold-start late rediscovery
 _downloading_models: set = set()
 _cancel_flags: Dict[str, bool] = {}  # Track which downloads should be cancelled
 _env_file_lock = asyncio.Lock()
+
+# v0.3.3 Defect 18 (real fix): py-spy showed `subprocess.run(["ollama","list"],
+# capture_output=True, timeout=5)` wedging in _readerthread.join() on Windows —
+# the timeout never fires, the worker thread wedges, and the lock holding it
+# stays held forever. Replacing the CLI with Ollama's HTTP API removes the
+# whole subprocess+pipe path. The asyncio.to_thread wrap from earlier in v0.3.3
+# only protected the event loop; the worker still hung.
+async def _ollama_list_names(timeout: float = 5.0) -> Optional[List[str]]:
+    """Return installed Ollama model names via /api/tags, or None if unreachable."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get("http://localhost:11434/api/tags")
+            if response.status_code == 200:
+                return [
+                    m.get("name", "")
+                    for m in response.json().get("models", [])
+                    if m.get("name")
+                ]
+            logger.warning(f"Ollama /api/tags returned {response.status_code}")
+    except Exception as e:
+        logger.warning(f"Ollama /api/tags unreachable: {e}")
+    return None
 
 # Multi-provider configuration
 PROVIDERS = {
@@ -961,9 +984,122 @@ def _vram_warning_for(model_name: str, available_vram_gb: Optional[float]) -> Op
     return None
 
 
+async def _rediscover_providers_if_needed(request: Request) -> bool:
+    """v0.3.3 Defect 17: late provider rediscovery.
+
+    Roampal's startup provider probe runs once. On a cold start where the
+    user launches Roampal before LM Studio / Ollama is fully listening on
+    its port (typical when both are double-clicked at the same time), the
+    probe finds nothing, `app.state.llm_client` is set to None, and the
+    frontend sees no models available.
+
+    Without this helper, recovery requires a backend restart — the existing
+    polling loops report `Failed to fetch …: All connection attempts failed`
+    forever even after the providers come online.
+
+    This helper, called from endpoints the frontend polls (e.g. /current),
+    detects the None-client state, re-runs provider detection, and
+    initializes `app.state.llm_client` if at least one provider is now
+    reachable with at least one chat model. Returns True if a client was
+    just initialized.
+    """
+    if (
+        hasattr(request.app.state, "llm_client")
+        and request.app.state.llm_client is not None
+    ):
+        return False
+
+    async with _rediscovery_lock:
+        # Re-check under lock — another concurrent request may have
+        # already initialized the client.
+        if (
+            hasattr(request.app.state, "llm_client")
+            and request.app.state.llm_client is not None
+        ):
+            return False
+
+        try:
+            detected = {}
+            for provider_name, provider_config in PROVIDERS.items():
+                info = await detect_provider(provider_name, provider_config)
+                if info:
+                    models = await get_provider_models(provider_name, provider_config)
+                    if models:
+                        info["models"] = models
+                        detected[provider_name] = info
+
+            if not detected:
+                return False
+
+            # Pick provider + model using the same logic as startup.
+            from utils.startup_model_selection import (
+                select_active_provider,
+                select_startup_model,
+            )
+            from app.routers.model_switcher import load_main_model_config
+
+            persisted = load_main_model_config()
+            configured_provider = os.getenv("ROAMPAL_LLM_PROVIDER", "ollama")
+            active_provider, _ = select_active_provider(
+                detected_providers=detected,
+                persisted=persisted,
+                configured_env_provider=configured_provider,
+            )
+            available_models = detected[active_provider]["models"]
+            configured_model = os.getenv("ROAMPAL_LLM_OLLAMA_MODEL") or os.getenv(
+                "OLLAMA_MODEL"
+            )
+            selected_model, _ = select_startup_model(
+                available_models=available_models,
+                configured_env_model=configured_model,
+                persisted=persisted,
+                active_provider=active_provider,
+            )
+            if not selected_model:
+                # Provider reachable but has no chat models — nothing to do.
+                return False
+
+            provider_config = PROVIDERS[active_provider]
+            base_url = f"http://localhost:{provider_config['port']}"
+
+            from modules.llm.ollama_client import OllamaClient
+
+            client = OllamaClient()
+            client.base_url = base_url
+            client.model_name = selected_model
+            client.api_style = provider_config["api_style"]
+            await client.initialize({"ollama_model": selected_model})
+
+            request.app.state.llm_client = client
+
+            # Wire agent_service to the freshly-initialized client.
+            try:
+                from app.routers.agent_chat import agent_service as _agent
+
+                if _agent is not None and hasattr(_agent, "llm"):
+                    _agent.llm = client
+            except Exception:
+                pass
+
+            logger.info(
+                f"✓ Late provider rediscovery: initialized llm_client with "
+                f"{selected_model} ({active_provider}) — cold-start race recovered"
+            )
+            return True
+
+        except Exception as e:
+            logger.warning(f"Late provider rediscovery failed: {e}")
+            return False
+
+
 @router.get("/current")
 async def get_current_model(request: Request):
     """Get the currently active model"""
+    # v0.3.3 Defect 17: if cold-start race left llm_client = None, try to
+    # recover by re-probing providers. Frontend polls /current frequently,
+    # so this gives us self-healing after providers come online.
+    await _rediscover_providers_if_needed(request)
+
     # ALWAYS prioritize runtime state over env vars (runtime is source of truth)
     current_model = None
     llm_client_available = False
@@ -977,14 +1113,23 @@ async def get_current_model(request: Request):
             llm_client_available = True
             logger.info(f"Current model from runtime: {current_model}")
 
-    # Fallback to env var only if no runtime client
+    # Fallback to env var only if no runtime client. v0.3.3: removed the
+    # hardcoded "codellama" final fallback — for users with no providers
+    # detected and no env var set, the previous code returned a model name
+    # that almost never existed on their system, generating misleading log
+    # entries. The downstream verify-exists check (lines 989+) already
+    # converts unknown models to None for the response, so this only ever
+    # affected log readability — but the cosmetic noise was alarming during
+    # fresh-install debugging. Now logs the actual state: "no env model set".
     if not current_model:
         current_model = (
             os.getenv("ROAMPAL_LLM_OLLAMA_MODEL")
             or os.getenv("OLLAMA_MODEL")
-            or "codellama"
         )
-        logger.info(f"Current model from env fallback: {current_model}")
+        if current_model:
+            logger.info(f"Current model from env fallback: {current_model}")
+        else:
+            logger.info("No active model: no runtime client, no env var set")
 
     # CRITICAL: Verify model actually exists in its provider before saying it's active
     # Use llm_client's api_style as source of truth - it knows which provider it's configured for
@@ -1004,25 +1149,13 @@ async def get_current_model(request: Request):
 
         # Check the appropriate provider
         if checking_provider == "ollama":
-            try:
-                result = subprocess.run(
-                    ["ollama", "list"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    creationflags=_SUBPROCESS_FLAGS,
-                )
-                if result.returncode == 0:
-                    available_models = [
-                        line.split()[0]
-                        for line in result.stdout.strip().split("\n")[1:]
-                        if line.strip()
-                    ]
-                    model_exists = current_model in available_models
-                    if not model_exists:
-                        logger.warning(f"Model {current_model} not found in Ollama")
-            except Exception as e:
-                logger.error(f"Failed to verify model in Ollama: {e}")
+            # v0.3.3 Defect 18 (real fix): HTTP API instead of `ollama list`.
+            # See _ollama_list_names docstring for why.
+            available_models = await _ollama_list_names(timeout=5.0)
+            if available_models is not None:
+                model_exists = current_model in available_models
+                if not model_exists:
+                    logger.warning(f"Model {current_model} not found in Ollama")
 
         elif checking_provider == "lmstudio":
             try:
@@ -1081,8 +1214,22 @@ async def get_current_model(request: Request):
 @router.post("/switch")
 async def switch_model(request: Request, model_request: ModelSwitchRequest):
     """Switch to a different model at runtime - supports both Ollama and LM Studio"""
-    # v0.3.0: Prevent concurrent switches from corrupting state
-    async with _switch_lock:
+    # v0.3.3 Defect 18 (real fix): log on entry so a wedge is obvious in logs,
+    # and bound lock acquisition so a held lock fails loud (503) instead of
+    # silently queuing every subsequent click forever.
+    logger.info(f"/switch received: model={model_request.model_name}")
+    try:
+        await asyncio.wait_for(_switch_lock.acquire(), timeout=30.0)
+    except asyncio.TimeoutError:
+        logger.error(
+            f"/switch lock acquire timed out after 30s for model={model_request.model_name} — "
+            f"a prior switch is still in flight or wedged."
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Another model switch is in progress. Please wait and retry.",
+        )
+    try:
         try:
             model_name = model_request.model_name
 
@@ -1091,42 +1238,14 @@ async def switch_model(request: Request, model_request: ModelSwitchRequest):
             base_url = None
             api_style = None
 
-            # Check Ollama
+            # Check Ollama via HTTP API (see _ollama_list_names docstring)
             try:
-                import shutil
-
-                ollama_cmd = shutil.which("ollama")
-                if not ollama_cmd:
-                    common_paths = [
-                        r"C:\Users\{}\AppData\Local\Programs\Ollama\ollama.exe".format(
-                            os.environ.get("USERNAME", "")
-                        ),
-                        r"C:\Program Files\Ollama\ollama.exe",
-                    ]
-                    for path in common_paths:
-                        if os.path.exists(path):
-                            ollama_cmd = path
-                            break
-
-                if ollama_cmd:
-                    result = subprocess.run(
-                        [ollama_cmd, "list"],
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                        creationflags=_SUBPROCESS_FLAGS,
-                    )
-                    if result.returncode == 0:
-                        available_models = [
-                            line.split()[0]
-                            for line in result.stdout.strip().split("\n")[1:]
-                            if line.strip()
-                        ]
-                        if model_name in available_models:
-                            provider = "ollama"
-                            base_url = "http://localhost:11434"
-                            api_style = "ollama"
-                            logger.info(f"Model '{model_name}' found in Ollama")
+                available_models = await _ollama_list_names(timeout=5.0)
+                if available_models is not None and model_name in available_models:
+                    provider = "ollama"
+                    base_url = "http://localhost:11434"
+                    api_style = "ollama"
+                    logger.info(f"Model '{model_name}' found in Ollama")
             except Exception as e:
                 logger.warning(f"Failed to check Ollama: {e}")
 
@@ -1399,6 +1518,8 @@ async def switch_model(request: Request, model_request: ModelSwitchRequest):
             raise HTTPException(
                 status_code=500, detail="Failed to switch model"
             )
+    finally:
+        _switch_lock.release()
 
 
 @router.post("/pull")
@@ -1430,36 +1551,38 @@ async def pull_model(request_body: Dict[str, Any] = Body(...)):
 
         try:
             logger.info(f"Pulling model: {model_name}")
-            # Start the pull process
-            result = subprocess.run(
-                ["ollama", "pull", model_name],
-                capture_output=True,
-                text=True,
-                timeout=600,  # 10 minute timeout for large models
-                creationflags=_SUBPROCESS_FLAGS,
-            )
+            # v0.3.3 Defect 18 (real fix): Ollama HTTP /api/pull with stream=false.
+            # Subprocess version deadlocked in _readerthread.join() on Windows.
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(
+                        connect=5.0, read=600.0, write=5.0, pool=5.0
+                    )
+                ) as client:
+                    response = await client.post(
+                        "http://localhost:11434/api/pull",
+                        json={"name": model_name, "stream": False},
+                    )
+            except httpx.ReadTimeout:
+                raise HTTPException(
+                    status_code=504, detail="Model pull timed out after 10 minutes"
+                )
 
-            if result.returncode == 0:
+            if response.status_code == 200:
                 return {
                     "status": "success",
                     "message": f"Successfully pulled {model_name}",
-                    "output": result.stdout,
+                    "output": response.text,
                 }
             else:
                 raise HTTPException(
-                    status_code=500, detail=f"Failed to pull model: {result.stderr}"
+                    status_code=500,
+                    detail=f"Failed to pull model: {response.text}",
                 )
         finally:
             # Always remove from downloading set and clean up cancel flag
             _downloading_models.discard(model_name)
             _cancel_flags.pop(model_name, None)
-
-    except subprocess.TimeoutExpired:
-        _downloading_models.discard(model_name)
-        _cancel_flags.pop(model_name, None)
-        raise HTTPException(
-            status_code=504, detail="Model pull timed out after 10 minutes"
-        )
     except HTTPException:
         raise
     except Exception as e:
@@ -1788,13 +1911,30 @@ async def uninstall_model(model_name: str, request: Request, provider_hint: str 
             if not _validate_model_name(actual_model_name):
                 raise HTTPException(400, f"Invalid Ollama model name format")
 
-            result = subprocess.run(
-                ["ollama", "rm", actual_model_name],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                creationflags=_SUBPROCESS_FLAGS,
-            )
+            # v0.3.3 Defect 18 (real fix): Ollama HTTP /api/delete instead of `ollama rm`.
+            class _Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            result = _Result()
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    del_response = await client.request(
+                        "DELETE",
+                        "http://localhost:11434/api/delete",
+                        json={"name": actual_model_name},
+                    )
+                if del_response.status_code not in (200, 404):
+                    result.returncode = 1
+                    result.stderr = del_response.text
+                elif del_response.status_code == 404:
+                    result.returncode = 1
+                    result.stderr = f"Model {actual_model_name} not found in Ollama"
+            except Exception as e:
+                result.returncode = 1
+                result.stderr = str(e)
+                logger.error(f"Ollama /api/delete failed: {e}")
         elif provider == "lmstudio":
             # For LM Studio, find and delete the GGUF file
             # LM Studio model IDs look like: qwen2.5-7b-instruct, llama-3.1-8b-instruct, etc.
@@ -1873,7 +2013,9 @@ async def uninstall_model(model_name: str, request: Request, provider_hint: str 
             try:
                 lms_path = Path.home() / ".lmstudio" / "bin" / "lms.exe"
                 if lms_path.exists():
-                    unload_result = subprocess.run(
+                    # v0.3.3 Defect 18: asyncio.to_thread keeps event loop responsive.
+                    unload_result = await asyncio.to_thread(
+                        subprocess.run,
                         [str(lms_path), "unload", model_id_to_delete],
                         capture_output=True,
                         text=True,
@@ -1915,31 +2057,16 @@ async def uninstall_model(model_name: str, request: Request, provider_hint: str 
                     replacement_found = False
 
                     if provider == "ollama":
-                        # Check Ollama for other models
-                        try:
-                            list_result = subprocess.run(
-                                ["ollama", "list"],
-                                capture_output=True,
-                                text=True,
-                                timeout=5,
-                                creationflags=_SUBPROCESS_FLAGS,
-                            )
-                            if list_result.returncode == 0:
-                                lines = list_result.stdout.strip().split("\n")
-                                for line in lines[1:]:  # Skip header
-                                    parts = line.split()
-                                    if parts:
-                                        model_name_candidate = parts[0]
-                                        is_embedding = any(
-                                            embed in model_name_candidate.lower()
-                                            for embed in embedding_models
-                                        )
-                                        if not is_embedding:
-                                            chat_models.append(
-                                                ("ollama", model_name_candidate)
-                                            )
-                        except Exception as e:
-                            logger.error(f"Failed to check Ollama models: {e}")
+                        # v0.3.3 Defect 18 (real fix): HTTP API
+                        ollama_models = await _ollama_list_names(timeout=5.0)
+                        if ollama_models is not None:
+                            for candidate in ollama_models:
+                                is_embedding = any(
+                                    embed in candidate.lower()
+                                    for embed in embedding_models
+                                )
+                                if not is_embedding:
+                                    chat_models.append(("ollama", candidate))
 
                     elif provider == "lmstudio":
                         # Check LM Studio for other models
@@ -1989,31 +2116,16 @@ async def uninstall_model(model_name: str, request: Request, provider_hint: str 
                                     f"Failed to check LM Studio as fallback: {e}"
                                 )
                         else:
-                            # Try Ollama
-                            try:
-                                list_result = subprocess.run(
-                                    ["ollama", "list"],
-                                    capture_output=True,
-                                    text=True,
-                                    timeout=5,
-                                    creationflags=_SUBPROCESS_FLAGS,
-                                )
-                                if list_result.returncode == 0:
-                                    lines = list_result.stdout.strip().split("\n")
-                                    for line in lines[1:]:
-                                        parts = line.split()
-                                        if parts:
-                                            model_name_candidate = parts[0]
-                                            is_embedding = any(
-                                                embed in model_name_candidate.lower()
-                                                for embed in embedding_models
-                                            )
-                                            if not is_embedding:
-                                                chat_models.append(
-                                                    ("ollama", model_name_candidate)
-                                                )
-                            except Exception as e:
-                                logger.error(f"Failed to check Ollama as fallback: {e}")
+                            # v0.3.3 Defect 18 (real fix): HTTP API
+                            ollama_models = await _ollama_list_names(timeout=5.0)
+                            if ollama_models is not None:
+                                for candidate in ollama_models:
+                                    is_embedding = any(
+                                        embed in candidate.lower()
+                                        for embed in embedding_models
+                                    )
+                                    if not is_embedding:
+                                        chat_models.append(("ollama", candidate))
 
                     if chat_models:
                         # Switch to first available chat model
